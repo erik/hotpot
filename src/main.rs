@@ -1,5 +1,4 @@
-mod tiles;
-
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
@@ -7,16 +6,16 @@ use std::path::Path;
 use std::time::Instant;
 
 use fitparser;
-use fitparser::de::{from_reader_with_options, DecodeOption};
+use fitparser::de::{DecodeOption, from_reader_with_options};
 use fitparser::profile::MesgNum;
 use flate2::read::GzDecoder;
 use geo_types::{LineString, MultiLineString, Point};
 use rayon::prelude::*;
 use rusqlite;
 use walkdir::WalkDir;
+use crate::tiles::{MercatorPixel, Tile};
 
-const MAX_TILE_ZOOM: usize = 14;
-const TILE_EXTENT: usize = 4096;
+mod tiles;
 
 fn main() {
     let conn = rusqlite::Connection::open("hotpot.sqlite3").unwrap();
@@ -26,7 +25,7 @@ fn main() {
 
     println!("Hello, world!");
 
-    ingest_dir(Path::new("/Users/erik/Downloads"));
+    ingest_dir(Path::new("/Users/erik/Downloads/strava_export_20230912/activities"));
 }
 
 fn ingest_dir(p: &Path) {
@@ -39,25 +38,65 @@ fn ingest_dir(p: &Path) {
         .for_each(|entry| {
             let path = entry.path();
 
-            match get_extensions(path) {
+            let start = Instant::now();
+            let lines = match get_extensions(path) {
                 Some(("gpx", compressed)) => {
                     let mut reader = open_reader(path, compressed);
-                    let start = Instant::now();
-                    parse_gpx(&mut reader);
-                    let duration = start.elapsed();
-
-                    println!("--> have gpx: {:?} (took: {:?})", path, duration);
+                    parse_gpx(&mut reader)
                 }
 
                 Some(("fit", compressed)) => {
                     let mut reader = open_reader(path, compressed);
-                    println!("--> have fit: {:?}", path);
-                    parse_fit(&mut reader);
+                    parse_fit(&mut reader)
                 }
 
-                _ => {}
+                _ => return
+            };
+
+            if let Some(lines) = lines {
+                let parse = start.elapsed();
+                let tile_width = 4096;
+                let tile_zoom = 14;
+
+                for line in lines {
+                    let mut clipper = TileClipper::new(tile_width, tile_zoom);
+
+                    line.points()
+                        .map(|pt| tiles::LngLat::new(pt.x() as f32, pt.y() as f32))
+                        .filter_map(|pt| pt.xy().map(|xy| xy.pixel_xy(tile_width, tile_zoom)))
+                        .for_each(|pt| clipper.add_point(&pt));
+
+                    for (tile, segments) in clipper.tiles {
+                        // TODO: write to DB
+                    }
+                }
+
+                let intersect = start.elapsed() - parse;
+                println!("  --> READ:\t{:?}\tINTERSECT:{:?}\t{:?}", parse, intersect,  path);
             }
         });
+}
+
+struct TileClipper {
+    width: u32,
+    zoom: u8,
+    tiles: HashMap<Tile, Vec<()>>,
+    prev: Option<Tile>,
+}
+
+impl TileClipper {
+    fn new(tile_width: u32, tile_zoom: u8) -> Self {
+        Self {
+            width: tile_width,
+            zoom: tile_zoom,
+            tiles: HashMap::new(),
+            prev: None,
+        }
+    }
+
+    fn add_point(&mut self, pt: &MercatorPixel) {
+        todo!()
+    }
 }
 
 /// "foo.bar.gz" -> Some("bar", true)
@@ -92,7 +131,7 @@ fn parse_fit<R: Read>(r: &mut R) -> Option<MultiLineString> {
         DecodeOption::SkipDataCrcValidation,
         DecodeOption::SkipHeaderCrcValidation,
     ]
-    .into();
+        .into();
 
     let mut points = vec![];
     for data in from_reader_with_options(r, &opts).unwrap() {
