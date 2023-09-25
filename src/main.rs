@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
@@ -6,14 +6,15 @@ use std::path::Path;
 use std::time::Instant;
 
 use fitparser;
-use fitparser::de::{DecodeOption, from_reader_with_options};
+use fitparser::de::{from_reader_with_options, DecodeOption};
 use fitparser::profile::MesgNum;
 use flate2::read::GzDecoder;
 use geo_types::{LineString, MultiLineString, Point};
 use rayon::prelude::*;
 use rusqlite;
 use walkdir::WalkDir;
-use crate::tiles::{MercatorPixel, Tile};
+
+use crate::tiles::{BBox, LngLat, Tile, WebMercator};
 
 mod tiles;
 
@@ -25,7 +26,7 @@ fn main() {
 
     println!("Hello, world!");
 
-    ingest_dir(Path::new("/Users/erik/Downloads/strava_export_20230912/activities"));
+    ingest_dir(Path::new("/Users/erik/Downloads/"));
 }
 
 fn ingest_dir(p: &Path) {
@@ -50,21 +51,31 @@ fn ingest_dir(p: &Path) {
                     parse_fit(&mut reader)
                 }
 
-                _ => return
+                _ => return,
             };
 
             if let Some(lines) = lines {
                 let parse = start.elapsed();
-                let tile_width = 4096;
                 let tile_zoom = 14;
 
                 for line in lines {
-                    let mut clipper = TileClipper::new(tile_width, tile_zoom);
+                    let mut clipper = TileClipper::new(tile_zoom);
 
-                    line.points()
-                        .map(|pt| tiles::LngLat::new(pt.x() as f32, pt.y() as f32))
-                        .filter_map(|pt| pt.xy().map(|xy| xy.pixel_xy(tile_width, tile_zoom)))
-                        .for_each(|pt| clipper.add_point(&pt));
+                    // TODO: should perform a simplification step first.
+                    let points = line
+                        .points()
+                        .map(|pt| LngLat::new(pt.x() as f32, pt.y() as f32))
+                        .filter_map(|pt| pt.xy());
+
+                    let mut prev = None;
+                    for next in points {
+                        if let Some(prev) = prev {
+                            clipper.add_line_segment(prev, next);
+                        }
+                        prev = Some(next);
+                    }
+
+                    clipper.finish_line();
 
                     for (tile, segments) in clipper.tiles {
                         // TODO: write to DB
@@ -72,30 +83,79 @@ fn ingest_dir(p: &Path) {
                 }
 
                 let intersect = start.elapsed() - parse;
-                println!("  --> READ:\t{:?}\tINTERSECT:{:?}\t{:?}", parse, intersect,  path);
+                println!(
+                    "  --> READ:\t{:?}\tINTERSECT:{:?}\t{:?}",
+                    parse, intersect, path
+                );
             }
         });
 }
 
 struct TileClipper {
-    width: u32,
     zoom: u8,
-    tiles: HashMap<Tile, Vec<()>>,
-    prev: Option<Tile>,
+    tiles: HashMap<Tile, Vec<Vec<WebMercator>>>,
+    tile: Tile,
+    bbox: BBox,
+    line: Vec<WebMercator>,
 }
 
 impl TileClipper {
-    fn new(tile_width: u32, tile_zoom: u8) -> Self {
+    fn new(zoom: u8) -> Self {
         Self {
-            width: tile_width,
-            zoom: tile_zoom,
             tiles: HashMap::new(),
-            prev: None,
+            tile: Tile::new(0, 0, zoom),
+            bbox: BBox::zero(),
+            line: vec![],
+            zoom,
         }
     }
 
-    fn add_point(&mut self, pt: &MercatorPixel) {
-        todo!()
+    fn add_line_segment(&mut self, start: WebMercator, end: WebMercator) {
+        match self.bbox.clip_line(&start, &end) {
+            None => {
+                // line segment is completely outside of the current tile
+                self.finish_line();
+                self.move_bbox(&start);
+                self.add_line_segment(start, end);
+            }
+
+            Some((a, b)) => {
+                if self.line.is_empty() {
+                    self.line.push(a);
+                }
+
+                self.line.push(b);
+
+                // We've moved, update the bbox.
+                if b != end {
+                    self.finish_line();
+                    // TODO: should use tile iterator here...
+                    self.move_bbox(&end);
+                    self.add_line_segment(b, end);
+                }
+            }
+        }
+    }
+
+    fn move_bbox(&mut self, pt: &WebMercator) {
+        let tile = pt.tile(self.zoom);
+        self.bbox = tile.xy_bounds();
+        self.tile = tile;
+    }
+
+    fn finish_line(&mut self) {
+        if self.line.len() < 2 {
+            self.line.clear();
+            return;
+        }
+
+        let line = self.line.clone();
+        self.line.clear();
+
+        self.tiles
+            .entry(self.tile)
+            .or_insert_with(Vec::new)
+            .push(line);
     }
 }
 
@@ -131,7 +191,7 @@ fn parse_fit<R: Read>(r: &mut R) -> Option<MultiLineString> {
         DecodeOption::SkipDataCrcValidation,
         DecodeOption::SkipHeaderCrcValidation,
     ]
-        .into();
+    .into();
 
     let mut points = vec![];
     for data in from_reader_with_options(r, &opts).unwrap() {
