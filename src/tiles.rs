@@ -4,16 +4,15 @@ use std::ops::Range;
 use derive_more::{From, Into};
 use geo_types::{Coord, Point};
 
-const TILE_EXTENT: f32 = 4096.0;
 const EARTH_RADIUS_METERS: f32 = 6_378_137.0;
 const EARTH_CIRCUMFERENCE: f32 = 2.0 * PI * EARTH_RADIUS_METERS;
 const ORIGIN_OFFSET: f32 = EARTH_CIRCUMFERENCE / 2.0;
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
 pub struct Tile {
-    x: u32,
-    y: u32,
-    z: u8,
+    pub x: u32,
+    pub y: u32,
+    pub z: u8,
 }
 
 #[derive(Copy, Clone, PartialEq, Debug, From, Into)]
@@ -37,20 +36,24 @@ pub struct BBox {
 }
 
 impl BBox {
-    pub fn zero() -> Self {
-        Self {
-            left: 0.0,
-            bot: 0.0,
-            right: 0.0,
-            top: 0.0,
-        }
-    }
-
     pub fn contains(&self, pt: &WebMercator) -> bool {
         pt.0.x() >= self.left
             && pt.0.x() <= self.right
             && pt.0.y() >= self.bot
             && pt.0.y() <= self.top
+    }
+
+    // TODO: weird location for this
+    pub fn project(&self, pt: &WebMercator, tile_width: f32) -> Coord<u32> {
+        let Coord { x, y } = pt.0.into();
+
+        let width = self.right - self.left;
+        let height = self.top - self.bot;
+
+        let px = ((x - self.left) / width * tile_width).floor() as u32;
+        let py = ((y - self.bot) / height * tile_width).floor() as u32;
+
+        Coord::from((px, py))
     }
 
     const INSIDE: u8 = 0b0000;
@@ -140,13 +143,12 @@ impl BBox {
 }
 
 impl WebMercator {
-    // todo: untested
     pub fn tile(&self, zoom: u8) -> Tile {
         let num_tiles = (1u32 << zoom) as f32;
         let scale = num_tiles / EARTH_CIRCUMFERENCE;
 
-        let x = (scale * self.0.x()).floor() as u32;
-        let y = (scale * self.0.y()).floor() as u32;
+        let x = (scale * (self.0.x() + ORIGIN_OFFSET)).floor() as u32;
+        let y = (scale * (ORIGIN_OFFSET - self.0.y())).floor() as u32;
 
         Tile::new(x, y, zoom)
     }
@@ -207,30 +209,16 @@ impl Tile {
         ]
     }
 
-    // Given a web mercator coordinate, scale it to a pixel coordinate relative to its tile.
-    pub fn project_point(&self, pt: &WebMercator, tile_size: u32) -> Point<u16> {
-        let num_tiles = (1u32 << self.z) as f32;
-        let scale = num_tiles / EARTH_CIRCUMFERENCE;
-
-        let x = (scale * pt.0.x()).floor() as u32;
-        let y = (scale * pt.0.y()).floor() as u32;
-
-        Point::new(
-            (x - self.x * tile_size) as u16,
-            (y - self.y * tile_size) as u16,
-        )
-    }
-
     pub fn xy_bounds(&self) -> BBox {
         let num_tiles = (1u32 << self.z) as f32;
         let tile_size = EARTH_CIRCUMFERENCE / num_tiles;
 
         let left = (self.x as f32 * tile_size) - ORIGIN_OFFSET;
-        let bot = ORIGIN_OFFSET - (self.y as f32 * tile_size);
+        let top = ORIGIN_OFFSET - (self.y as f32 * tile_size);
         BBox {
             left,
-            bot,
-            top: bot - tile_size,
+            top,
+            bot: top - tile_size,
             right: left + tile_size,
         }
     }
@@ -365,8 +353,66 @@ mod tests {
 
         // TODO: don't love the inaccuracy here
         close_enough!(bounds.left, -1017529.7205322663, 0.5);
-        close_enough!(bounds.top, 7005300.768279833, 2.0);
+        close_enough!(bounds.bot, 7005300.768279833, 2.0);
         close_enough!(bounds.right, -978393.962050256, 0.5);
-        close_enough!(bounds.bot, 7044436.526761846, 1.0);
+        close_enough!(bounds.top, 7044436.526761846, 1.0);
+    }
+
+    #[test]
+    fn test_lat_lng_to_tile() {
+        let ll: LngLat = Point::new(20.6852, 40.1222).into();
+        let xy = ll.xy().expect("xy");
+        let tile = xy.tile(9);
+
+        assert_eq!(tile, Tile::new(285, 193, 9));
+    }
+
+    #[test]
+    fn test_bbox_clipping() {
+        let bbox = BBox {
+            left: 0.0,
+            bot: 0.0,
+            right: 10.0,
+            top: 10.0,
+        };
+
+        // Completely within
+        let clipped = bbox.clip_line(&Point::new(1.0, 1.0).into(), &Point::new(9.0, 9.0).into());
+        assert_eq!(
+            clipped,
+            Some((Point::new(1.0, 1.0).into(), Point::new(9.0, 9.0).into()))
+        );
+
+        // No intersection
+        let outside_cases = &[((-1.0, 0.0), (-1.0, 11.0)), ((0.0, -1.0), (11.0, -1.0))];
+        for ((x0, y0), (x1, y1)) in outside_cases {
+            let clipped =
+                bbox.clip_line(&Point::new(*x0, *y0).into(), &Point::new(*x1, *y1).into());
+            assert_eq!(clipped, None);
+        }
+
+        // Outside horizontal
+        let clipped = bbox.clip_line(&Point::new(-1.0, 5.0).into(), &Point::new(11.0, 5.0).into());
+        assert_eq!(
+            clipped,
+            Some((Point::new(0.0, 5.0).into(), Point::new(10.0, 5.0).into()))
+        );
+
+        // Outside vertical
+        let clipped = bbox.clip_line(&Point::new(5.0, -1.0).into(), &Point::new(5.0, 11.0).into());
+        assert_eq!(
+            clipped,
+            Some((Point::new(5.0, 0.0).into(), Point::new(5.0, 10.0).into()))
+        );
+
+        // Outside diagonal
+        let clipped = bbox.clip_line(
+            &Point::new(-1.0, -1.0).into(),
+            &Point::new(11.0, 11.0).into(),
+        );
+        assert_eq!(
+            clipped,
+            Some((Point::new(0.0, 0.0).into(), Point::new(10.0, 10.0).into()))
+        );
     }
 }
