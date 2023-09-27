@@ -19,7 +19,7 @@ def add_cors_headers(response):
     return response
 
 
-@app.route('/<int:z>/<int:x>/<int:y>')
+@app.route('/mvt/<int:z>/<int:x>/<int:y>')
 def get_tile(z, x, y):
     cur = get_db().cursor()
     cur.execute('''
@@ -58,4 +58,4 @@ def index():
 
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0')
+    app.run(debug=True, port=8080, host='0.0.0.0')
