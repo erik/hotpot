@@ -2,7 +2,7 @@ use std::f32::consts::PI;
 use std::ops::Range;
 
 use derive_more::{From, Into};
-use geo_types::{Coord, Point};
+use geo_types::{Coord, CoordNum, Point};
 
 const EARTH_RADIUS_METERS: f32 = 6_378_137.0;
 const EARTH_CIRCUMFERENCE: f32 = 2.0 * PI * EARTH_RADIUS_METERS;
@@ -44,14 +44,14 @@ impl BBox {
     }
 
     // TODO: weird location for this
-    pub fn project(&self, pt: &WebMercator, tile_width: f32) -> Coord<u32> {
+    pub fn project(&self, pt: &WebMercator, tile_width: f32) -> Coord<u16> {
         let Coord { x, y } = pt.0.into();
 
         let width = self.right - self.left;
         let height = self.top - self.bot;
 
-        let px = ((x - self.left) / width * tile_width).floor() as u32;
-        let py = ((y - self.bot) / height * tile_width).floor() as u32;
+        let px = ((x - self.left) / width * tile_width).floor() as u16;
+        let py = ((y - self.bot) / height * tile_width).floor() as u16;
 
         Coord::from((px, py))
     }
@@ -142,6 +142,20 @@ impl BBox {
     }
 }
 
+pub fn haversine_dist(p1: &Point<f64>, p2: &Point<f64>) -> f64 {
+    let (lat1, lng1) = (p1.y().to_radians(), p1.x().to_radians());
+    let (lat2, lng2) = (p2.y().to_radians(), p2.x().to_radians());
+
+    let d_lat = lat2 - lat1;
+    let d_lng = lng2 - lng1;
+
+    let a = (d_lat / 2.0).sin().powi(2)
+        + lat1.cos() * lat2.cos() * (d_lng / 2.0).sin().powi(2);
+    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
+
+    EARTH_RADIUS_METERS as f64 * c
+}
+
 impl WebMercator {
     pub fn tile(&self, zoom: u8) -> Tile {
         let num_tiles = (1u32 << zoom) as f32;
@@ -151,6 +165,17 @@ impl WebMercator {
         let y = (scale * (ORIGIN_OFFSET - self.0.y())).floor() as u32;
 
         Tile::new(x, y, zoom)
+    }
+
+    /// Compute the euclidean distance between two points.
+    /// Returned value is in meters.
+    ///
+    /// Note: this is not the distance on the sphere.
+    pub fn euclidean_dist(&self, other: &WebMercator) -> f32 {
+        let dx = self.0.x() - other.0.x();
+        let dy = self.0.y() - other.0.y();
+
+        (dx * dx + dy * dy).sqrt()
     }
 }
 

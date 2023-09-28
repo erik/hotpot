@@ -1,7 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Cursor, Read, Write};
+use std::ops::Deref;
 use std::path::Path;
 use std::thread;
 
@@ -10,32 +11,22 @@ use fitparser;
 use fitparser::de::{DecodeOption, from_reader_with_options};
 use fitparser::profile::MesgNum;
 use flate2::read::GzDecoder;
-use flate2::write::ZlibEncoder;
 use geo_types::{Coord, LineString, MultiLineString, Point};
 use rayon::prelude::*;
 use rusqlite;
 use rusqlite::params;
 use walkdir::WalkDir;
 
-use crate::tiles::{BBox, LngLat, Tile, WebMercator};
+use crate::tiles::{BBox, haversine_dist, LngLat, Tile, WebMercator};
 
 mod tiles;
 
-fn encode_compressed(data: &[u8]) -> anyhow::Result<Vec<u8>> {
-    let mut enc = ZlibEncoder::new(
-        vec![],
-        flate2::Compression::default(),
-    );
-    enc.write_all(data)?;
-    Ok(enc.finish()?)
-}
-
-fn encode_raw(data: &[Coord<u32>]) -> anyhow::Result<Vec<u8>> {
+// TODO: consider piping this through a compression step.
+fn encode_raw(data: &[Coord<u16>]) -> anyhow::Result<Vec<u8>> {
     let mut w = Vec::with_capacity(data.len() * 2);
     for pt in data {
-        // TODO: we don't need u32 pixel coords anyway
-        w.write_u16::<LittleEndian>(pt.x as u16)?;
-        w.write_u16::<LittleEndian>(pt.y as u16)?;
+        w.write_u16::<LittleEndian>(pt.x)?;
+        w.write_u16::<LittleEndian>(pt.y)?;
     }
     Ok(w)
 }
@@ -156,17 +147,23 @@ fn render_tile(
 
 fn init_db(conn: &mut rusqlite::Connection) -> rusqlite::Result<HashMap<String, String>> {
     const MIGRATIONS: &[&str] = &[
-        "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL );",
         "
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);", "
 CREATE TABLE activities (
-      id   INTEGER PRIMARY KEY
-    , name TEXT
+      id            INTEGER PRIMARY KEY
+    -- TODO: maybe do a hash of contents?
+    , file          TEXT NOT NULL
+    , title         TEXT
+    , start_time    INTEGER
+    , duration_secs INTEGER
+    , dist_meters   REAL NOT NULL
 
     -- TODO:
-    -- kind TEXT,
-    -- start_timestamp INTEGER NOT NULL,
-    -- end_timestamp INTEGER NOT NULL,
-    -- distance REAL NOT NULL,
+    -- , kind     TEXT -- run, bike, etc
+    -- , polyline TEXT
 );
 
 CREATE TABLE activity_tiles (
@@ -183,72 +180,82 @@ CREATE INDEX activity_tiles_zxy ON activity_tiles (z, x, y);
         "
     ];
 
-    // Run initial migration (idempotent)
-    let tx = conn.transaction()?;
-    tx.execute_batch(MIGRATIONS[0])?;
-    tx.commit()?;
-
-    let cur_migration = conn
-        .query_row("SELECT value FROM meta WHERE key = 'version'", [], |row| {
-            let s: String = row.get_unwrap(0);
-            Ok(s.parse::<usize>().unwrap_or(0))
-        })
+    let metadata = load_metadata(conn);
+    let cur_migration = metadata.get("version")
+        .and_then(|v| v.parse().ok())
         .unwrap_or(0);
 
-    println!("Current migration: {}", cur_migration);
-
-    if cur_migration < MIGRATIONS.len() {
-        println!("Migrating database...");
-
-        let tx = conn.transaction()?;
-        for m in &MIGRATIONS[cur_migration + 1..] {
-            println!("Running migration: {}", m);
-            tx.execute_batch(m)?;
-        }
-        tx.execute(
-            "INSERT OR REPLACE INTO meta (key, value) VALUES ('version', ?)",
-            [MIGRATIONS.len()],
-        )?;
-        tx.commit()?;
+    // If we're up to date, return.
+    if cur_migration == MIGRATIONS.len() {
+        return Ok(metadata);
     }
 
-    // Get all of the metadata key/values into a HashMap
+    println!("Migrating database (have {} to apply)...", MIGRATIONS.len() - cur_migration);
+
+    let tx = conn.transaction()?;
+    for m in &MIGRATIONS[cur_migration..] {
+        println!("Running migration: {}", m);
+        tx.execute_batch(m)?;
+    }
+    tx.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES ('version', ?)",
+        [MIGRATIONS.len()],
+    )?;
+    tx.commit()?;
+
+    // Reload metadata after applying migrations.
+    Ok(load_metadata(conn))
+}
+
+fn load_metadata(conn: &mut rusqlite::Connection) -> HashMap<String, String> {
     let mut meta: HashMap<String, String> = HashMap::new();
-    let mut stmt = conn.prepare("SELECT key, value FROM meta")?;
-    let mut rows = stmt.query([])?;
 
-    while let Some(row) = rows.next()? {
-        meta.insert(row.get_unwrap(0), row.get_unwrap(1));
-    }
+    // Would fail on first run before migrations are applied.
+    let _ = conn.query_row(
+        "SELECT key, value FROM meta",
+        [],
+        |row| {
+            let (k, v) = (row.get_unwrap(0), row.get_unwrap(1));
+            meta.insert(k, v);
+            Ok(())
+        },
+    );
 
-    Ok(meta)
+    meta
 }
 
 fn ingest_dir(p: &Path, conn: &mut rusqlite::Connection) {
     // Skip any files that are already in the database.
-    // TODO: avoid the collect call here.
-    let walk: Vec<_> = WalkDir::new(p)
-        .into_iter()
-        .filter_entry(|d| {
-            conn.query_row(
-                "SELECT 1 FROM activities WHERE name = ? LIMIT 1",
-                params![d.path().to_str().unwrap()],
-                |_row| Ok(()),
-            ).is_err()
-        })
-        .collect();
+    // TODO: avoid the collect call here?
+    let activities = conn
+        .prepare("SELECT file FROM activities").unwrap()
+        .query_map([], |row| row.get::<usize, String>(0)).unwrap()
+        .filter_map(|n| n.ok())
+        .collect::<HashSet<String>>();
+
+    let walk = WalkDir::new(p);
 
     let (tx, rx) = std::sync::mpsc::channel();
 
     thread::spawn(move || {
         walk
-            .into_par_iter()
-            .map(|e| e.expect("todo"))
-            // TODO: why is this result?
+            .into_iter()
+            .par_bridge()
+            .filter_map(|dir| {
+                let dir = dir.expect("walkdir error");
+                let path = dir.path().to_str().expect("non utf8 path");
+
+                if !activities.contains(path) {
+                    Some(dir)
+                } else {
+                    println!("Skipping {}", path);
+                    None
+                }
+            })
             .for_each_with(tx, |tx, entry| {
                 let path = entry.path();
 
-                let lines = match get_extensions(path) {
+                let activity = match get_extensions(path) {
                     Some(("gpx", compressed)) => {
                         let mut reader = open_reader(path, compressed);
                         parse_gpx(&mut reader)
@@ -262,56 +269,64 @@ fn ingest_dir(p: &Path, conn: &mut rusqlite::Connection) {
                     _ => return,
                 };
 
-                if let Some(lines) = lines {
+                if let Some(activity) = activity {
                     const STORED_LEVELS: &[u8] = &[1, 8, 14];
-                    for level in STORED_LEVELS {
-                        let mut clipper = TileClipper::new(*level);
+                    let mut clippers: HashMap<_, _> = STORED_LEVELS.iter().map(|zoom|
+                        (zoom, TileClipper::new(*zoom))
+                    ).collect();
 
-                        for line in &lines {
-                            let points = line
-                                .points()
-                                .map(|pt| LngLat::new(pt.x() as f32, pt.y() as f32))
-                                .filter_map(|pt| pt.xy());
+                    for line in activity.tracks.iter() {
+                        let points = line
+                            .points()
+                            .map(|pt| LngLat::new(pt.x() as f32, pt.y() as f32))
+                            .filter_map(|pt| pt.xy());
 
-                            let mut prev = None;
-                            for next in points {
-                                // TODO: should try to filter based on distance to previous point.
-                                if let Some(prev) = prev {
+                        let mut prev = None;
+                        for next in points {
+                            // TODO: should try to filter based on distance to previous point.
+                            if let Some(prev) = prev {
+                                for ref mut clipper in clippers.values_mut() {
                                     clipper.add_line_segment(prev, next);
                                 }
-                                prev = Some(next);
                             }
-
-                            clipper.finish_line();
+                            prev = Some(next);
                         }
 
-                        // TODO: should perform a simplification step first.
-                        tx.send((path.to_owned(), clipper)).unwrap();
+                        for ref mut clipper in clippers.values_mut() {
+                            clipper.finish_segment();
+                        }
                     }
+
+                    // TODO: should perform a simplification step first.
+                    // TODO: clone is bad.
+                    tx.send((path.to_owned(), activity, clippers)).unwrap();
                 }
             });
     });
 
     let mut insert_activity = conn
-        .prepare("INSERT INTO activities (name) VALUES (?)")
-        .expect("prepare statement");
+        .prepare("INSERT INTO activities (file, title, start_time, duration_secs, dist_meters) VALUES (?, ?, ?, ?, ?)")
+        .unwrap();
 
     let mut insert_coords = conn
         .prepare("INSERT INTO activity_tiles (activity_id, z, x, y, coords) VALUES (?, ?, ?, ?, ?)")
-        .expect("prepare statement");
+        .unwrap();
 
-    for (path, clipper) in rx {
+    for (path, activity, clippers) in rx {
         let activity_id = insert_activity
-            .insert([path.to_str().unwrap()])
+            .insert(params![path.to_str().unwrap(), activity.title, activity.start_time, activity.duration_secs, activity.distance()])
             .expect("insert activity");
 
-        for (tile, lines) in clipper.tiles {
-            for pixels in lines {
-                let encoded = encode_raw(pixels.as_slice()).expect("encode raw");
+        for clipper in clippers.values() {
+            for (tile, lines) in &clipper.tiles {
+                // TODO: encode multiline strings together in same blob.
+                for pixels in lines {
+                    let encoded = encode_raw(pixels.0.as_slice()).expect("encode raw");
 
-                insert_coords
-                    .insert(params![activity_id, tile.z, tile.x, tile.y, encoded])
-                    .expect("insert coords");
+                    insert_coords
+                        .insert(params![activity_id, tile.z, tile.x, tile.y, encoded])
+                        .expect("insert coords");
+                }
             }
         }
 
@@ -321,51 +336,72 @@ fn ingest_dir(p: &Path, conn: &mut rusqlite::Connection) {
 
 struct TileClipper {
     zoom: u8,
-    tiles: HashMap<Tile, Vec<Vec<Coord<u32>>>>,
-    tile: Tile,
-    bbox: Option<BBox>,
-    line: Vec<Coord<u32>>,
+    current: Option<(Tile, BBox)>,
+    tiles: HashMap<Tile, MultiLineString<u16>>,
 }
 
 impl TileClipper {
     fn new(zoom: u8) -> Self {
         Self {
-            tiles: HashMap::new(),
-            tile: Tile::new(0, 0, zoom),
-            bbox: None,
-            line: vec![],
             zoom,
+            tiles: HashMap::new(),
+            current: None,
         }
     }
 
+    fn bounding_tile(&self, pt: &WebMercator) -> (Tile, BBox) {
+        let tile = pt.tile(self.zoom);
+        let bbox = tile.xy_bounds();
+        (tile, bbox)
+    }
+
+    fn last_line(&mut self, tile: &Tile) -> &mut LineString<u16> {
+        let multiline = self.tiles
+            .entry(*tile)
+            .or_insert_with(|| MultiLineString::new(vec![]));
+
+        if multiline.0.is_empty() {
+            multiline.0.push(LineString::new(vec![]));
+        }
+
+        // TODO: avoid the unwrap
+        multiline.0.last_mut().unwrap()
+    }
+
     fn add_line_segment(&mut self, start: WebMercator, end: WebMercator) {
-        let bbox = self.bbox.unwrap_or_else(|| {
-            self.move_bbox(&start);
-            self.bbox.unwrap()
-        });
+        if self.current.is_none() {
+            self.current = Some(self.bounding_tile(&start));
+        }
+
+        // TODO: hack
+        let (tile, bbox) = self.current.unwrap();
 
         match bbox.clip_line(&start, &end) {
             None => {
                 // line segment is completely outside of the current tile
-                self.finish_line();
-                self.move_bbox(&start);
-                // todo: should add line segment?? it overflows though?
+                // todo: should add line segment??
+
+                self.finish_segment();
+                self.current = Some(self.bounding_tile(&end));
             }
 
             Some((a, b)) => {
-                if self.line.is_empty() {
-                    self.line.push(bbox.project(&a, 4096.0));
+                let line = self.last_line(&tile);
+                if line.0.is_empty() {
+                    // TODO: extract magic num
+                    line.0.push(bbox.project(&a, 4096.0));
                 }
 
-                self.line.push(bbox.project(&b, 4096.0));
+                line.0.push(bbox.project(&b, 4096.0));
 
                 // We've moved, update the bbox.
                 if b != end {
-                    self.finish_line();
-                    // TODO: should use tile iterator here...
-                    self.move_bbox(&end);
+                    self.finish_segment();
 
-                    if Some(bbox) != self.bbox {
+                    // TODO: should use tile iterator here...
+                    let (next_tile, next_bbox) = self.bounding_tile(&end);
+                    if next_tile != tile {
+                        self.current = Some((next_tile, next_bbox));
                         self.add_line_segment(b, end);
                     }
                 }
@@ -373,25 +409,14 @@ impl TileClipper {
         }
     }
 
-    fn move_bbox(&mut self, pt: &WebMercator) {
-        let tile = pt.tile(self.zoom);
-        self.bbox = Some(tile.xy_bounds());
-        self.tile = tile;
-    }
-
-    fn finish_line(&mut self) {
-        if self.line.len() < 2 {
-            self.line.clear();
-            return;
+    fn finish_segment(&mut self) {
+        if let Some((tile, _)) = self.current {
+            self.tiles
+                .entry(tile)
+                .and_modify(|lines| {
+                    lines.0.push(LineString::new(vec![]));
+                });
         }
-
-        let line = self.line.clone();
-        self.line.clear();
-
-        self.tiles
-            .entry(self.tile)
-            .or_insert_with(Vec::new)
-            .push(line);
     }
 }
 
@@ -420,7 +445,33 @@ fn open_reader(p: &Path, gzip: bool) -> Box<dyn BufRead> {
     }
 }
 
-fn parse_fit<R: Read>(r: &mut R) -> Option<MultiLineString> {
+#[derive(Clone)]
+struct RawActivity {
+    title: Option<String>,
+    start_time: Option<u64>,
+    duration_secs: Option<u64>,
+    tracks: MultiLineString,
+}
+
+impl RawActivity {
+    fn distance(&self) -> f64 {
+        self.tracks.iter().map(|line| {
+            let mut prev = None;
+            let mut sum = 0.0;
+            for next in line.points() {
+                if let Some(prev) = prev {
+                    sum += haversine_dist(&prev, &next);
+                }
+
+                prev = Some(next);
+            }
+            sum
+        })
+            .sum()
+    }
+}
+
+fn parse_fit<R: Read>(r: &mut R) -> Option<RawActivity> {
     const SCALE_FACTOR: f64 = ((1u64 << 32) / 360) as f64;
 
     let opts = [
@@ -429,6 +480,7 @@ fn parse_fit<R: Read>(r: &mut R) -> Option<MultiLineString> {
     ]
         .into();
 
+    let (mut start_time, mut duration_secs) = (None, None);
     let mut points = vec![];
     for data in from_reader_with_options(r, &opts).unwrap() {
         match data.kind() {
@@ -440,6 +492,14 @@ fn parse_fit<R: Read>(r: &mut R) -> Option<MultiLineString> {
                     match f.name() {
                         "position_lat" => lat = f.value().try_into().ok(),
                         "position_long" => lng = f.value().try_into().ok(),
+                        "timestamp" => {
+                            let ts: i64 = f.value().try_into().unwrap();
+
+                            match start_time {
+                                None => start_time = Some(ts),
+                                Some(t) => duration_secs = Some((ts - t) as u64),
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -458,11 +518,27 @@ fn parse_fit<R: Read>(r: &mut R) -> Option<MultiLineString> {
     }
 
     let line = points.into_iter().collect::<LineString>();
-    Some(MultiLineString::from(line))
+    Some(RawActivity {
+        duration_secs,
+        title: None,
+        start_time: start_time.map(|it| it as u64),
+        tracks: MultiLineString::from(line),
+    })
 }
 
-fn parse_gpx<R: Read>(reader: &mut R) -> Option<MultiLineString> {
+fn parse_gpx<R: Read>(reader: &mut R) -> Option<RawActivity> {
     let gpx = gpx::read(reader).ok()?;
-    // Just take the first track.
-    gpx.tracks.first().map(|t| t.multilinestring())
+
+    // Just take the first track (generally the only one).
+    let track = gpx.tracks.first()?;
+
+    Some(
+        RawActivity {
+            title: track.name.clone(),
+            tracks: track.multilinestring(),
+            // TODO: parse these out. Library supports, just need to type dance.
+            start_time: None,
+            duration_secs: None,
+        }
+    )
 }
