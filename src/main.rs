@@ -2,12 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Cursor, Read, Write};
-use std::ops::Deref;
 use std::path::Path;
 use std::thread;
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use fitparser;
 use fitparser::de::{DecodeOption, from_reader_with_options};
 use fitparser::profile::MesgNum;
 use flate2::read::GzDecoder;
@@ -227,16 +225,16 @@ fn load_metadata(conn: &mut rusqlite::Connection) -> HashMap<String, String> {
 fn ingest_dir(p: &Path, conn: &mut rusqlite::Connection) {
     // Skip any files that are already in the database.
     // TODO: avoid the collect call here?
-    let activities = conn
+    let known_files: HashSet<String> = conn
         .prepare("SELECT file FROM activities").unwrap()
-        .query_map([], |row| row.get::<usize, String>(0)).unwrap()
+        .query_map([], |row| row.get(0)).unwrap()
         .filter_map(|n| n.ok())
-        .collect::<HashSet<String>>();
+        .collect();
 
-    let walk = WalkDir::new(p);
 
     let (tx, rx) = std::sync::mpsc::channel();
 
+    let walk = WalkDir::new(p);
     thread::spawn(move || {
         walk
             .into_iter()
@@ -245,10 +243,9 @@ fn ingest_dir(p: &Path, conn: &mut rusqlite::Connection) {
                 let dir = dir.expect("walkdir error");
                 let path = dir.path().to_str().expect("non utf8 path");
 
-                if !activities.contains(path) {
+                if !known_files.contains(path) {
                     Some(dir)
                 } else {
-                    println!("Skipping {}", path);
                     None
                 }
             })
@@ -278,7 +275,7 @@ fn ingest_dir(p: &Path, conn: &mut rusqlite::Connection) {
                     for line in activity.tracks.iter() {
                         let points = line
                             .points()
-                            .map(|pt| LngLat::new(pt.x() as f32, pt.y() as f32))
+                            .map(LngLat::from)
                             .filter_map(|pt| pt.xy());
 
                         let mut prev = None;
@@ -369,36 +366,39 @@ impl TileClipper {
     }
 
     fn add_line_segment(&mut self, start: WebMercator, end: WebMercator) {
-        if self.current.is_none() {
-            self.current = Some(self.bounding_tile(&start));
-        }
-
-        // TODO: hack
-        let (tile, bbox) = self.current.unwrap();
+        let (tile, bbox) = match self.current {
+            Some(pair) => pair,
+            None => {
+                let pair = self.bounding_tile(&start);
+                self.current = Some(pair);
+                pair
+            }
+        };
 
         match bbox.clip_line(&start, &end) {
+            // [start, end] doesn't intersect with the current tile at all, reposition it.
             None => {
-                // line segment is completely outside of the current tile
-                // todo: should add line segment??
-
+                // todo: should we add new segment after shifting bbox?
                 self.finish_segment();
                 self.current = Some(self.bounding_tile(&end));
             }
 
+            // [start, end] is at least partially contained within the current tile.
             Some((a, b)) => {
                 let line = self.last_line(&tile);
                 if line.0.is_empty() {
                     // TODO: extract magic num
-                    line.0.push(bbox.project(&a, 4096.0));
+                    line.0.push(a.to_pixel(&bbox, 4096).into());
                 }
 
-                line.0.push(bbox.project(&b, 4096.0));
+                line.0.push(b.to_pixel(&bbox, 4096).into());
 
-                // We've moved, update the bbox.
+                // If we've modified the end point, we've left the current tile.
                 if b != end {
                     self.finish_segment();
 
-                    // TODO: should use tile iterator here...
+                    // TODO: theoretically could jump large distances here
+                    //   (requiring supercover iterator), but unlikely.
                     let (next_tile, next_bbox) = self.bounding_tile(&end);
                     if next_tile != tile {
                         self.current = Some((next_tile, next_bbox));

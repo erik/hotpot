@@ -1,12 +1,12 @@
-use std::f32::consts::PI;
+use std::f64::consts::PI;
 use std::ops::Range;
 
 use derive_more::{From, Into};
-use geo_types::{Coord, CoordNum, Point};
+use geo_types::{Coord, Point};
 
-const EARTH_RADIUS_METERS: f32 = 6_378_137.0;
-const EARTH_CIRCUMFERENCE: f32 = 2.0 * PI * EARTH_RADIUS_METERS;
-const ORIGIN_OFFSET: f32 = EARTH_CIRCUMFERENCE / 2.0;
+const EARTH_RADIUS_METERS: f64 = 6_378_137.0;
+const EARTH_CIRCUMFERENCE: f64 = 2.0 * PI * EARTH_RADIUS_METERS;
+const ORIGIN_OFFSET: f64 = EARTH_CIRCUMFERENCE / 2.0;
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
 pub struct Tile {
@@ -16,53 +16,37 @@ pub struct Tile {
 }
 
 #[derive(Copy, Clone, PartialEq, Debug, From, Into)]
-pub struct LngLat(pub Point<f32>);
+pub struct LngLat(pub Point<f64>);
 
 #[derive(Copy, Clone, PartialEq, Debug, From, Into)]
-pub struct WebMercator(pub Point<f32>);
+pub struct WebMercator(pub Point<f64>);
 
 #[derive(Copy, Clone, PartialEq, Debug, From, Into)]
-pub struct MercatorPixel {
-    pub pixel: Coord<u32>,
-    pub tile: Tile,
-}
+pub struct TilePixel(pub Coord<u16>);
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub struct BBox {
-    pub left: f32,
-    pub bot: f32,
-    pub right: f32,
-    pub top: f32,
+    pub left: f64,
+    pub bot: f64,
+    pub right: f64,
+    pub top: f64,
 }
 
 impl BBox {
-    pub fn contains(&self, pt: &WebMercator) -> bool {
-        pt.0.x() >= self.left
-            && pt.0.x() <= self.right
-            && pt.0.y() >= self.bot
-            && pt.0.y() <= self.top
-    }
-
-    // TODO: weird location for this
-    pub fn project(&self, pt: &WebMercator, tile_width: f32) -> Coord<u16> {
-        let Coord { x, y } = pt.0.into();
-
-        let width = self.right - self.left;
-        let height = self.top - self.bot;
-
-        let px = ((x - self.left) / width * tile_width).floor() as u16;
-        let py = ((y - self.bot) / height * tile_width).floor() as u16;
-
-        Coord::from((px, py))
-    }
-
     const INSIDE: u8 = 0b0000;
     const LEFT: u8 = 0b0001;
     const RIGHT: u8 = 0b0010;
     const BOTTOM: u8 = 0b0100;
     const TOP: u8 = 0b1000;
 
-    fn compute_edges(&self, x: f32, y: f32) -> u8 {
+    pub fn contains(&self, pt: &WebMercator) -> bool {
+        pt.0.x() >= self.left
+            && pt.0.y() >= self.bot
+            && pt.0.x() < self.right
+            && pt.0.y() < self.top
+    }
+
+    fn compute_edges(&self, x: f64, y: f64) -> u8 {
         let mut code = 0;
 
         if x < self.left {
@@ -80,10 +64,9 @@ impl BBox {
         code
     }
 
-    // Clip the line segment [start, end] to tile boundaries.
-    // Return updated end point.
-    //
-    // Implementation of the Cohen-Sutherland line clipping algorithm.
+    /// Clip the line segment [start, end] to tile boundaries and return updated points.
+    ///
+    /// Implementation of the Cohen-Sutherland line clipping algorithm.
     pub fn clip_line(
         &self,
         start: &WebMercator,
@@ -158,7 +141,7 @@ pub fn haversine_dist(p1: &Point<f64>, p2: &Point<f64>) -> f64 {
 
 impl WebMercator {
     pub fn tile(&self, zoom: u8) -> Tile {
-        let num_tiles = (1u32 << zoom) as f32;
+        let num_tiles = (1u32 << zoom) as f64;
         let scale = num_tiles / EARTH_CIRCUMFERENCE;
 
         let x = (scale * (self.0.x() + ORIGIN_OFFSET)).floor() as u32;
@@ -171,18 +154,32 @@ impl WebMercator {
     /// Returned value is in meters.
     ///
     /// Note: this is not the distance on the sphere.
-    pub fn euclidean_dist(&self, other: &WebMercator) -> f32 {
+    pub fn euclidean_dist(&self, other: &WebMercator) -> f64 {
         let dx = self.0.x() - other.0.x();
         let dy = self.0.y() - other.0.y();
 
         (dx * dx + dy * dy).sqrt()
     }
+
+    pub fn to_pixel(&self, bbox: &BBox, tile_width: u16) -> TilePixel {
+        let Coord {
+            x, y
+        } = self.0.into();
+
+        let width = bbox.right - bbox.left;
+        let height = bbox.top - bbox.bot;
+
+        let px = ((x - bbox.left) / width * tile_width as f64).floor() as u16;
+        let py = ((y - bbox.bot) / height * tile_width as f64).floor() as u16;
+
+        TilePixel((px, py).into())
+    }
 }
 
 impl LngLat {
-    const LAT_BOUNDS: Range<f32> = -89.99999..90.0;
+    const LAT_BOUNDS: Range<f64> = -89.99999..90.0;
 
-    pub fn new(mut x: f32, y: f32) -> LngLat {
+    pub fn new(mut x: f64, y: f64) -> LngLat {
         while x < -180.0 {
             x += 360.0;
         }
@@ -191,7 +188,7 @@ impl LngLat {
     }
 
     pub fn xy(&self) -> Option<WebMercator> {
-        const QUARTER_PI: f32 = PI * 0.25;
+        const QUARTER_PI: f64 = PI * 0.25;
 
         if !Self::LAT_BOUNDS.contains(&self.0.y()) {
             return None;
@@ -235,11 +232,11 @@ impl Tile {
     }
 
     pub fn xy_bounds(&self) -> BBox {
-        let num_tiles = (1u32 << self.z) as f32;
+        let num_tiles = (1u32 << self.z) as f64;
         let tile_size = EARTH_CIRCUMFERENCE / num_tiles;
 
-        let left = (self.x as f32 * tile_size) - ORIGIN_OFFSET;
-        let top = ORIGIN_OFFSET - (self.y as f32 * tile_size);
+        let left = (self.x as f64 * tile_size) - ORIGIN_OFFSET;
+        let top = ORIGIN_OFFSET - (self.y as f64 * tile_size);
         BBox {
             left,
             top,
@@ -250,8 +247,8 @@ impl Tile {
 }
 
 pub struct CoveringTileIter {
-    dx: f32,
-    dy: f32,
+    dx: f64,
+    dy: f64,
     nx: u32,
     ny: u32,
     ix: u32,
