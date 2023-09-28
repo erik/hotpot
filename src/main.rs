@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Cursor, Read, Write};
+use std::ops::Range;
 use std::path::Path;
-use std::thread;
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use fitparser::de::{DecodeOption, from_reader_with_options};
@@ -11,7 +11,6 @@ use fitparser::profile::MesgNum;
 use flate2::read::GzDecoder;
 use geo_types::{Coord, LineString, MultiLineString, Point};
 use rayon::prelude::*;
-use rusqlite;
 use rusqlite::params;
 use walkdir::WalkDir;
 
@@ -86,6 +85,7 @@ fn render_pgm(data: &[u8], width: usize, out: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+// TODO: handle case where tile zoom is lower than stored zoom
 // FIXME: riddled with magic numbers
 fn render_tile(
     tile: Tile,
@@ -96,7 +96,8 @@ fn render_tile(
 
     const TILE_WIDTH: usize = 1024;
     const TILE_SIZE: usize = TILE_WIDTH * TILE_WIDTH;
-    let mut pixels: Vec<u16> = vec![0; TILE_SIZE];
+    const BOUNDS: Range<isize> = 0..TILE_WIDTH as isize;
+    let mut pixels: Vec<u8> = vec![0; TILE_SIZE];
 
     let mut rows = select_stmt.query(params![tile.z, tile.x, tile.y])?;
     while let Some(row) = rows.next()? {
@@ -108,37 +109,29 @@ fn render_tile(
                 continue;
             }
             // TODO: real scaling.
-            let x = ((x >> 2) & 0x3ff) as usize;
-            let y = 0x3ff - ((y >> 2) & 0x3ff) as usize;
+            let x = (x >> 2) as usize;
+            let y = 0x3ff - (y >> 2) as usize;
 
-            // TODO: we want to do more interesting visualizations here.
             if let Some(Coord { x: px, y: py }) = prev {
-                if x == px && y == py {
-                    continue;
-                }
-
+                // TODO: is the perf hit of this worth it?
                 let line_iter = line_drawing::XiaolinWu::<f32, isize>::new(
                     (px as f32, py as f32),
                     (x as f32, y as f32),
                 );
 
-                for ((ix, iy), value) in line_iter {
-                    if ix < 0 || ix >= TILE_WIDTH as isize || iy < 0 || iy >= TILE_WIDTH as isize {
+                for ((ix, iy), _) in line_iter {
+                    if !BOUNDS.contains(&ix) || !BOUNDS.contains(&iy) {
                         continue;
                     }
 
-                    // TODO: figure out good anti-aliasing
-                    let incr = (value * 1024.0) as u16;
-                    let (x, y) = (ix as usize, iy as usize);
-                    pixels[y * TILE_WIDTH + x] = pixels[y * TILE_WIDTH + x].saturating_add(incr);
+                    let idx = iy as usize * TILE_WIDTH + ix as usize;
+                    pixels[idx] = pixels[idx].saturating_add(1);
                 }
             }
             prev = Some(Coord { x, y });
         }
     }
 
-    // TODO: mega jank
-    let pixels = pixels.iter().map(|v| (v / 256) as u8).collect::<Vec<u8>>();
     Ok(pixels)
 }
 
@@ -235,7 +228,7 @@ fn ingest_dir(p: &Path, conn: &mut rusqlite::Connection) {
     let (tx, rx) = std::sync::mpsc::channel();
 
     let walk = WalkDir::new(p);
-    thread::spawn(move || {
+    std::thread::spawn(move || {
         walk
             .into_iter()
             .par_bridge()
@@ -252,51 +245,12 @@ fn ingest_dir(p: &Path, conn: &mut rusqlite::Connection) {
             .for_each_with(tx, |tx, entry| {
                 let path = entry.path();
 
-                let activity = match get_extensions(path) {
-                    Some(("gpx", compressed)) => {
-                        let mut reader = open_reader(path, compressed);
-                        parse_gpx(&mut reader)
-                    }
-
-                    Some(("fit", compressed)) => {
-                        let mut reader = open_reader(path, compressed);
-                        parse_fit(&mut reader)
-                    }
-
-                    _ => return,
-                };
-
-                if let Some(activity) = activity {
+                if let Some(activity) = parse_file(path) {
+                    // TODO: should be configurable.
                     const STORED_LEVELS: &[u8] = &[1, 8, 14];
-                    let mut clippers: HashMap<_, _> = STORED_LEVELS.iter().map(|zoom|
-                        (zoom, TileClipper::new(*zoom))
-                    ).collect();
-
-                    for line in activity.tracks.iter() {
-                        let points = line
-                            .points()
-                            .map(LngLat::from)
-                            .filter_map(|pt| pt.xy());
-
-                        let mut prev = None;
-                        for next in points {
-                            // TODO: should try to filter based on distance to previous point.
-                            if let Some(prev) = prev {
-                                for ref mut clipper in clippers.values_mut() {
-                                    clipper.add_line_segment(prev, next);
-                                }
-                            }
-                            prev = Some(next);
-                        }
-
-                        for ref mut clipper in clippers.values_mut() {
-                            clipper.finish_segment();
-                        }
-                    }
-
-                    // TODO: should perform a simplification step first.
-                    // TODO: clone is bad.
-                    tx.send((path.to_owned(), activity, clippers)).unwrap();
+                    let clippers = activity.clip_to_tiles(STORED_LEVELS);
+                    tx.send((path.to_owned(), activity, clippers))
+                        .expect("send");
                 }
             });
     });
@@ -314,11 +268,17 @@ fn ingest_dir(p: &Path, conn: &mut rusqlite::Connection) {
             .insert(params![path.to_str().unwrap(), activity.title, activity.start_time, activity.duration_secs, activity.distance()])
             .expect("insert activity");
 
-        for clipper in clippers.values() {
+        for clipper in clippers {
             for (tile, lines) in &clipper.tiles {
                 // TODO: encode multiline strings together in same blob.
                 for pixels in lines {
-                    let encoded = encode_raw(pixels.0.as_slice()).expect("encode raw");
+                    if pixels.0.is_empty() {
+                        continue;
+                    }
+
+                    let encoded = encode_raw(
+                        pixels.0.as_slice()
+                    ).expect("encode raw");
 
                     insert_coords
                         .insert(params![activity_id, tile.z, tile.x, tile.y, encoded])
@@ -414,10 +374,61 @@ impl TileClipper {
             self.tiles
                 .entry(tile)
                 .and_modify(|lines| {
+                    // TODO: it's broken.
+                    // if let Some(line) = lines.0.last_mut() {
+                    //     line.0 = simplify(&line.0, 128.0);
+                    // }
+
                     lines.0.push(LineString::new(vec![]));
                 });
         }
     }
+}
+
+
+// FIXME: casts gone mad! let's stick to a data type.
+fn point_to_line_dist(pt: &Coord<u16>, start: &Coord<u16>, end: &Coord<u16>) -> f32 {
+    let (sx, sy) = (start.x as f32, start.y as f32);
+    let (ex, ey) = (end.x as f32, end.y as f32);
+    let (px, py) = (pt.x as f32, pt.y as f32);
+
+    let dx = ex - sx;
+    let dy = ey - sy;
+
+    let dist = (dx * (sy - py)) - (dy * (sx - px)).abs();
+    dist  / (dx * dx + dy * dy).sqrt()
+}
+
+// Ramer–Douglas–Peucker algorithm
+fn simplify(line: &[Coord<u16>], epsilon: f32) -> Vec<Coord<u16>> {
+    let mut stack = vec![(0, line.len() - 1)];
+    let mut result = vec![];
+
+    while let Some((start, end)) = stack.pop() {
+        let mut max_dist = 0.0;
+        let mut max_index = start;
+
+        let start_pt = line[start];
+        let end_pt = line[end];
+
+        for i in start + 1..end {
+            let dist = point_to_line_dist(&line[i], &start_pt, &end_pt);
+            if dist > max_dist {
+                max_dist = dist;
+                max_index = i;
+            }
+        }
+
+        if max_dist > epsilon {
+            stack.push((start, max_index));
+            stack.push((max_index, end));
+        } else {
+            result.push(start_pt);
+            result.push(end_pt);
+        }
+    }
+
+    result
 }
 
 /// "foo.bar.gz" -> Some("bar", true)
@@ -469,10 +480,55 @@ impl RawActivity {
         })
             .sum()
     }
+
+    fn clip_to_tiles(&self, zooms: &[u8]) -> Vec<TileClipper> {
+        let mut clippers: Vec<_> = zooms.iter().map(|zoom| TileClipper::new(*zoom)).collect();
+
+        for line in self.tracks.iter() {
+            let points = line
+                .points()
+                .map(LngLat::from)
+                .filter_map(|pt| pt.xy());
+
+            let mut prev = None;
+            for next in points {
+                // TODO: should try to filter based on distance to previous point.
+                if let Some(prev) = prev {
+                    for clip in clippers.iter_mut() {
+                        clip.add_line_segment(prev, next);
+                    }
+                }
+                prev = Some(next);
+            }
+
+            for clip in clippers.iter_mut() {
+                clip.finish_segment();
+            }
+        }
+
+        clippers
+    }
+}
+
+// TODO: should return a Result
+fn parse_file(p: &Path) -> Option<RawActivity> {
+    match get_extensions(p) {
+        Some(("gpx", compressed)) => {
+            let mut reader = open_reader(p, compressed);
+            parse_gpx(&mut reader)
+        }
+
+        Some(("fit", compressed)) => {
+            let mut reader = open_reader(p, compressed);
+            parse_fit(&mut reader)
+        }
+
+        _ => None
+    }
 }
 
 fn parse_fit<R: Read>(r: &mut R) -> Option<RawActivity> {
-    const SCALE_FACTOR: f64 = ((1u64 << 32) / 360) as f64;
+    const SCALE_FACTOR: f64 = (1u64 << 32) as f64 / 360.0;
 
     let opts = [
         DecodeOption::SkipDataCrcValidation,
