@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Cursor, Read, Write};
+use std::io::{BufRead, BufReader, Cursor, Read};
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -12,6 +12,7 @@ use fitparser::profile::MesgNum;
 use flate2::read::GzDecoder;
 use geo::HaversineLength;
 use geo_types::{Coord, LineString, MultiLineString, Point};
+use image::Rgba;
 use r2d2_sqlite::SqliteConnectionManager;
 use rayon::prelude::*;
 use rusqlite::params;
@@ -92,11 +93,11 @@ fn main() {
         .map(|z| Tile::new(base.x >> (14 - z), base.y >> (14 - z), z))
         .collect::<Vec<_>>();
     let mut conn = db_pool.get().expect("db conn");
-    let render_width = 1024;
+    let render_width = 2048;
     for t in tiles {
         let pixels = render_tile(t, &mut conn, render_width).expect("render tile");
-        let out = format!("{}_{}_{}.pgm", t.z, t.x, t.y);
-        render_pgm(&pixels, render_width, Path::new(&out)).expect("render pgm");
+        let out = format!("{}_{}_{}.png", t.z, t.x, t.y);
+        render_image(&pixels, render_width, Path::new(&out)).expect("render pgm");
         println!("Rendered {}", out);
     }
 }
@@ -118,37 +119,69 @@ fn connect_database(path: &Path) -> r2d2::Pool<SqliteConnectionManager> {
     pool
 }
 
-// FIXME: can't do this as a const fn
-// const GRADIENT_GRAY: [u8; 256] = {
-//     let mut buf = [0u8; 256];
-//     let mut i = 0.0_f32;
-//     while i < 256.0 {
-//         buf[i as usize] = (255.0 * (i / 255.0).powf(1.0 / 9.2)) as u8;
-//         i += 1.0;
-//     }
-//     buf
-// };
+struct LinearGradient([Rgba<u8>; 256]);
 
-fn render_pgm(data: &[u8], width: u32, out: &Path) -> anyhow::Result<()> {
-    let mut file = File::create(out)?;
-    // Grayscale, binary
-    file.write_all(b"P5\n")?;
-    file.write_all(format!("{} {} {}\n", width, width, 255).as_bytes())?;
+impl LinearGradient {
+    // TODO: clean this up
+    fn from_stops(stops: &[(f32, Rgba<u8>)]) -> Self {
+        let mut buf = [Rgba::from([0, 0, 0, 0]); 256];
+        let mut i = 1;
 
-    // TODO: should be const.
-    let gradient_gray: [u8; 256] = {
-        let mut buf = [0u8; 256];
-        let mut i = 0.0_f32;
-        while i < 256.0 {
-            buf[i as usize] = (255.0 * (i / 255.0).powf(1.0 / 9.2)) as u8;
-            i += 1.0;
+        for stop in stops.windows(2) {
+            let (start, end) = (stop[0], stop[1]);
+            let start_idx = (start.0 * 256.0).floor() as usize;
+            let end_idx = (end.0 * 256.0).ceil() as usize;
+
+            while i < end_idx {
+                let t = (i - start_idx) as f32 / (end_idx - start_idx) as f32;
+                buf[i] = image::Rgba::from([
+                    (start.1[0] as f32 * (1.0 - t) + end.1[0] as f32 * t) as u8,
+                    (start.1[1] as f32 * (1.0 - t) + end.1[1] as f32 * t) as u8,
+                    (start.1[2] as f32 * (1.0 - t) + end.1[2] as f32 * t) as u8,
+                    0xff,
+                ]);
+
+                i += 1;
+            }
         }
-        buf
-    };
 
-    for pixel in data {
-        file.write_u8(gradient_gray[*pixel as usize])?;
+        let (_, last) = stops.last().unwrap();
+        while i < 256 {
+            buf[i] = *last;
+            i += 1;
+        }
+
+        LinearGradient(buf)
     }
+
+    fn sample(&self, val: u8) -> Rgba<u8> {
+        self.0[val as usize]
+    }
+}
+
+
+fn render_image(data: &[u8], width: u32, out: &Path) -> anyhow::Result<()> {
+    let mut img = image::RgbaImage::new(width, width);
+
+    // TODO: should be configurable
+    let gradient = LinearGradient::from_stops(&[
+        (0.0, Rgba::from([0xff, 0xb1, 0xff, 0x7f])),
+        (0.05, Rgba::from([0xff, 0xb1, 0xff, 0xff])),
+        (0.25, Rgba::from([0xff, 0xff, 0xff, 0xff])),
+    ]);
+    for x in 0..width {
+        for y in 0..width {
+            let pixel = data[(y * width + x) as usize];
+            let color = gradient.sample(pixel);
+            img.put_pixel(x, y, color);
+        }
+    }
+
+    img.write_to(
+        &mut File::create(out)?,
+        image::ImageOutputFormat::Png,
+    )?;
+
     Ok(())
 }
 
