@@ -6,6 +6,7 @@ use std::ops::Range;
 use std::path::Path;
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use clap::Parser;
 use fitparser::de::{DecodeOption, from_reader_with_options};
 use fitparser::profile::MesgNum;
 use flate2::read::GzDecoder;
@@ -40,20 +41,33 @@ fn decode_raw(bytes: &[u8]) -> anyhow::Result<Vec<Coord<u32>>> {
     Ok(coords)
 }
 
+#[derive(Parser, Debug)]
+#[command(author, version, about)]
+struct Cli {
+    db_path: PathBuf,
+    import_path: PathBuf,
+
+    /// Reset the database before importing
+    #[arg(short, long, default_value = "false")]
+    reset: bool,
+}
+
+
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() != 3 {
-        println!("Usage: {} <db_path> <import_path>", args[0]);
-        return;
+    let cli = Cli::parse();
+
+    // TODO: move this out of here.
+    if cli.reset {
+        match std::fs::remove_file(&cli.db_path) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => panic!("error removing db: {}", e),
+        }
     }
 
-    let db_path = &args[1];
-    let import_path = &args[2];
+    let db_pool = connect_database(&cli.db_path);
 
-    let mut conn = rusqlite::Connection::open(db_path).unwrap();
-    let _ = init_db(&mut conn).expect("init db");
-
-    ingest_dir(Path::new(import_path), &mut conn);
+    ingest_dir(&cli.import_path, &db_pool);
 
     let tiles = [
         Tile::new(0, 0, 1),

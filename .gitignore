@@ -1,4 +1,4 @@
 target/
-*.sqlite3
+*.sqlite3*
 .idea/
 .venv/
