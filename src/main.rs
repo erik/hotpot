@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Cursor, Read, Write};
-use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -11,15 +10,21 @@ use clap::Parser;
 use fitparser::de::{DecodeOption, from_reader_with_options};
 use fitparser::profile::MesgNum;
 use flate2::read::GzDecoder;
+use geo::HaversineLength;
 use geo_types::{Coord, LineString, MultiLineString, Point};
 use r2d2_sqlite::SqliteConnectionManager;
 use rayon::prelude::*;
 use rusqlite::params;
 use walkdir::WalkDir;
 
-use crate::tiles::{BBox, haversine_dist, LngLat, Tile, WebMercator};
+use crate::tiles::{BBox, LngLat, Tile, TileBounds, WebMercator};
 
 mod tiles;
+
+// TODO: make this configurable
+const STORED_ZOOM_LEVELS: [u8; 4] = [2, 6, 10, 14];
+const STORED_TILE_WIDTH: u32 = 4096;
+
 
 // TODO: consider piping this through a compression step.
 fn encode_raw(data: &[Coord<u16>]) -> anyhow::Result<Vec<u8>> {
@@ -60,29 +65,38 @@ fn main() {
 
     // TODO: move this out of here.
     if cli.reset {
-        match std::fs::remove_file(&cli.db_path) {
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => panic!("error removing db: {}", e),
+        let db_files = &[
+            &cli.db_path,
+            &cli.db_path.join("-wal"),
+            &cli.db_path.join("-shm"),
+        ];
+
+        for p in db_files {
+            match std::fs::remove_file(p) {
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => panic!("error removing db: {}", e),
+            }
         }
     }
 
     let db_pool = connect_database(&cli.db_path);
 
-    ingest_dir(&cli.import_path, &db_pool);
+    // TODO: remove this
+    if cli.reset {
+        ingest_dir(&cli.import_path, &db_pool);
+    }
 
-    let tiles = [
-        Tile::new(0, 0, 1),
-        Tile::new(43, 102, 8),
-        Tile::new(2802, 6542, 14),
-        Tile::new(2801, 6542, 14),
-        Tile::new(2800, 6542, 14),
-    ];
+    let base = Tile::new(2800, 6542, 14);
+    let tiles = (0..=14).rev()
+        .map(|z| Tile::new(base.x >> (14 - z), base.y >> (14 - z), z))
+        .collect::<Vec<_>>();
     let mut conn = db_pool.get().expect("db conn");
+    let render_width = 1024;
     for t in tiles {
-        let pixels = render_tile(t, &mut conn).expect("render tile");
+        let pixels = render_tile(t, &mut conn, render_width).expect("render tile");
         let out = format!("{}_{}_{}.pgm", t.z, t.x, t.y);
-        render_pgm(&pixels, 1024, Path::new(&out)).expect("render pgm");
+        render_pgm(&pixels, render_width, Path::new(&out)).expect("render pgm");
         println!("Rendered {}", out);
     }
 }
@@ -104,47 +118,113 @@ fn connect_database(path: &Path) -> r2d2::Pool<SqliteConnectionManager> {
     pool
 }
 
-fn render_pgm(data: &[u8], width: usize, out: &Path) -> anyhow::Result<()> {
+// FIXME: can't do this as a const fn
+// const GRADIENT_GRAY: [u8; 256] = {
+//     let mut buf = [0u8; 256];
+//     let mut i = 0.0_f32;
+//     while i < 256.0 {
+//         buf[i as usize] = (255.0 * (i / 255.0).powf(1.0 / 9.2)) as u8;
+//         i += 1.0;
+//     }
+//     buf
+// };
+
+fn render_pgm(data: &[u8], width: u32, out: &Path) -> anyhow::Result<()> {
     let mut file = File::create(out)?;
     // Grayscale, binary
     file.write_all(b"P5\n")?;
-    file.write_all(format!("{} {} {}\n", width, data.len() / width, 255).as_bytes())?;
+    file.write_all(format!("{} {} {}\n", width, width, 255).as_bytes())?;
 
-    for row in data.chunks(width) {
-        for pixel in row {
-            let scaled_pixel = 255.0 * (*pixel as f32 / 255.0).powf(1.0 / 9.2);
-            file.write_u8(scaled_pixel as u8)?;
+    // TODO: should be const.
+    let gradient_gray: [u8; 256] = {
+        let mut buf = [0u8; 256];
+        let mut i = 0.0_f32;
+        while i < 256.0 {
+            buf[i as usize] = (255.0 * (i / 255.0).powf(1.0 / 9.2)) as u8;
+            i += 1.0;
         }
+        buf
+    };
+
+    for pixel in data {
+        file.write_u8(gradient_gray[*pixel as usize])?;
     }
     Ok(())
 }
 
-// TODO: handle case where tile zoom is lower than stored zoom
-// FIXME: riddled with magic numbers
+fn stored_tile_bounds(tile: &Tile) -> Option<TileBounds> {
+    // Find the stored zoom level closest to (and higher than) the requested zoom.
+    let zoom = STORED_ZOOM_LEVELS
+        .iter()
+        .find(|&&z| tile.z <= z)?;
+
+    let zoom_steps = zoom - tile.z;
+
+    Some(
+        TileBounds {
+            z: *zoom,
+            xmin: tile.x << zoom_steps,
+            ymin: tile.y << zoom_steps,
+            xmax: (tile.x + 1) << zoom_steps,
+            ymax: (tile.y + 1) << zoom_steps,
+        }
+    )
+}
+
 fn render_tile(
     tile: Tile,
     conn: &mut rusqlite::Connection,
+    width: u32,
 ) -> rusqlite::Result<Vec<u8>> {
+    // TODO: support upscaling
+    assert!(width <= STORED_TILE_WIDTH, "Upscaling not supported");
+    assert!(width.is_power_of_two(), "width must be power of two");
+
+    let bounds = stored_tile_bounds(&tile).unwrap();
+    let zoom_steps = (bounds.z - tile.z) as u32;
+    let width_steps = STORED_TILE_WIDTH.ilog2() - width.ilog2();
+
+    let mut pixels: Vec<u8> = vec![0; (width * width) as usize];
+
     let mut select_stmt = conn
-        .prepare("SELECT coords FROM activity_tiles WHERE z = ? AND x = ? AND y = ?;")?;
+        .prepare("
+SELECT x, y, coords
+FROM activity_tiles
+WHERE z = ?
+  AND (x >= ? AND x < ?)
+  AND (y >= ? AND y < ?);
+        ")?;
 
-    const TILE_WIDTH: usize = 1024;
-    const TILE_SIZE: usize = TILE_WIDTH * TILE_WIDTH;
-    const BOUNDS: Range<isize> = 0..TILE_WIDTH as isize;
-    let mut pixels: Vec<u8> = vec![0; TILE_SIZE];
+    let mut rows = select_stmt
+        .query(params![bounds.z, bounds.xmin, bounds.xmax, bounds.ymin, bounds.ymax])?;
 
-    let mut rows = select_stmt.query(params![tile.z, tile.x, tile.y])?;
     while let Some(row) = rows.next()? {
-        let bytes: Vec<u8> = row.get_unwrap(0);
+        let (source_tile_x, source_tile_y): (u32, u32) = (
+            row.get_unwrap(0),
+            row.get_unwrap(1),
+        );
+
+        // Origin of source tile within target tile
+        let x_offset = STORED_TILE_WIDTH * (source_tile_x - bounds.xmin);
+        let y_offset = STORED_TILE_WIDTH * (source_tile_y - bounds.ymin);
+
+        let bytes: Vec<u8> = row.get_unwrap(2);
         let line = decode_raw(&bytes).expect("decode raw");
+
         let mut prev = None;
         for Coord { x, y } in line {
-            if x >= 4096 || y >= 4096 {
+            // Translate (x,y) to location in target tile.
+            // [0..(width * STORED_TILE_WIDTH)]
+            let x = x + x_offset;
+            let y = (STORED_TILE_WIDTH - y) + y_offset;
+
+            // Scale the coordinates back down to [0..width]
+            let x = x >> (zoom_steps + width_steps);
+            let y = y >> (zoom_steps + width_steps);
+
+            if x >= width || y >= width {
                 continue;
             }
-            // TODO: real scaling.
-            let x = (x >> 2) as usize;
-            let y = 0x3ff - (y >> 2) as usize;
 
             if let Some(Coord { x: px, y: py }) = prev {
                 if x == px && y == py {
@@ -152,17 +232,18 @@ fn render_tile(
                 }
 
                 // TODO: is the perf hit of this worth it?
-                let line_iter = line_drawing::XiaolinWu::<f32, isize>::new(
-                    (px as f32, py as f32),
-                    (x as f32, y as f32),
+                let line_iter = line_drawing::Bresenham::<i32>::new(
+                    (px as i32, py as i32),
+                    (x as i32, y as i32),
                 );
 
-                for ((ix, iy), _) in line_iter {
-                    if !BOUNDS.contains(&ix) || !BOUNDS.contains(&iy) {
+                for (ix, iy) in line_iter {
+                    if ix < 0 || iy < 0 || ix >= (width as i32) || iy >= (width as i32) {
                         continue;
                     }
 
-                    let idx = iy as usize * TILE_WIDTH + ix as usize;
+                    let (ix, iy) = (ix as u32, iy as u32);
+                    let idx = (iy * width + ix) as usize;
                     pixels[idx] = pixels[idx].saturating_add(1);
                 }
             }
@@ -294,9 +375,7 @@ fn ingest_dir(p: &Path, pool: &r2d2::Pool<SqliteConnectionManager>) {
                 let activity_id = conn.last_insert_rowid();
 
                 // TODO: split out into separate function
-                // TODO: make this configurable
-                const STORED_LEVELS: &[u8] = &[1, 8, 14];
-                for clip in activity.clip_to_tiles(STORED_LEVELS) {
+                for clip in activity.clip_to_tiles(&STORED_ZOOM_LEVELS) {
                     for (tile, lines) in &clip.tiles {
 
                         // TODO: encode multiline strings together in same blob.
@@ -317,6 +396,8 @@ fn ingest_dir(p: &Path, pool: &r2d2::Pool<SqliteConnectionManager>) {
                 }
             },
         );
+
+    pool.get().unwrap().execute_batch("VACUUM").expect("vacuum");
 }
 
 struct TileClipper {
@@ -375,11 +456,10 @@ impl TileClipper {
             Some((a, b)) => {
                 let line = self.last_line(&tile);
                 if line.0.is_empty() {
-                    // TODO: extract magic num
-                    line.0.push(a.to_pixel(&bbox, 4096).into());
+                    line.0.push(a.to_pixel(&bbox, STORED_TILE_WIDTH as u16).into());
                 }
 
-                line.0.push(b.to_pixel(&bbox, 4096).into());
+                line.0.push(b.to_pixel(&bbox, STORED_TILE_WIDTH as u16).into());
 
                 // If we've modified the end point, we've left the current tile.
                 if b != end {
@@ -462,20 +542,11 @@ struct RawActivity {
 
 impl RawActivity {
     fn distance(&self) -> f64 {
-        self.tracks.iter().map(|line| {
-            let mut prev = None;
-            let mut sum = 0.0;
-            for next in line.points() {
-                if let Some(prev) = prev {
-                    sum += haversine_dist(&prev, &next);
-                }
-
-                prev = Some(next);
-            }
-            sum
-        })
+        self.tracks.iter()
+            .map(LineString::haversine_length)
             .sum()
     }
+
 
     fn clip_to_tiles(&self, zooms: &[u8]) -> Vec<TileClipper> {
         let mut clippers: Vec<_> = zooms.iter().map(|zoom| TileClipper::new(*zoom)).collect();
@@ -595,6 +666,40 @@ fn parse_gpx<R: Read>(reader: &mut R) -> Option<RawActivity> {
     )
 }
 
+// Ramer–Douglas–Peucker algorithm
+fn simplify(line: &[Coord<u16>], epsilon: f32) -> Vec<Coord<u16>> {
+    if line.len() < 3 {
+        return line.to_vec();
+    }
+
+    fn simplify_inner(line: &[Coord<u16>], epsilon: f32, buffer: &mut Vec<Coord<u16>>) {
+        if let [start, rest @ .., end] = line {
+            let mut max_dist = 0.0;
+            let mut max_idx = 0;
+
+            for (idx, pt) in rest.iter().enumerate() {
+                let dist = point_to_line_dist(pt, start, end);
+                if dist > max_dist {
+                    max_dist = dist;
+                    max_idx = idx + 1;
+                }
+            }
+
+            if max_dist > epsilon {
+                simplify_inner(&line[..=max_idx], epsilon, buffer);
+                buffer.push(line[max_idx]);
+                simplify_inner(&line[max_idx..], epsilon, buffer);
+            }
+        }
+    }
+
+    let mut buf = vec![line[0]];
+    simplify_inner(line, epsilon, &mut buf);
+    buf.push(line[line.len() - 1]);
+
+    buf
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -657,38 +762,4 @@ mod test {
         assert_eq!(point_to_line_dist(&Coord { x: 0, y: 0 }, &start, &end), 0.0);
         assert_eq!(point_to_line_dist(&Coord { x: 1, y: 1 }, &start, &end), (2_f32).sqrt());
     }
-}
-
-// Ramer–Douglas–Peucker algorithm
-fn simplify(line: &[Coord<u16>], epsilon: f32) -> Vec<Coord<u16>> {
-    if line.len() < 3 {
-        return line.to_vec();
-    }
-
-    fn simplify_inner(line: &[Coord<u16>], epsilon: f32, buffer: &mut Vec<Coord<u16>>) {
-        if let [start, rest @ .., end] = line {
-            let mut max_dist = 0.0;
-            let mut max_idx = 0;
-
-            for (idx, pt) in rest.iter().enumerate() {
-                let dist = point_to_line_dist(pt, start, end);
-                if dist > max_dist {
-                    max_dist = dist;
-                    max_idx = idx + 1;
-                }
-            }
-
-            if max_dist > epsilon {
-                simplify_inner(&line[..=max_idx], epsilon, buffer);
-                buffer.push(line[max_idx]);
-                simplify_inner(&line[max_idx..], epsilon, buffer);
-            }
-        }
-    }
-
-    let mut buf = vec![line[0]];
-    simplify_inner(line, epsilon, &mut buf);
-    buf.push(line[line.len() - 1]);
-
-    buf
 }

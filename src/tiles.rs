@@ -15,6 +15,15 @@ pub struct Tile {
     pub z: u8,
 }
 
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+pub struct TileBounds {
+    pub z: u8,
+    pub xmin: u32,
+    pub ymin: u32,
+    pub xmax: u32,
+    pub ymax: u32,
+}
+
 #[derive(Copy, Clone, PartialEq, Debug, From, Into)]
 pub struct LngLat(pub Point<f64>);
 
@@ -125,20 +134,6 @@ impl BBox {
     }
 }
 
-pub fn haversine_dist(p1: &Point<f64>, p2: &Point<f64>) -> f64 {
-    let (lat1, lng1) = (p1.y().to_radians(), p1.x().to_radians());
-    let (lat2, lng2) = (p2.y().to_radians(), p2.x().to_radians());
-
-    let d_lat = lat2 - lat1;
-    let d_lng = lng2 - lng1;
-
-    let a = (d_lat / 2.0).sin().powi(2)
-        + lat1.cos() * lat2.cos() * (d_lng / 2.0).sin().powi(2);
-    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
-
-    EARTH_RADIUS_METERS as f64 * c
-}
-
 impl WebMercator {
     pub fn tile(&self, zoom: u8) -> Tile {
         let num_tiles = (1u32 << zoom) as f64;
@@ -150,17 +145,7 @@ impl WebMercator {
         Tile::new(x, y, zoom)
     }
 
-    /// Compute the euclidean distance between two points.
-    /// Returned value is in meters.
-    ///
-    /// Note: this is not the distance on the sphere.
-    pub fn euclidean_dist(&self, other: &WebMercator) -> f64 {
-        let dx = self.0.x() - other.0.x();
-        let dy = self.0.y() - other.0.y();
-
-        (dx * dx + dy * dy).sqrt()
-    }
-
+    // TODO: This returns [0, tile_width] but should be [0, tile_width - 1]
     pub fn to_pixel(&self, bbox: &BBox, tile_width: u16) -> TilePixel {
         let Coord {
             x, y
@@ -203,7 +188,7 @@ impl LngLat {
 
 impl Tile {
     pub fn new(x: u32, y: u32, z: u8) -> Self {
-        const MAX_ZOOM: u8 = 15;
+        const MAX_ZOOM: u8 = 16;
         let num_tiles = 1u32 << z;
         assert!(x < num_tiles);
         assert!(y < num_tiles);
