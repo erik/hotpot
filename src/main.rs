@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Cursor, Read, Write};
 use std::ops::Range;
 use std::path::Path;
+use std::path::PathBuf;
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use clap::Parser;
@@ -11,6 +12,7 @@ use fitparser::de::{DecodeOption, from_reader_with_options};
 use fitparser::profile::MesgNum;
 use flate2::read::GzDecoder;
 use geo_types::{Coord, LineString, MultiLineString, Point};
+use r2d2_sqlite::SqliteConnectionManager;
 use rayon::prelude::*;
 use rusqlite::params;
 use walkdir::WalkDir;
@@ -76,12 +78,30 @@ fn main() {
         Tile::new(2801, 6542, 14),
         Tile::new(2800, 6542, 14),
     ];
+    let mut conn = db_pool.get().expect("db conn");
     for t in tiles {
         let pixels = render_tile(t, &mut conn).expect("render tile");
         let out = format!("{}_{}_{}.pgm", t.z, t.x, t.y);
         render_pgm(&pixels, 1024, Path::new(&out)).expect("render pgm");
         println!("Rendered {}", out);
     }
+}
+
+fn connect_database(path: &Path) -> r2d2::Pool<SqliteConnectionManager> {
+    let manager = SqliteConnectionManager::file(path);
+    let pool = r2d2::Pool::new(manager).expect("db pool");
+
+    // TODO: should return metadata or something.
+    pool.get().and_then(|mut conn| {
+        let _metadata = init_db(&mut conn).expect("init db");
+
+        //  TODO: test performance
+        conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = OFF")
+            .expect("pragma");
+        Ok(())
+    }).expect("init db");
+
+    pool
 }
 
 fn render_pgm(data: &[u8], width: usize, out: &Path) -> anyhow::Result<()> {
@@ -229,80 +249,70 @@ fn load_metadata(conn: &mut rusqlite::Connection) -> HashMap<String, String> {
     meta
 }
 
-fn ingest_dir(p: &Path, conn: &mut rusqlite::Connection) {
+fn ingest_dir(p: &Path, pool: &r2d2::Pool<SqliteConnectionManager>) {
     // Skip any files that are already in the database.
     // TODO: avoid the collect call here?
-    let known_files: HashSet<String> = conn
+    let known_files: HashSet<String> = pool.get()
+        .unwrap()
         .prepare("SELECT file FROM activities").unwrap()
         .query_map([], |row| row.get(0)).unwrap()
         .filter_map(|n| n.ok())
         .collect();
 
+    WalkDir::new(p)
+        .into_iter()
+        .par_bridge()
+        .filter_map(|dir| {
+            let dir = dir.expect("walkdir error");
+            let path = dir.path().to_str().expect("non utf8 path");
 
-    let (tx, rx) = std::sync::mpsc::channel();
-
-    let walk = WalkDir::new(p);
-    std::thread::spawn(move || {
-        walk
-            .into_iter()
-            .par_bridge()
-            .filter_map(|dir| {
-                let dir = dir.expect("walkdir error");
-                let path = dir.path().to_str().expect("non utf8 path");
-
-                if !known_files.contains(path) {
-                    Some(dir)
-                } else {
-                    None
-                }
-            })
-            .for_each_with(tx, |tx, entry| {
-                let path = entry.path();
-
-                if let Some(activity) = parse_file(path) {
-                    // TODO: should be configurable.
-                    const STORED_LEVELS: &[u8] = &[1, 8, 14];
-                    let clippers = activity.clip_to_tiles(STORED_LEVELS);
-                    tx.send((path.to_owned(), activity, clippers))
-                        .expect("send");
-                }
-            });
-    });
-
-    let mut insert_activity = conn
-        .prepare("INSERT INTO activities (file, title, start_time, duration_secs, dist_meters) VALUES (?, ?, ?, ?, ?)")
-        .unwrap();
-
-    let mut insert_coords = conn
-        .prepare("INSERT INTO activity_tiles (activity_id, z, x, y, coords) VALUES (?, ?, ?, ?, ?)")
-        .unwrap();
-
-    for (path, activity, clippers) in rx {
-        let activity_id = insert_activity
-            .insert(params![path.to_str().unwrap(), activity.title, activity.start_time, activity.duration_secs, activity.distance()])
-            .expect("insert activity");
-
-        for clipper in clippers {
-            for (tile, lines) in &clipper.tiles {
-                // TODO: encode multiline strings together in same blob.
-                for pixels in lines {
-                    if pixels.0.is_empty() {
-                        continue;
-                    }
-
-                    let encoded = encode_raw(
-                        pixels.0.as_slice()
-                    ).expect("encode raw");
-
-                    insert_coords
-                        .insert(params![activity_id, tile.z, tile.x, tile.y, encoded])
-                        .expect("insert coords");
-                }
+            if !known_files.contains(path) {
+                Some(dir)
+            } else {
+                None
             }
-        }
+        })
+        .filter_map(|entry| parse_activity_data(entry.path()))
+        .for_each_init(
+            || pool.clone(),
+            |pool, activity| {
+                let conn = pool.get().expect("db conn");
 
-        println!("Imported {}", path.to_str().unwrap());
-    }
+                let mut insert_coords = conn
+                    .prepare("INSERT INTO activity_tiles (activity_id, z, x, y, coords) VALUES (?, ?, ?, ?, ?)")
+                    .unwrap();
+
+                conn.execute(
+                    "INSERT INTO activities (file, title, start_time, duration_secs, dist_meters) VALUES (?, ?, ?, ?, ?)",
+                    params!["todo", activity.title, activity.start_time, activity.duration_secs, activity.distance()],
+                ).expect("insert activity");
+
+                let activity_id = conn.last_insert_rowid();
+
+                // TODO: split out into separate function
+                // TODO: make this configurable
+                const STORED_LEVELS: &[u8] = &[1, 8, 14];
+                for clip in activity.clip_to_tiles(STORED_LEVELS) {
+                    for (tile, lines) in &clip.tiles {
+
+                        // TODO: encode multiline strings together in same blob.
+                        for pixels in lines {
+                            if pixels.0.is_empty() {
+                                continue;
+                            }
+
+                            // TODO: can consider storing post rasterization for faster renders.
+                            let simplified = simplify(&pixels.0, 4.0);
+                            let encoded = encode_raw(&simplified).expect("encode raw");
+
+                            insert_coords
+                                .insert(params![activity_id, tile.z, tile.x, tile.y, encoded])
+                                .expect("insert coords");
+                        }
+                    }
+                }
+            },
+        );
 }
 
 struct TileClipper {
