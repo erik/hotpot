@@ -112,7 +112,7 @@ fn render_pgm(data: &[u8], width: usize, out: &Path) -> anyhow::Result<()> {
 
     for row in data.chunks(width) {
         for pixel in row {
-            let scaled_pixel = 255.0 - 255.0 * (*pixel as f32 / 255.0).powf(1.0 / 9.2);
+            let scaled_pixel = 255.0 * (*pixel as f32 / 255.0).powf(1.0 / 9.2);
             file.write_u8(scaled_pixel as u8)?;
         }
     }
@@ -147,6 +147,10 @@ fn render_tile(
             let y = 0x3ff - (y >> 2) as usize;
 
             if let Some(Coord { x: px, y: py }) = prev {
+                if x == px && y == py {
+                    continue;
+                }
+
                 // TODO: is the perf hit of this worth it?
                 let line_iter = line_drawing::XiaolinWu::<f32, isize>::new(
                     (px as f32, py as f32),
@@ -398,11 +402,6 @@ impl TileClipper {
             self.tiles
                 .entry(tile)
                 .and_modify(|lines| {
-                    // TODO: it's broken.
-                    // if let Some(line) = lines.0.last_mut() {
-                    //     line.0 = simplify(&line.0, 128.0);
-                    // }
-
                     lines.0.push(LineString::new(vec![]));
                 });
         }
@@ -419,40 +418,13 @@ fn point_to_line_dist(pt: &Coord<u16>, start: &Coord<u16>, end: &Coord<u16>) -> 
     let dx = ex - sx;
     let dy = ey - sy;
 
-    let dist = (dx * (sy - py)) - (dy * (sx - px)).abs();
-    dist  / (dx * dx + dy * dy).sqrt()
-}
-
-// Ramer–Douglas–Peucker algorithm
-fn simplify(line: &[Coord<u16>], epsilon: f32) -> Vec<Coord<u16>> {
-    let mut stack = vec![(0, line.len() - 1)];
-    let mut result = vec![];
-
-    while let Some((start, end)) = stack.pop() {
-        let mut max_dist = 0.0;
-        let mut max_index = start;
-
-        let start_pt = line[start];
-        let end_pt = line[end];
-
-        for i in start + 1..end {
-            let dist = point_to_line_dist(&line[i], &start_pt, &end_pt);
-            if dist > max_dist {
-                max_dist = dist;
-                max_index = i;
-            }
-        }
-
-        if max_dist > epsilon {
-            stack.push((start, max_index));
-            stack.push((max_index, end));
-        } else {
-            result.push(start_pt);
-            result.push(end_pt);
-        }
+    // Line start and ends on same point, so just return euclidean distance to that point.
+    if dx == 0.0 && dy == 0.0 {
+        return (sx - px).hypot(sy - py);
     }
 
-    result
+    let dist = (dx * (sy - py)) - (dy * (sx - px));
+    dist.abs() / (dx * dx + dy * dy).sqrt()
 }
 
 /// "foo.bar.gz" -> Some("bar", true)
@@ -535,7 +507,7 @@ impl RawActivity {
 }
 
 // TODO: should return a Result
-fn parse_file(p: &Path) -> Option<RawActivity> {
+fn parse_activity_data(p: &Path) -> Option<RawActivity> {
     match get_extensions(p) {
         Some(("gpx", compressed)) => {
             let mut reader = open_reader(p, compressed);
@@ -621,4 +593,102 @@ fn parse_gpx<R: Read>(reader: &mut R) -> Option<RawActivity> {
             duration_secs: None,
         }
     )
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_simplify() {
+        let line = vec![
+            Coord { x: 0, y: 0 },
+            Coord { x: 1, y: 1 },
+            Coord { x: 2, y: 2 },
+            Coord { x: 3, y: 3 },
+            Coord { x: 4, y: 4 },
+            Coord { x: 5, y: 5 },
+            Coord { x: 6, y: 6 },
+            Coord { x: 7, y: 7 },
+            Coord { x: 8, y: 8 },
+            Coord { x: 9, y: 9 },
+        ];
+
+        let simplified = simplify(&line, 0.5);
+        assert_eq!(simplified.len(), 2);
+        assert_eq!(simplified[0], Coord { x: 0, y: 0 });
+        assert_eq!(simplified[1], Coord { x: 9, y: 9 });
+    }
+
+    #[test]
+    fn test_simplify_retains_points() {
+        let line = vec![
+            Coord { x: 0, y: 0 },
+            Coord { x: 5, y: 5 },
+            Coord { x: 0, y: 0 },
+            Coord { x: 1, y: 1 },
+            Coord { x: 0, y: 0 },
+        ];
+
+        let simplified = simplify(&line, 2.0);
+        assert_eq!(simplified.len(), 3);
+        assert_eq!(simplified[0], Coord { x: 0, y: 0 });
+        assert_eq!(simplified[1], Coord { x: 5, y: 5 });
+        assert_eq!(simplified[2], Coord { x: 0, y: 0 });
+    }
+
+    #[test]
+    fn test_point_to_line_dist() {
+        let start = Coord { x: 0, y: 0 };
+        let end = Coord { x: 10, y: 10 };
+
+        assert_eq!(point_to_line_dist(&Coord { x: 5, y: 5 }, &start, &end), 0.0);
+        assert_eq!(point_to_line_dist(&Coord { x: 5, y: 0 }, &start, &end), (5.0 * 2.0_f32.sqrt()) / 2.0);
+        assert_eq!(point_to_line_dist(&Coord { x: 0, y: 5 }, &start, &end), (5.0 * 2.0_f32.sqrt()) / 2.0);
+        assert_eq!(point_to_line_dist(&Coord { x: 0, y: 10 }, &start, &end), (10.0 * 2.0_f32.sqrt()) / 2.0);
+        assert_eq!(point_to_line_dist(&Coord { x: 10, y: 0 }, &start, &end), (10.0 * 2.0_f32.sqrt()) / 2.0);
+    }
+
+    #[test]
+    fn test_point_to_line_same_point() {
+        let start = Coord { x: 0, y: 0 };
+        let end = Coord { x: 0, y: 0 };
+
+        assert_eq!(point_to_line_dist(&Coord { x: 0, y: 0 }, &start, &end), 0.0);
+        assert_eq!(point_to_line_dist(&Coord { x: 1, y: 1 }, &start, &end), (2_f32).sqrt());
+    }
+}
+
+// Ramer–Douglas–Peucker algorithm
+fn simplify(line: &[Coord<u16>], epsilon: f32) -> Vec<Coord<u16>> {
+    if line.len() < 3 {
+        return line.to_vec();
+    }
+
+    fn simplify_inner(line: &[Coord<u16>], epsilon: f32, buffer: &mut Vec<Coord<u16>>) {
+        if let [start, rest @ .., end] = line {
+            let mut max_dist = 0.0;
+            let mut max_idx = 0;
+
+            for (idx, pt) in rest.iter().enumerate() {
+                let dist = point_to_line_dist(pt, start, end);
+                if dist > max_dist {
+                    max_dist = dist;
+                    max_idx = idx + 1;
+                }
+            }
+
+            if max_dist > epsilon {
+                simplify_inner(&line[..=max_idx], epsilon, buffer);
+                buffer.push(line[max_idx]);
+                simplify_inner(&line[max_idx..], epsilon, buffer);
+            }
+        }
+    }
+
+    let mut buf = vec![line[0]];
+    simplify_inner(line, epsilon, &mut buf);
+    buf.push(line[line.len() - 1]);
+
+    buf
 }
