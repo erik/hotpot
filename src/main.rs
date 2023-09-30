@@ -1,53 +1,33 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Cursor, Read};
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::path::PathBuf;
 
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use anyhow::{anyhow, Result};
 use clap::Parser;
 use fitparser::de::{DecodeOption, from_reader_with_options};
 use fitparser::profile::MesgNum;
 use flate2::read::GzDecoder;
 use geo::HaversineLength;
 use geo_types::{Coord, LineString, MultiLineString, Point};
-use image::Rgba;
 use r2d2_sqlite::SqliteConnectionManager;
 use rayon::prelude::*;
 use rusqlite::params;
 use walkdir::WalkDir;
 
-use crate::tiles::{BBox, LngLat, Tile, TileBounds, WebMercator};
+use crate::db::{connect_database, decode_line, encode_line};
+use crate::raster::{LinearGradient, TileRaster};
+use crate::tile::{BBox, LngLat, Tile, TileBounds, WebMercator};
 
-mod tiles;
+mod db;
+mod raster;
+mod tile;
 
 // TODO: make this configurable
 const STORED_ZOOM_LEVELS: [u8; 4] = [2, 6, 10, 14];
 const STORED_TILE_WIDTH: u32 = 4096;
-
-
-// TODO: consider piping this through a compression step.
-fn encode_raw(data: &[Coord<u16>]) -> anyhow::Result<Vec<u8>> {
-    let mut w = Vec::with_capacity(data.len() * 2);
-    for pt in data {
-        w.write_u16::<LittleEndian>(pt.x)?;
-        w.write_u16::<LittleEndian>(pt.y)?;
-    }
-    Ok(w)
-}
-
-fn decode_raw(bytes: &[u8]) -> anyhow::Result<Vec<Coord<u32>>> {
-    let mut coords = Vec::with_capacity(bytes.len() / 4);
-    let mut reader = Cursor::new(bytes);
-    while reader.position() < bytes.len() as u64 {
-        let x = reader.read_u16::<LittleEndian>()?;
-        let y = reader.read_u16::<LittleEndian>()?;
-        coords.push(Coord { x: x as u32, y: y as u32 });
-    }
-
-    Ok(coords)
-}
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -59,7 +39,6 @@ struct Cli {
     #[arg(short, long, default_value = "false")]
     reset: bool,
 }
-
 
 fn main() {
     let cli = Cli::parse();
@@ -85,295 +64,92 @@ fn main() {
 
     // TODO: remove this
     if cli.reset {
-        ingest_dir(&cli.import_path, &db_pool);
+        ingest_dir(&cli.import_path, &db_pool).expect("ingest dir");
     }
 
+    let grad = LinearGradient::from_stops(&[
+        (0.0, [0xff, 0xb1, 0xff, 0x7f]),
+        (0.05, [0xff, 0xb1, 0xff, 0xff]),
+        (0.25, [0xff, 0xff, 0xff, 0xff]),
+    ]);
+
     let base = Tile::new(2800, 6542, 14);
-    let tiles = (0..=14).rev()
+    let tiles = (0..=14)
+        .rev()
         .map(|z| Tile::new(base.x >> (14 - z), base.y >> (14 - z), z))
         .collect::<Vec<_>>();
     let mut conn = db_pool.get().expect("db conn");
     let render_width = 2048;
     for t in tiles {
-        let pixels = render_tile(t, &mut conn, render_width).expect("render tile");
+        let raster = render_tile(t, &mut conn, render_width).expect("render tile");
+        let image = raster.apply_gradient(&grad);
+
         let out = format!("{}_{}_{}.png", t.z, t.x, t.y);
-        render_image(&pixels, render_width, Path::new(&out)).expect("render pgm");
+
+        image
+            .write_to(
+                &mut File::create(&out).expect("create file"),
+                image::ImageOutputFormat::Png,
+            )
+            .expect("write image");
+
         println!("Rendered {}", out);
     }
 }
 
-fn connect_database(path: &Path) -> r2d2::Pool<SqliteConnectionManager> {
-    let manager = SqliteConnectionManager::file(path);
-    let pool = r2d2::Pool::new(manager).expect("db pool");
-
-    // TODO: should return metadata or something.
-    pool.get().and_then(|mut conn| {
-        let _metadata = init_db(&mut conn).expect("init db");
-
-        //  TODO: test performance
-        conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = OFF")
-            .expect("pragma");
-        Ok(())
-    }).expect("init db");
-
-    pool
-}
-
-struct LinearGradient([Rgba<u8>; 256]);
-
-impl LinearGradient {
-    // TODO: clean this up
-    fn from_stops(stops: &[(f32, Rgba<u8>)]) -> Self {
-        let mut buf = [Rgba::from([0, 0, 0, 0]); 256];
-        let mut i = 1;
-
-        for stop in stops.windows(2) {
-            let (start, end) = (stop[0], stop[1]);
-            let start_idx = (start.0 * 256.0).floor() as usize;
-            let end_idx = (end.0 * 256.0).ceil() as usize;
-
-            while i < end_idx {
-                let t = (i - start_idx) as f32 / (end_idx - start_idx) as f32;
-                buf[i] = image::Rgba::from([
-                    (start.1[0] as f32 * (1.0 - t) + end.1[0] as f32 * t) as u8,
-                    (start.1[1] as f32 * (1.0 - t) + end.1[1] as f32 * t) as u8,
-                    (start.1[2] as f32 * (1.0 - t) + end.1[2] as f32 * t) as u8,
-                    0xff,
-                ]);
-
-                i += 1;
-            }
-        }
-
-        let (_, last) = stops.last().unwrap();
-        while i < 256 {
-            buf[i] = *last;
-            i += 1;
-        }
-
-        LinearGradient(buf)
-    }
-
-    fn sample(&self, val: u8) -> Rgba<u8> {
-        self.0[val as usize]
-    }
-}
-
-
-fn render_image(data: &[u8], width: u32, out: &Path) -> anyhow::Result<()> {
-    let mut img = image::RgbaImage::new(width, width);
-
-    // TODO: should be configurable
-    let gradient = LinearGradient::from_stops(&[
-        (0.0, Rgba::from([0xff, 0xb1, 0xff, 0x7f])),
-        (0.05, Rgba::from([0xff, 0xb1, 0xff, 0xff])),
-        (0.25, Rgba::from([0xff, 0xff, 0xff, 0xff])),
-    ]);
-    for x in 0..width {
-        for y in 0..width {
-            let pixel = data[(y * width + x) as usize];
-            let color = gradient.sample(pixel);
-            img.put_pixel(x, y, color);
-        }
-    }
-
-    img.write_to(
-        &mut File::create(out)?,
-        image::ImageOutputFormat::Png,
-    )?;
-
-    Ok(())
-}
-
 fn stored_tile_bounds(tile: &Tile) -> Option<TileBounds> {
     // Find the stored zoom level closest to (and higher than) the requested zoom.
-    let zoom = STORED_ZOOM_LEVELS
-        .iter()
-        .find(|&&z| tile.z <= z)?;
+    let zoom = STORED_ZOOM_LEVELS.iter().find(|&&z| tile.z <= z)?;
 
     let zoom_steps = zoom - tile.z;
 
-    Some(
-        TileBounds {
-            z: *zoom,
-            xmin: tile.x << zoom_steps,
-            ymin: tile.y << zoom_steps,
-            xmax: (tile.x + 1) << zoom_steps,
-            ymax: (tile.y + 1) << zoom_steps,
-        }
-    )
+    Some(TileBounds {
+        z: *zoom,
+        xmin: tile.x << zoom_steps,
+        ymin: tile.y << zoom_steps,
+        xmax: (tile.x + 1) << zoom_steps,
+        ymax: (tile.y + 1) << zoom_steps,
+    })
 }
 
-fn render_tile(
-    tile: Tile,
-    conn: &mut rusqlite::Connection,
-    width: u32,
-) -> rusqlite::Result<Vec<u8>> {
-    // TODO: support upscaling
-    assert!(width <= STORED_TILE_WIDTH, "Upscaling not supported");
-    assert!(width.is_power_of_two(), "width must be power of two");
+fn render_tile(tile: Tile, conn: &mut rusqlite::Connection, width: u32) -> Result<TileRaster> {
+    let bounds = stored_tile_bounds(&tile)
+        .ok_or_else(|| anyhow!("no stored tile bounds for tile: {:?}", tile))?;
 
-    let bounds = stored_tile_bounds(&tile).unwrap();
-    let zoom_steps = (bounds.z - tile.z) as u32;
-    let width_steps = STORED_TILE_WIDTH.ilog2() - width.ilog2();
+    let mut raster = TileRaster::new(tile, bounds, width);
 
-    let mut pixels: Vec<u8> = vec![0; (width * width) as usize];
-
-    let mut select_stmt = conn
-        .prepare("
-SELECT x, y, coords
-FROM activity_tiles
-WHERE z = ?
-  AND (x >= ? AND x < ?)
-  AND (y >= ? AND y < ?);
-        ")?;
-
-    let mut rows = select_stmt
-        .query(params![bounds.z, bounds.xmin, bounds.xmax, bounds.ymin, bounds.ymax])?;
-
-    while let Some(row) = rows.next()? {
-        let (source_tile_x, source_tile_y): (u32, u32) = (
-            row.get_unwrap(0),
-            row.get_unwrap(1),
-        );
-
-        // Origin of source tile within target tile
-        let x_offset = STORED_TILE_WIDTH * (source_tile_x - bounds.xmin);
-        let y_offset = STORED_TILE_WIDTH * (source_tile_y - bounds.ymin);
-
-        let bytes: Vec<u8> = row.get_unwrap(2);
-        let line = decode_raw(&bytes).expect("decode raw");
-
-        let mut prev = None;
-        for Coord { x, y } in line {
-            // Translate (x,y) to location in target tile.
-            // [0..(width * STORED_TILE_WIDTH)]
-            let x = x + x_offset;
-            let y = (STORED_TILE_WIDTH - y) + y_offset;
-
-            // Scale the coordinates back down to [0..width]
-            let x = x >> (zoom_steps + width_steps);
-            let y = y >> (zoom_steps + width_steps);
-
-            if x >= width || y >= width {
-                continue;
-            }
-
-            if let Some(Coord { x: px, y: py }) = prev {
-                if x == px && y == py {
-                    continue;
-                }
-
-                // TODO: is the perf hit of this worth it?
-                let line_iter = line_drawing::Bresenham::<i32>::new(
-                    (px as i32, py as i32),
-                    (x as i32, y as i32),
-                );
-
-                for (ix, iy) in line_iter {
-                    if ix < 0 || iy < 0 || ix >= (width as i32) || iy >= (width as i32) {
-                        continue;
-                    }
-
-                    let (ix, iy) = (ix as u32, iy as u32);
-                    let idx = (iy * width + ix) as usize;
-                    pixels[idx] = pixels[idx].saturating_add(1);
-                }
-            }
-            prev = Some(Coord { x, y });
-        }
-    }
-
-    Ok(pixels)
-}
-
-
-fn init_db(conn: &mut rusqlite::Connection) -> rusqlite::Result<HashMap<String, String>> {
-    const MIGRATIONS: &[&str] = &[
-        "
-CREATE TABLE IF NOT EXISTS meta (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);", "
-CREATE TABLE activities (
-      id            INTEGER PRIMARY KEY
-    -- TODO: maybe do a hash of contents?
-    , file          TEXT NOT NULL
-    , title         TEXT
-    , start_time    INTEGER
-    , duration_secs INTEGER
-    , dist_meters   REAL NOT NULL
-
-    -- TODO:
-    -- , kind     TEXT -- run, bike, etc
-    -- , polyline TEXT
-);
-
-CREATE TABLE activity_tiles (
-      id          INTEGER PRIMARY KEY
-    , activity_id INTEGER NOT NULL
-    , z           INTEGER NOT NULL
-    , x           INTEGER NOT NULL
-    , y           INTEGER NOT NULL
-    , coords      BLOB NOT NULL
-);
-
-CREATE INDEX activity_tiles_activity_id ON activity_tiles (activity_id);
-CREATE INDEX activity_tiles_zxy ON activity_tiles (z, x, y);
-        "
-    ];
-
-    let metadata = load_metadata(conn);
-    let cur_migration = metadata.get("version")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
-
-    // If we're up to date, return.
-    if cur_migration == MIGRATIONS.len() {
-        return Ok(metadata);
-    }
-
-    println!("Migrating database (have {} to apply)...", MIGRATIONS.len() - cur_migration);
-
-    let tx = conn.transaction()?;
-    for m in &MIGRATIONS[cur_migration..] {
-        println!("Running migration: {}", m);
-        tx.execute_batch(m)?;
-    }
-    tx.execute(
-        "INSERT OR REPLACE INTO meta (key, value) VALUES ('version', ?)",
-        [MIGRATIONS.len()],
+    let mut stmt = conn.prepare(
+        "\
+        SELECT x, y, z, coords \
+        FROM activity_tiles \
+        WHERE z = ? \
+            AND (x >= ? AND x < ?) \
+            AND (y >= ? AND y < ?);",
     )?;
-    tx.commit()?;
+    let mut rows = stmt.query(params![
+        bounds.z,
+        bounds.xmin,
+        bounds.xmax,
+        bounds.ymin,
+        bounds.ymax
+    ])?;
+    while let Some(row) = rows.next()? {
+        let tile = Tile::new(row.get_unwrap(0), row.get_unwrap(1), row.get_unwrap(2));
 
-    // Reload metadata after applying migrations.
-    Ok(load_metadata(conn))
+        let bytes: Vec<u8> = row.get_unwrap(3);
+        raster.add_activity(&tile, &decode_line(&bytes)?);
+    }
+
+    Ok(raster)
 }
 
-fn load_metadata(conn: &mut rusqlite::Connection) -> HashMap<String, String> {
-    let mut meta: HashMap<String, String> = HashMap::new();
-
-    // Would fail on first run before migrations are applied.
-    let _ = conn.query_row(
-        "SELECT key, value FROM meta",
-        [],
-        |row| {
-            let (k, v) = (row.get_unwrap(0), row.get_unwrap(1));
-            meta.insert(k, v);
-            Ok(())
-        },
-    );
-
-    meta
-}
-
-fn ingest_dir(p: &Path, pool: &r2d2::Pool<SqliteConnectionManager>) {
+fn ingest_dir(p: &Path, pool: &r2d2::Pool<SqliteConnectionManager>) -> anyhow::Result<()> {
     // Skip any files that are already in the database.
     // TODO: avoid the collect call here?
-    let known_files: HashSet<String> = pool.get()
-        .unwrap()
-        .prepare("SELECT file FROM activities").unwrap()
-        .query_map([], |row| row.get(0)).unwrap()
+    let known_files: HashSet<String> = pool
+        .get()?
+        .prepare("SELECT file FROM activities")?
+        .query_map([], |row| row.get(0))?
         .filter_map(|n| n.ok())
         .collect();
 
@@ -381,8 +157,8 @@ fn ingest_dir(p: &Path, pool: &r2d2::Pool<SqliteConnectionManager>) {
         .into_iter()
         .par_bridge()
         .filter_map(|dir| {
-            let dir = dir.expect("walkdir error");
-            let path = dir.path().to_str().expect("non utf8 path");
+            let dir = dir.ok()?;
+            let path = dir.path().to_str()?;
 
             if !known_files.contains(path) {
                 Some(dir)
@@ -397,12 +173,19 @@ fn ingest_dir(p: &Path, pool: &r2d2::Pool<SqliteConnectionManager>) {
                 let conn = pool.get().expect("db conn");
 
                 let mut insert_coords = conn
-                    .prepare("INSERT INTO activity_tiles (activity_id, z, x, y, coords) VALUES (?, ?, ?, ?, ?)")
+                    .prepare_cached("INSERT INTO activity_tiles (activity_id, z, x, y, coords) VALUES (?, ?, ?, ?, ?)")
                     .unwrap();
 
                 conn.execute(
                     "INSERT INTO activities (file, title, start_time, duration_secs, dist_meters) VALUES (?, ?, ?, ?, ?)",
-                    params!["todo", activity.title, activity.start_time, activity.duration_secs, activity.distance()],
+                    params![
+                        // TODO: should be able to use Path here.
+                        "todo",
+                        activity.title,
+                        activity.start_time,
+                        activity.duration_secs,
+                        activity.distance(),
+                    ],
                 ).expect("insert activity");
 
                 let activity_id = conn.last_insert_rowid();
@@ -419,7 +202,7 @@ fn ingest_dir(p: &Path, pool: &r2d2::Pool<SqliteConnectionManager>) {
 
                             // TODO: can consider storing post rasterization for faster renders.
                             let simplified = simplify(&pixels.0, 4.0);
-                            let encoded = encode_raw(&simplified).expect("encode raw");
+                            let encoded = encode_line(&simplified).expect("encode line");
 
                             insert_coords
                                 .insert(params![activity_id, tile.z, tile.x, tile.y, encoded])
@@ -430,7 +213,8 @@ fn ingest_dir(p: &Path, pool: &r2d2::Pool<SqliteConnectionManager>) {
             },
         );
 
-    pool.get().unwrap().execute_batch("VACUUM").expect("vacuum");
+    pool.get()?.execute_batch("VACUUM")?;
+    Ok(())
 }
 
 struct TileClipper {
@@ -455,7 +239,8 @@ impl TileClipper {
     }
 
     fn last_line(&mut self, tile: &Tile) -> &mut LineString<u16> {
-        let multiline = self.tiles
+        let multiline = self
+            .tiles
             .entry(*tile)
             .or_insert_with(|| MultiLineString::new(vec![]));
 
@@ -489,10 +274,12 @@ impl TileClipper {
             Some((a, b)) => {
                 let line = self.last_line(&tile);
                 if line.0.is_empty() {
-                    line.0.push(a.to_pixel(&bbox, STORED_TILE_WIDTH as u16).into());
+                    line.0
+                        .push(a.to_pixel(&bbox, STORED_TILE_WIDTH as u16).into());
                 }
 
-                line.0.push(b.to_pixel(&bbox, STORED_TILE_WIDTH as u16).into());
+                line.0
+                    .push(b.to_pixel(&bbox, STORED_TILE_WIDTH as u16).into());
 
                 // If we've modified the end point, we've left the current tile.
                 if b != end {
@@ -512,15 +299,12 @@ impl TileClipper {
 
     fn finish_segment(&mut self) {
         if let Some((tile, _)) = self.current {
-            self.tiles
-                .entry(tile)
-                .and_modify(|lines| {
-                    lines.0.push(LineString::new(vec![]));
-                });
+            self.tiles.entry(tile).and_modify(|lines| {
+                lines.0.push(LineString::new(vec![]));
+            });
         }
     }
 }
-
 
 // FIXME: casts gone mad! let's stick to a data type.
 fn point_to_line_dist(pt: &Coord<u16>, start: &Coord<u16>, end: &Coord<u16>) -> f32 {
@@ -575,20 +359,14 @@ struct RawActivity {
 
 impl RawActivity {
     fn distance(&self) -> f64 {
-        self.tracks.iter()
-            .map(LineString::haversine_length)
-            .sum()
+        self.tracks.iter().map(LineString::haversine_length).sum()
     }
-
 
     fn clip_to_tiles(&self, zooms: &[u8]) -> Vec<TileClipper> {
         let mut clippers: Vec<_> = zooms.iter().map(|zoom| TileClipper::new(*zoom)).collect();
 
         for line in self.tracks.iter() {
-            let points = line
-                .points()
-                .map(LngLat::from)
-                .filter_map(|pt| pt.xy());
+            let points = line.points().map(LngLat::from).filter_map(|pt| pt.xy());
 
             let mut prev = None;
             for next in points {
@@ -623,7 +401,7 @@ fn parse_activity_data(p: &Path) -> Option<RawActivity> {
             parse_fit(&mut reader)
         }
 
-        _ => None
+        _ => None,
     }
 }
 
@@ -639,33 +417,30 @@ fn parse_fit<R: Read>(r: &mut R) -> Option<RawActivity> {
     let (mut start_time, mut duration_secs) = (None, None);
     let mut points = vec![];
     for data in from_reader_with_options(r, &opts).unwrap() {
-        match data.kind() {
-            MesgNum::Record => {
-                let mut lat: Option<i64> = None;
-                let mut lng: Option<i64> = None;
+        if data.kind() == MesgNum::Record {
+            let mut lat: Option<i64> = None;
+            let mut lng: Option<i64> = None;
 
-                for f in data.fields() {
-                    match f.name() {
-                        "position_lat" => lat = f.value().try_into().ok(),
-                        "position_long" => lng = f.value().try_into().ok(),
-                        "timestamp" => {
-                            let ts: i64 = f.value().try_into().unwrap();
+            for f in data.fields() {
+                match f.name() {
+                    "position_lat" => lat = f.value().try_into().ok(),
+                    "position_long" => lng = f.value().try_into().ok(),
+                    "timestamp" => {
+                        let ts: i64 = f.value().try_into().unwrap();
 
-                            match start_time {
-                                None => start_time = Some(ts),
-                                Some(t) => duration_secs = Some((ts - t) as u64),
-                            }
+                        match start_time {
+                            None => start_time = Some(ts),
+                            Some(t) => duration_secs = Some((ts - t) as u64),
                         }
-                        _ => {}
                     }
-                }
-
-                if let (Some(lat), Some(lng)) = (lat, lng) {
-                    let pt = Point::new(lng as f64, lat as f64) / SCALE_FACTOR;
-                    points.push(pt);
+                    _ => {}
                 }
             }
-            _ => {}
+
+            if let (Some(lat), Some(lng)) = (lat, lng) {
+                let pt = Point::new(lng as f64, lat as f64) / SCALE_FACTOR;
+                points.push(pt);
+            }
         }
     }
 
@@ -688,15 +463,13 @@ fn parse_gpx<R: Read>(reader: &mut R) -> Option<RawActivity> {
     // Just take the first track (generally the only one).
     let track = gpx.tracks.first()?;
 
-    Some(
-        RawActivity {
-            title: track.name.clone(),
-            tracks: track.multilinestring(),
-            // TODO: parse these out. Library supports, just need to type dance.
-            start_time: None,
-            duration_secs: None,
-        }
-    )
+    Some(RawActivity {
+        title: track.name.clone(),
+        tracks: track.multilinestring(),
+        // TODO: parse these out. Library supports, just need to type dance.
+        start_time: None,
+        duration_secs: None,
+    })
 }
 
 // Ramer–Douglas–Peucker algorithm
@@ -781,10 +554,22 @@ mod test {
         let end = Coord { x: 10, y: 10 };
 
         assert_eq!(point_to_line_dist(&Coord { x: 5, y: 5 }, &start, &end), 0.0);
-        assert_eq!(point_to_line_dist(&Coord { x: 5, y: 0 }, &start, &end), (5.0 * 2.0_f32.sqrt()) / 2.0);
-        assert_eq!(point_to_line_dist(&Coord { x: 0, y: 5 }, &start, &end), (5.0 * 2.0_f32.sqrt()) / 2.0);
-        assert_eq!(point_to_line_dist(&Coord { x: 0, y: 10 }, &start, &end), (10.0 * 2.0_f32.sqrt()) / 2.0);
-        assert_eq!(point_to_line_dist(&Coord { x: 10, y: 0 }, &start, &end), (10.0 * 2.0_f32.sqrt()) / 2.0);
+        assert_eq!(
+            point_to_line_dist(&Coord { x: 5, y: 0 }, &start, &end),
+            (5.0 * 2.0_f32.sqrt()) / 2.0
+        );
+        assert_eq!(
+            point_to_line_dist(&Coord { x: 0, y: 5 }, &start, &end),
+            (5.0 * 2.0_f32.sqrt()) / 2.0
+        );
+        assert_eq!(
+            point_to_line_dist(&Coord { x: 0, y: 10 }, &start, &end),
+            (10.0 * 2.0_f32.sqrt()) / 2.0
+        );
+        assert_eq!(
+            point_to_line_dist(&Coord { x: 10, y: 0 }, &start, &end),
+            (10.0 * 2.0_f32.sqrt()) / 2.0
+        );
     }
 
     #[test]
@@ -793,6 +578,9 @@ mod test {
         let end = Coord { x: 0, y: 0 };
 
         assert_eq!(point_to_line_dist(&Coord { x: 0, y: 0 }, &start, &end), 0.0);
-        assert_eq!(point_to_line_dist(&Coord { x: 1, y: 1 }, &start, &end), (2_f32).sqrt());
+        assert_eq!(
+            point_to_line_dist(&Coord { x: 1, y: 1 }, &start, &end),
+            (2_f32).sqrt()
+        );
     }
 }

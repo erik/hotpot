@@ -109,11 +109,14 @@ impl BBox {
                 let dy = y1 - y0;
 
                 let (x, y) = if (intersect & Self::TOP) != 0 {
-                    (x0 + (self.top - y0) * (dx / dy), self.top)
+                    (x0 + (self.top - y0) * (dx / dy), self.top - f64::EPSILON)
                 } else if (intersect & Self::BOTTOM) != 0 {
                     (x0 + (self.bot - y0) * (dx / dy), self.bot)
                 } else if (intersect & Self::RIGHT) != 0 {
-                    (self.right, y0 + (self.right - x0) * (dy / dx))
+                    (
+                        self.right - f64::EPSILON,
+                        y0 + (self.right - x0) * (dy / dx),
+                    )
                 } else if (intersect & Self::LEFT) != 0 {
                     (self.left, y0 + (self.left - x0) * (dy / dx))
                 } else {
@@ -147,9 +150,7 @@ impl WebMercator {
 
     // TODO: This returns [0, tile_width] but should be [0, tile_width - 1]
     pub fn to_pixel(&self, bbox: &BBox, tile_width: u16) -> TilePixel {
-        let Coord {
-            x, y
-        } = self.0.into();
+        let Coord { x, y } = self.0.into();
 
         let width = bbox.right - bbox.left;
         let height = bbox.top - bbox.bot;
@@ -228,79 +229,6 @@ impl Tile {
             bot: top - tile_size,
             right: left + tile_size,
         }
-    }
-}
-
-pub struct CoveringTileIter {
-    dx: f64,
-    dy: f64,
-    nx: u32,
-    ny: u32,
-    ix: u32,
-    iy: u32,
-    cur: Tile,
-}
-
-// https://www.redblobgames.com/grids/line-drawing/
-impl Iterator for CoveringTileIter {
-    type Item = Tile;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        // Reached destination.
-        if self.ix >= self.nx || self.iy >= self.ny {
-            return None;
-        }
-
-        let acc_x = (1 + 2 * self.ix) * self.ny;
-        let acc_y = (1 + 2 * self.iy) * self.nx;
-
-        if acc_x < acc_y {
-            // Horizontal step
-            self.cur = Tile::new(
-                if self.dx > 0.0 {
-                    self.cur.x + 1
-                } else {
-                    self.cur.x - 1
-                },
-                self.cur.y,
-                self.cur.z,
-            );
-
-            self.ix += 1;
-        } else if acc_x > acc_y {
-            // Vertical step
-            self.cur = Tile::new(
-                self.cur.x,
-                if self.dy > 0.0 {
-                    self.cur.y + 1
-                } else {
-                    self.cur.y - 1
-                },
-                self.cur.z,
-            );
-
-            self.iy += 1;
-        } else {
-            // Diagonal step
-            self.cur = Tile::new(
-                if self.dx > 0.0 {
-                    self.cur.x + 1
-                } else {
-                    self.cur.x - 1
-                },
-                if self.dy > 0.0 {
-                    self.cur.y + 1
-                } else {
-                    self.cur.y - 1
-                },
-                self.cur.z,
-            );
-
-            self.ix += 1;
-            self.iy += 1;
-        }
-
-        Some(self.cur)
     }
 }
 
