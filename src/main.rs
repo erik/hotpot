@@ -7,17 +7,16 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
 use clap::Parser;
-use fitparser::de::{DecodeOption, from_reader_with_options};
+use fitparser::de::{from_reader_with_options, DecodeOption};
 use fitparser::profile::MesgNum;
 use flate2::read::GzDecoder;
 use geo::HaversineLength;
 use geo_types::{Coord, LineString, MultiLineString, Point};
-use r2d2_sqlite::SqliteConnectionManager;
 use rayon::prelude::*;
 use rusqlite::params;
 use walkdir::WalkDir;
 
-use crate::db::{connect_database, decode_line, encode_line};
+use crate::db::{decode_line, encode_line, Database};
 use crate::raster::{LinearGradient, TileRaster};
 use crate::tile::{BBox, LngLat, Tile, TileBounds, WebMercator};
 
@@ -43,28 +42,15 @@ struct Cli {
 fn main() {
     let cli = Cli::parse();
 
-    // TODO: move this out of here.
     if cli.reset {
-        let db_files = &[
-            &cli.db_path,
-            &cli.db_path.join("-wal"),
-            &cli.db_path.join("-shm"),
-        ];
-
-        for p in db_files {
-            match std::fs::remove_file(p) {
-                Ok(_) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => panic!("error removing db: {}", e),
-            }
-        }
+        Database::delete(&cli.db_path).expect("delete data");
     }
 
-    let db_pool = connect_database(&cli.db_path);
+    let db = Database::new(&cli.db_path).expect("create db");
 
     // TODO: remove this
     if cli.reset {
-        ingest_dir(&cli.import_path, &db_pool).expect("ingest dir");
+        ingest_dir(&cli.import_path, &db).expect("ingest dir");
     }
 
     let grad = LinearGradient::from_stops(&[
@@ -78,10 +64,9 @@ fn main() {
         .rev()
         .map(|z| Tile::new(base.x >> (14 - z), base.y >> (14 - z), z))
         .collect::<Vec<_>>();
-    let mut conn = db_pool.get().expect("db conn");
     let render_width = 2048;
     for t in tiles {
-        let raster = render_tile(t, &mut conn, render_width).expect("render tile");
+        let raster = render_tile(t, &db, render_width).expect("render tile");
         let image = raster.apply_gradient(&grad);
 
         let out = format!("{}_{}_{}.png", t.z, t.x, t.y);
@@ -112,11 +97,12 @@ fn stored_tile_bounds(tile: &Tile) -> Option<TileBounds> {
     })
 }
 
-fn render_tile(tile: Tile, conn: &mut rusqlite::Connection, width: u32) -> Result<TileRaster> {
+fn render_tile(tile: Tile, db: &Database, width: u32) -> Result<TileRaster> {
     let bounds = stored_tile_bounds(&tile)
         .ok_or_else(|| anyhow!("no stored tile bounds for tile: {:?}", tile))?;
 
     let mut raster = TileRaster::new(tile, bounds, width);
+    let conn = db.connection()?;
 
     let mut stmt = conn.prepare(
         "\
@@ -143,11 +129,12 @@ fn render_tile(tile: Tile, conn: &mut rusqlite::Connection, width: u32) -> Resul
     Ok(raster)
 }
 
-fn ingest_dir(p: &Path, pool: &r2d2::Pool<SqliteConnectionManager>) -> anyhow::Result<()> {
+fn ingest_dir(p: &Path, db: &Database) -> Result<()> {
+    let conn = db.connection()?;
+
     // Skip any files that are already in the database.
     // TODO: avoid the collect call here?
-    let known_files: HashSet<String> = pool
-        .get()?
+    let known_files: HashSet<String> = conn
         .prepare("SELECT file FROM activities")?
         .query_map([], |row| row.get(0))?
         .filter_map(|n| n.ok())
@@ -168,16 +155,22 @@ fn ingest_dir(p: &Path, pool: &r2d2::Pool<SqliteConnectionManager>) -> anyhow::R
         })
         .filter_map(|entry| parse_activity_data(entry.path()))
         .for_each_init(
-            || pool.clone(),
+            || db.shared_pool(),
             |pool, activity| {
-                let conn = pool.get().expect("db conn");
+                let conn = pool.get().expect("get connection");
 
                 let mut insert_coords = conn
-                    .prepare_cached("INSERT INTO activity_tiles (activity_id, z, x, y, coords) VALUES (?, ?, ?, ?, ?)")
+                    .prepare_cached(
+                        "\
+                        INSERT INTO activity_tiles (activity_id, z, x, y, coords) \
+                        VALUES (?, ?, ?, ?, ?)",
+                    )
                     .unwrap();
 
                 conn.execute(
-                    "INSERT INTO activities (file, title, start_time, duration_secs, dist_meters) VALUES (?, ?, ?, ?, ?)",
+                    "\
+                    INSERT INTO activities (file, title, start_time, duration_secs, dist_meters)\
+                    VALUES (?, ?, ?, ?, ?)",
                     params![
                         // TODO: should be able to use Path here.
                         "todo",
@@ -186,14 +179,14 @@ fn ingest_dir(p: &Path, pool: &r2d2::Pool<SqliteConnectionManager>) -> anyhow::R
                         activity.duration_secs,
                         activity.distance(),
                     ],
-                ).expect("insert activity");
+                )
+                .expect("insert activity");
 
                 let activity_id = conn.last_insert_rowid();
 
                 // TODO: split out into separate function
-                for clip in activity.clip_to_tiles(&STORED_ZOOM_LEVELS) {
+                for clip in activity.clip_to_tiles(&db.meta.zoom_levels) {
                     for (tile, lines) in &clip.tiles {
-
                         // TODO: encode multiline strings together in same blob.
                         for pixels in lines {
                             if pixels.0.is_empty() {
@@ -213,7 +206,7 @@ fn ingest_dir(p: &Path, pool: &r2d2::Pool<SqliteConnectionManager>) -> anyhow::R
             },
         );
 
-    pool.get()?.execute_batch("VACUUM")?;
+    conn.execute_batch("VACUUM")?;
     Ok(())
 }
 
@@ -412,7 +405,7 @@ fn parse_fit<R: Read>(r: &mut R) -> Option<RawActivity> {
         DecodeOption::SkipDataCrcValidation,
         DecodeOption::SkipHeaderCrcValidation,
     ]
-        .into();
+    .into();
 
     let (mut start_time, mut duration_secs) = (None, None);
     let mut points = vec![];
