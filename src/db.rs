@@ -78,12 +78,20 @@ impl Database {
         }
 
         apply_migrations(&mut conn)?;
-        let metadata = load_metadata(&mut conn)?;
 
-        Ok(Database {
-            pool,
-            meta: metadata,
-        })
+        // TODO: need to write metadata if it doesn't exist (and support updates)
+        let meta = read_metadata(&mut conn)?;
+
+        Ok(Database { pool, meta })
+    }
+
+    /// Open an existing database, fail if it doesn't exist
+    pub fn open(path: &Path) -> Result<Self> {
+        if !path.exists() {
+            anyhow::bail!("database does not exist: {}", path.display());
+        }
+
+        Self::new(path)
     }
 
     pub fn connection(&self) -> Result<r2d2::PooledConnection<SqliteConnectionManager>> {
@@ -131,7 +139,7 @@ impl Default for Metadata {
     }
 }
 
-fn load_metadata(conn: &mut rusqlite::Connection) -> Result<Metadata> {
+fn read_metadata(conn: &mut rusqlite::Connection) -> Result<Metadata> {
     let mut meta = Metadata::default();
 
     let mut stmt = conn.prepare("SELECT key, value FROM metadata")?;
@@ -152,7 +160,9 @@ fn load_metadata(conn: &mut rusqlite::Connection) -> Result<Metadata> {
                 meta.stored_width = row.get_unwrap(1);
             }
 
-            _ => {}
+            unk => {
+                println!("Ignoring unknown metadata key: {}", unk);
+            }
         }
     }
 

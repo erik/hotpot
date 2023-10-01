@@ -6,7 +6,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use fitparser::de::{from_reader_with_options, DecodeOption};
 use fitparser::profile::MesgNum;
 use flate2::read::GzDecoder;
@@ -28,58 +28,92 @@ mod tile;
 const STORED_ZOOM_LEVELS: [u8; 4] = [2, 6, 10, 14];
 const STORED_TILE_WIDTH: u32 = 4096;
 
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Import GPX and FIT files from a directory
+    Import {
+        /// Path to directory of activities
+        path: PathBuf,
+
+        /// Reset the database before importing
+        #[arg(short, long, default_value = "false")]
+        create: bool,
+    },
+
+    /// Render a tile
+    Tile {
+        /// Tile to render, in "z/x/y" format
+        zxy: Tile,
+
+        /// Width of output image
+        #[arg(short, long, default_value = "1024")]
+        width: u32,
+
+        /// Path to output image
+        #[arg(short, long, default_value = "tile.png")]
+        output: PathBuf,
+    },
+
+    /// Start a raster tile server
+    Serve,
+}
+
+#[derive(Args, Debug)]
+struct GlobalOpts {
+    /// Path to database
+    #[arg(default_value = "./hotpot.sqlite3")]
+    db_path: PathBuf,
+}
+
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
-struct Cli {
-    db_path: PathBuf,
-    import_path: PathBuf,
+struct Opts {
+    #[clap(flatten)]
+    global: GlobalOpts,
 
-    /// Reset the database before importing
-    #[arg(short, long, default_value = "false")]
-    reset: bool,
+    /// Subcommand
+    #[command(subcommand)]
+    cmd: Commands,
 }
 
 fn main() {
-    let cli = Cli::parse();
-
-    if cli.reset {
-        Database::delete(&cli.db_path).expect("delete data");
+    if let Err(e) = run() {
+        eprintln!("error: {}", e);
+        std::process::exit(1);
     }
+}
 
-    let db = Database::new(&cli.db_path).expect("create db");
+fn run() -> Result<()> {
+    let opts = Opts::parse();
 
-    // TODO: remove this
-    if cli.reset {
-        ingest_dir(&cli.import_path, &db).expect("ingest dir");
-    }
+    // TODO: pull out into separate function
+    match opts.cmd {
+        Commands::Import { path, create } => {
+            if create {
+                Database::delete(&opts.global.db_path)?;
+            }
 
-    let grad = LinearGradient::from_stops(&[
-        (0.0, [0xff, 0xb1, 0xff, 0x7f]),
-        (0.05, [0xff, 0xb1, 0xff, 0xff]),
-        (0.25, [0xff, 0xff, 0xff, 0xff]),
-    ]);
+            ingest_dir(&path, &Database::new(&opts.global.db_path)?)?;
+        }
 
-    let base = Tile::new(2800, 6542, 14);
-    let tiles = (0..=14)
-        .rev()
-        .map(|z| Tile::new(base.x >> (14 - z), base.y >> (14 - z), z))
-        .collect::<Vec<_>>();
-    let render_width = 2048;
-    for t in tiles {
-        let raster = render_tile(t, &db, render_width).expect("render tile");
-        let image = raster.apply_gradient(&grad);
+        Commands::Tile { zxy, width, output } => {
+            let db = Database::open(&opts.global.db_path)?;
+            let raster = render_tile(zxy, &db, width)?;
+            let image = raster.apply_gradient(&LinearGradient::from_stops(&[
+                (0.0, [0xff, 0xb1, 0xff, 0x7f]),
+                (0.05, [0xff, 0xb1, 0xff, 0xff]),
+                (0.25, [0xff, 0xff, 0xff, 0xff]),
+            ]));
 
-        let out = format!("{}_{}_{}.png", t.z, t.x, t.y);
+            image.write_to(&mut File::create(&output)?, image::ImageOutputFormat::Png)?;
+        }
 
-        image
-            .write_to(
-                &mut File::create(&out).expect("create file"),
-                image::ImageOutputFormat::Png,
-            )
-            .expect("write image");
+        Commands::Serve => {
+            unimplemented!("serve")
+        }
+    };
 
-        println!("Rendered {}", out);
-    }
+    Ok(())
 }
 
 fn stored_tile_bounds(tile: &Tile) -> Option<TileBounds> {

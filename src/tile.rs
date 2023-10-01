@@ -1,5 +1,6 @@
 use std::f64::consts::PI;
 use std::ops::Range;
+use std::str::FromStr;
 
 use derive_more::{From, Into};
 use geo_types::{Coord, Point};
@@ -229,6 +230,23 @@ impl Tile {
             bot: top - tile_size,
             right: left + tile_size,
         }
+    }
+}
+
+impl FromStr for Tile {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split('/').collect();
+        if parts.len() != 3 {
+            return Err("invalid tile format");
+        }
+
+        let z = parts[0].parse::<u8>().map_err(|_| "invalid z")?;
+        let x = parts[1].parse::<u32>().map_err(|_| "invalid x")?;
+        let y = parts[2].parse::<u32>().map_err(|_| "invalid y")?;
+
+        Ok(Tile::new(x, y, z))
     }
 }
 
