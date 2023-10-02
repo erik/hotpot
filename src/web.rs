@@ -1,11 +1,13 @@
 use std::io::Cursor;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Result;
 use axum::extract::{Path, State};
 use axum::http::header;
 use axum::{response::IntoResponse, routing::get, Router};
+use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use tokio::runtime::Runtime;
 
 use crate::db::Database;
@@ -53,12 +55,16 @@ async fn render_tile(
         (0.25, [0xff, 0xff, 0xff, 0xff]),
     ]));
 
-    // TODO: compression
     let mut bytes = Vec::new();
     let mut cursor = Cursor::new(&mut bytes);
-    image
-        .write_to(&mut cursor, image::ImageOutputFormat::Png)
-        .unwrap();
+
+    image.write_with_encoder(
+        PngEncoder::new_with_quality(
+            &mut cursor,
+            CompressionType::Fast,
+            FilterType::NoFilter,
+        )
+    ).unwrap();
 
     // TODO: seems hacky
     (
