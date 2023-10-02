@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.75"
+axum = "0.6.20"
 byteorder = "1.4.3"
 clap = { version = "4.4.5", features = ["derive"] }
 derive_more = "0.99.17"
@@ -21,4 +22,5 @@ r2d2 = "0.8.10"
 r2d2_sqlite = "0.22.0"
 rayon = "1.7.0"
 rusqlite = "0.29.0"
+tokio = { version = "1.32.0", features = ["macros", "rt-multi-thread"] }
 walkdir = "2.4.0"

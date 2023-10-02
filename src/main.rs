@@ -23,6 +23,7 @@ use crate::tile::{BBox, LngLat, Tile, TileBounds, WebMercator};
 mod db;
 mod raster;
 mod tile;
+mod web;
 
 // TODO: make this configurable
 const STORED_ZOOM_LEVELS: [u8; 4] = [2, 6, 10, 14];
@@ -55,7 +56,15 @@ enum Commands {
     },
 
     /// Start a raster tile server
-    Serve,
+    Serve {
+        /// Host to listen on
+        #[arg(short, long, default_value = "127.0.0.1")]
+        host: String,
+
+        /// Port to listen on
+        #[arg(short, long, default_value = "8080")]
+        port: u16,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -108,8 +117,9 @@ fn run() -> Result<()> {
             image.write_to(&mut File::create(&output)?, image::ImageOutputFormat::Png)?;
         }
 
-        Commands::Serve => {
-            unimplemented!("serve")
+        Commands::Serve { host, port } => {
+            let db = Database::open(&opts.global.db_path)?;
+            web::run(db, &host, port)?;
         }
     };
 
@@ -131,7 +141,7 @@ fn stored_tile_bounds(tile: &Tile) -> Option<TileBounds> {
     })
 }
 
-fn render_tile(tile: Tile, db: &Database, width: u32) -> Result<TileRaster> {
+pub fn render_tile(tile: Tile, db: &Database, width: u32) -> Result<TileRaster> {
     let bounds = stored_tile_bounds(&tile)
         .ok_or_else(|| anyhow!("no stored tile bounds for tile: {:?}", tile))?;
 
