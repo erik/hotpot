@@ -51,11 +51,6 @@ impl TileRaster {
             let x = x >> self.scale;
             let y = y >> self.scale;
 
-            if x >= self.width || y >= self.width {
-                prev = None;
-                continue;
-            }
-
             if let Some(Coord { x: px, y: py }) = prev {
                 if x == px && y == py {
                     continue;
@@ -68,11 +63,10 @@ impl TileRaster {
                 );
 
                 for (ix, iy) in line_iter {
-                    if ix < 0 || iy < 0 || ix >= (self.width as i32) || iy >= (self.width as i32) {
-                        continue;
-                    }
+                    // TODO: exclude rather than clamp?
+                    let ix = ix.clamp(0, self.width as i32 - 1) as u32;
+                    let iy = iy.clamp(0, self.width as i32 - 1) as u32;
 
-                    let (ix, iy) = (ix as u32, iy as u32);
                     let idx = (iy * self.width + ix) as usize;
                     self.pixels[idx] = self.pixels[idx].saturating_add(1);
                 }

@@ -26,8 +26,8 @@ mod tile;
 mod web;
 
 // TODO: make this configurable
-const STORED_ZOOM_LEVELS: [u8; 4] = [2, 6, 10, 14];
-const STORED_TILE_WIDTH: u32 = 4096;
+const STORED_ZOOM_LEVELS: [u8; 5] = [2, 6, 10, 14, 16];
+const STORED_TILE_WIDTH: u32 = 2048;
 
 #[derive(Subcommand, Debug)]
 enum Commands {
@@ -302,9 +302,10 @@ impl TileClipper {
         match bbox.clip_line(&start, &end) {
             // [start, end] doesn't intersect with the current tile at all, reposition it.
             None => {
-                // todo: should we add new segment after shifting bbox?
                 self.finish_segment();
-                self.current = Some(self.bounding_tile(&end));
+                self.current = Some(self.bounding_tile(&start));
+                // todo: should we add new segment after shifting bbox?
+                // self.add_line_segment(start, end, c+1);
             }
 
             // [start, end] is at least partially contained within the current tile.

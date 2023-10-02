@@ -52,8 +52,8 @@ impl BBox {
     pub fn contains(&self, pt: &WebMercator) -> bool {
         pt.0.x() >= self.left
             && pt.0.y() >= self.bot
-            && pt.0.x() < self.right
-            && pt.0.y() < self.top
+            && pt.0.x() <= self.right
+            && pt.0.y() <= self.top
     }
 
     fn compute_edges(&self, x: f64, y: f64) -> u8 {
@@ -89,7 +89,7 @@ impl BBox {
         let mut edge_end = self.compute_edges(x1, y1);
 
         loop {
-            if edge_end == Self::INSIDE {
+            if (edge_start | edge_end) == Self::INSIDE {
                 // Both points inside, no clipping needed
                 return Some((Point::new(x0, y0).into(), Point::new(x1, y1).into()));
             } else if (edge_start & edge_end) != Self::INSIDE {
@@ -100,7 +100,7 @@ impl BBox {
                 // from an outside point to an intersection with clip edge
 
                 // At least one endpoint is outside the clip rectangle; pick it.
-                let intersect = if edge_start != Self::INSIDE {
+                let intersect = if edge_start > edge_end {
                     edge_start
                 } else {
                     edge_end
@@ -109,19 +109,23 @@ impl BBox {
                 let dx = x1 - x0;
                 let dy = y1 - y0;
 
-                let (x, y) = if (intersect & Self::TOP) != 0 {
-                    (x0 + (self.top - y0) * (dx / dy), self.top - f64::EPSILON)
+                let x: f64;
+                let y: f64;
+
+                if (intersect & Self::TOP) != 0 {
+                    x = x0 + (dx * (self.top - y0)) / dy;
+                    y = self.top;
                 } else if (intersect & Self::BOTTOM) != 0 {
-                    (x0 + (self.bot - y0) * (dx / dy), self.bot)
+                    x = x0 + (dx * (self.bot - y0)) / dy;
+                    y = self.bot;
                 } else if (intersect & Self::RIGHT) != 0 {
-                    (
-                        self.right - f64::EPSILON,
-                        y0 + (self.right - x0) * (dy / dx),
-                    )
+                    x = self.right;
+                    y = y0 + (dy * (self.right - x0)) / dx;
                 } else if (intersect & Self::LEFT) != 0 {
-                    (self.left, y0 + (self.left - x0) * (dy / dx))
+                    x = self.left;
+                    y = y0 + (dy * (self.left - x0)) / dx;
                 } else {
-                    unreachable!()
+                    unreachable!("no intersection")
                 };
 
                 if intersect == edge_start {
@@ -156,8 +160,8 @@ impl WebMercator {
         let width = bbox.right - bbox.left;
         let height = bbox.top - bbox.bot;
 
-        let px = ((x - bbox.left) / width * tile_width as f64).floor() as u16;
-        let py = ((y - bbox.bot) / height * tile_width as f64).floor() as u16;
+        let px = ((x - bbox.left) / width * tile_width as f64).round() as u16;
+        let py = ((y - bbox.bot) / height * tile_width as f64).round() as u16;
 
         TilePixel((px, py).into())
     }
@@ -190,13 +194,9 @@ impl LngLat {
 
 impl Tile {
     pub fn new(x: u32, y: u32, z: u8) -> Self {
-        const MAX_ZOOM: u8 = 16;
         let num_tiles = 1u32 << z;
         assert!(x < num_tiles);
         assert!(y < num_tiles);
-
-        // note: arbitrary restriction
-        assert!(z < MAX_ZOOM);
 
         Self { x, y, z }
     }
@@ -219,7 +219,7 @@ impl Tile {
     }
 
     pub fn xy_bounds(&self) -> BBox {
-        let num_tiles = (1u32 << self.z) as f64;
+        let num_tiles = (1u64 << self.z) as f64;
         let tile_size = EARTH_CIRCUMFERENCE / num_tiles;
 
         let left = (self.x as f64 * tile_size) - ORIGIN_OFFSET;
