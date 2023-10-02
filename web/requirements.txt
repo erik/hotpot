@@ -1,2 +1,0 @@
-flask==2.3.3
-mapbox-vector-tile==2.0.1
