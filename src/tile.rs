@@ -25,6 +25,25 @@ pub struct TileBounds {
     pub ymax: u32,
 }
 
+impl TileBounds {
+    pub fn from(source_zoom: u8, tile: &Tile) -> TileBounds {
+        assert!(
+            source_zoom >= tile.z,
+            "source level must be >= target level"
+        );
+
+        let zoom_steps = source_zoom - tile.z;
+
+        TileBounds {
+            z: source_zoom,
+            xmin: tile.x << zoom_steps,
+            ymin: tile.y << zoom_steps,
+            xmax: (tile.x + 1) << zoom_steps,
+            ymax: (tile.y + 1) << zoom_steps,
+        }
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Debug, From, Into)]
 pub struct LngLat(pub Point<f64>);
 
@@ -154,7 +173,7 @@ impl WebMercator {
     }
 
     // TODO: This returns [0, tile_width] but should be [0, tile_width - 1]
-    pub fn to_pixel(&self, bbox: &BBox, tile_width: u16) -> TilePixel {
+    pub fn to_pixel(self, bbox: &BBox, tile_width: u16) -> TilePixel {
         let Coord { x, y } = self.0.into();
 
         let width = bbox.right - bbox.left;
@@ -199,23 +218,6 @@ impl Tile {
         assert!(y < num_tiles);
 
         Self { x, y, z }
-    }
-
-    pub fn parent(&self) -> Self {
-        if self.z == 0 {
-            *self
-        } else {
-            Tile::new(self.x / 2, self.y / 2, self.z - 1)
-        }
-    }
-
-    pub fn children(&self) -> [Self; 4] {
-        [
-            Tile::new(0 + self.x * 2, 0 + self.y * 2, self.z + 1),
-            Tile::new(1 + self.x * 2, 0 + self.y * 2, self.z + 1),
-            Tile::new(0 + self.x * 2, 1 + self.y * 2, self.z + 1),
-            Tile::new(1 + self.x * 2, 1 + self.y * 2, self.z + 1),
-        ]
     }
 
     pub fn xy_bounds(&self) -> BBox {
@@ -284,18 +286,9 @@ mod tests {
             let xy = p.xy().expect("xy");
 
             // Going to be off by a bit, but is this too much?
-            close_enough!(xy.0.x(), *x, 15.0);
-            close_enough!(xy.0.y(), *y, 15.0);
+            close_enough!(xy.0.x(), *x, 2.0);
+            close_enough!(xy.0.y(), *y, 2.0);
         }
-    }
-
-    #[test]
-    fn test_tile_parent() {
-        let tile = Tile::new(0, 0, 0);
-        assert_eq!(tile.parent(), tile);
-
-        let tile = Tile::new(1, 1, 1);
-        assert_eq!(tile.parent(), Tile::new(0, 0, 0));
     }
 
     #[test]
@@ -304,11 +297,10 @@ mod tests {
         let tile = Tile::new(486, 332, 10);
         let bounds = tile.xy_bounds();
 
-        // TODO: don't love the inaccuracy here
-        close_enough!(bounds.left, -1017529.7205322663, 0.5);
-        close_enough!(bounds.bot, 7005300.768279833, 2.0);
-        close_enough!(bounds.right, -978393.962050256, 0.5);
-        close_enough!(bounds.top, 7044436.526761846, 1.0);
+        close_enough!(bounds.left, -1017529.7205322663, 0.001);
+        close_enough!(bounds.bot, 7005300.768279833, 0.001);
+        close_enough!(bounds.right, -978393.962050256, 0.001);
+        close_enough!(bounds.top, 7044436.526761846, 0.001);
     }
 
     #[test]

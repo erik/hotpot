@@ -14,6 +14,7 @@ use geo::HaversineLength;
 use geo_types::{Coord, LineString, MultiLineString, Point};
 use rayon::prelude::*;
 use rusqlite::params;
+use time::OffsetDateTime;
 use walkdir::WalkDir;
 
 use crate::db::{decode_line, encode_line, Database};
@@ -26,8 +27,8 @@ mod tile;
 mod web;
 
 // TODO: make this configurable
-const STORED_ZOOM_LEVELS: [u8; 5] = [2, 6, 10, 14, 16];
-const STORED_TILE_WIDTH: u32 = 2048;
+const DEFAULT_ZOOM_LEVELS: [u8; 5] = [2, 6, 10, 14, 16];
+const DEFAULT_TILE_EXTENT: u32 = 2048;
 
 #[derive(Subcommand, Debug)]
 enum Commands {
@@ -58,7 +59,7 @@ enum Commands {
     /// Start a raster tile server
     Serve {
         /// Host to listen on
-        #[arg(short, long, default_value = "127.0.0.1")]
+        #[arg(short = 'H', long, default_value = "127.0.0.1")]
         host: String,
 
         /// Port to listen on
@@ -112,9 +113,10 @@ fn run() -> Result<()> {
                 (0.0, [0xff, 0xb1, 0xff, 0x7f]),
                 (0.05, [0xff, 0xb1, 0xff, 0xff]),
                 (0.25, [0xff, 0xff, 0xff, 0xff]),
+                (1.0, [0xff, 0xff, 0xff, 0xff]),
             ]));
 
-            image.write_to(&mut File::create(&output)?, image::ImageOutputFormat::Png)?;
+            image.write_to(&mut File::create(output)?, image::ImageOutputFormat::Png)?;
         }
 
         Commands::Serve { host, port } => {
@@ -126,25 +128,13 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn stored_tile_bounds(tile: &Tile) -> Option<TileBounds> {
-    // Find the stored zoom level closest to (and higher than) the requested zoom.
-    let zoom = STORED_ZOOM_LEVELS.iter().find(|&&z| tile.z <= z)?;
-
-    let zoom_steps = zoom - tile.z;
-
-    Some(TileBounds {
-        z: *zoom,
-        xmin: tile.x << zoom_steps,
-        ymin: tile.y << zoom_steps,
-        xmax: (tile.x + 1) << zoom_steps,
-        ymax: (tile.y + 1) << zoom_steps,
-    })
-}
-
 pub fn render_tile(tile: Tile, db: &Database, width: u32) -> Result<TileRaster> {
-    let bounds = stored_tile_bounds(&tile)
-        .ok_or_else(|| anyhow!("no stored tile bounds for tile: {:?}", tile))?;
+    let zoom_level = db
+        .meta
+        .source_level(tile.z)
+        .ok_or_else(|| anyhow!("no source level for tile: {:?}", tile))?;
 
+    let bounds = TileBounds::from(zoom_level, &tile);
     let mut raster = TileRaster::new(tile, bounds, width);
     let conn = db.connection()?;
 
@@ -189,19 +179,22 @@ fn ingest_dir(p: &Path, db: &Database) -> Result<()> {
         .par_bridge()
         .filter_map(|dir| {
             let dir = dir.ok()?;
-            let path = dir.path().to_str()?;
+            let path = dir.path();
 
-            if !known_files.contains(path) {
-                Some(dir)
+            if !known_files.contains(path.to_str()?) {
+                Some(path.to_owned())
             } else {
                 None
             }
         })
-        .filter_map(|entry| parse_activity_data(entry.path()))
+        .filter_map(|path| {
+            let activity = parse_activity_data(&path)?;
+            Some((path, activity))
+        })
         .for_each_init(
             || db.shared_pool(),
-            |pool, activity| {
-                let conn = pool.get().expect("get connection");
+            |pool, (path, activity)| {
+                let conn = pool.get().expect("db connection pool timed out");
 
                 let mut insert_coords = conn
                     .prepare_cached(
@@ -216,8 +209,7 @@ fn ingest_dir(p: &Path, db: &Database) -> Result<()> {
                     INSERT INTO activities (file, title, start_time, duration_secs, dist_meters)\
                     VALUES (?, ?, ?, ?, ?)",
                     params![
-                        // TODO: should be able to use Path here.
-                        "todo",
+                        path.to_str().unwrap(),
                         activity.title,
                         activity.start_time,
                         activity.duration_secs,
@@ -247,6 +239,8 @@ fn ingest_dir(p: &Path, db: &Database) -> Result<()> {
                         }
                     }
                 }
+
+                print!(".");
             },
         );
 
@@ -313,11 +307,11 @@ impl TileClipper {
                 let line = self.last_line(&tile);
                 if line.0.is_empty() {
                     line.0
-                        .push(a.to_pixel(&bbox, STORED_TILE_WIDTH as u16).into());
+                        .push(a.to_pixel(&bbox, DEFAULT_TILE_EXTENT as u16).into());
                 }
 
                 line.0
-                    .push(b.to_pixel(&bbox, STORED_TILE_WIDTH as u16).into());
+                    .push(b.to_pixel(&bbox, DEFAULT_TILE_EXTENT as u16).into());
 
                 // If we've modified the end point, we've left the current tile.
                 if b != end {
@@ -439,6 +433,11 @@ fn parse_activity_data(p: &Path) -> Option<RawActivity> {
             parse_fit(&mut reader)
         }
 
+        Some(("tcx", _compressed)) => {
+            // TODO: parse tcx
+            None
+        }
+
         _ => None,
     }
 }
@@ -501,12 +500,29 @@ fn parse_gpx<R: Read>(reader: &mut R) -> Option<RawActivity> {
     // Just take the first track (generally the only one).
     let track = gpx.tracks.first()?;
 
+    let start_time = gpx
+        .metadata
+        .and_then(|m| m.time)
+        .map(|t| OffsetDateTime::from(t).unix_timestamp() as u64);
+
+    // Grab the timestamp from the last point to calculate duration
+    let end_time = track
+        .segments
+        .last()
+        .and_then(|seg| seg.points.last())
+        .and_then(|wpt| wpt.time)
+        .map(|t| OffsetDateTime::from(t).unix_timestamp() as u64);
+
+    let duration_secs = start_time
+        .zip(end_time)
+        .filter(|(start, end)| end > start)
+        .map(|(start, end)| end - start);
+
     Some(RawActivity {
+        start_time,
+        duration_secs,
         title: track.name.clone(),
         tracks: track.multilinestring(),
-        // TODO: parse these out. Library supports, just need to type dance.
-        start_time: None,
-        duration_secs: None,
     })
 }
 

@@ -6,7 +6,7 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use geo_types::Coord;
 use r2d2_sqlite::SqliteConnectionManager;
 
-use crate::{STORED_TILE_WIDTH, STORED_ZOOM_LEVELS};
+use crate::{DEFAULT_TILE_EXTENT, DEFAULT_ZOOM_LEVELS};
 
 const MIGRATIONS: [&str; 2] = [
     "-- Create migrations table
@@ -56,9 +56,12 @@ impl Database {
     pub fn delete(path: &Path) -> Result<()> {
         let db_files = [path, &path.join("-wal"), &path.join("-shm")];
 
+        println!("Removing existing DB.");
         for p in &db_files {
             match std::fs::remove_file(p) {
-                Ok(_) => {}
+                Ok(_) => {
+                    println!("\t{}", p.display());
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => panic!("error removing db: {}", e),
             }
@@ -112,8 +115,10 @@ fn apply_migrations(conn: &mut rusqlite::Connection) -> Result<()> {
         return Ok(());
     }
 
+    println!("Applying migrations");
     let tx = conn.transaction()?;
     for (i, m) in MIGRATIONS[cur_migration..].iter().enumerate() {
+        println!("\t{}", cur_migration + i + 1);
         tx.execute_batch(m)?;
         tx.execute(
             "INSERT INTO migrations (id) VALUES (?)",
@@ -121,6 +126,7 @@ fn apply_migrations(conn: &mut rusqlite::Connection) -> Result<()> {
         )?;
     }
     tx.commit()?;
+    println!("Done.");
 
     Ok(())
 }
@@ -130,11 +136,22 @@ pub struct Metadata {
     pub stored_width: u32,
 }
 
+impl Metadata {
+    pub fn source_level(&self, target_zoom: u8) -> Option<u8> {
+        for z in &self.zoom_levels {
+            if *z >= target_zoom {
+                return Some(*z);
+            }
+        }
+        None
+    }
+}
+
 impl Default for Metadata {
     fn default() -> Self {
         Metadata {
-            zoom_levels: STORED_ZOOM_LEVELS.to_vec(),
-            stored_width: STORED_TILE_WIDTH,
+            zoom_levels: DEFAULT_ZOOM_LEVELS.to_vec(),
+            stored_width: DEFAULT_TILE_EXTENT,
         }
     }
 }

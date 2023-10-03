@@ -1,5 +1,5 @@
 use crate::tile::{Tile, TileBounds};
-use crate::STORED_TILE_WIDTH;
+use crate::DEFAULT_TILE_EXTENT;
 use geo_types::Coord;
 use image::{Rgba, RgbaImage};
 
@@ -18,12 +18,12 @@ pub struct TileRaster {
 impl TileRaster {
     pub fn new(tile: Tile, source: TileBounds, width: u32) -> Self {
         // TODO: support upscaling
-        assert!(width <= STORED_TILE_WIDTH, "Upscaling not supported");
+        assert!(width <= DEFAULT_TILE_EXTENT, "Upscaling not supported");
         assert!(width.is_power_of_two(), "width must be power of two");
         assert!(source.z >= tile.z, "source zoom must be >= target zoom");
 
         let zoom_steps = (source.z - tile.z) as u32;
-        let width_steps = STORED_TILE_WIDTH.ilog2() - width.ilog2();
+        let width_steps = DEFAULT_TILE_EXTENT.ilog2() - width.ilog2();
 
         Self {
             width,
@@ -37,15 +37,15 @@ impl TileRaster {
         debug_assert_eq!(source_tile.z, self.bounds.z);
 
         // Origin of source tile within target tile
-        let x_offset = STORED_TILE_WIDTH * (source_tile.x - self.bounds.xmin);
-        let y_offset = STORED_TILE_WIDTH * (source_tile.y - self.bounds.ymin);
+        let x_offset = DEFAULT_TILE_EXTENT * (source_tile.x - self.bounds.xmin);
+        let y_offset = DEFAULT_TILE_EXTENT * (source_tile.y - self.bounds.ymin);
 
         let mut prev = None;
         for Coord { x, y } in coords {
             // Translate (x,y) to location in target tile.
             // [0..(width * STORED_TILE_WIDTH)]
             let x = x + x_offset;
-            let y = (STORED_TILE_WIDTH - y) + y_offset;
+            let y = (DEFAULT_TILE_EXTENT - y) + y_offset;
 
             // Scale the coordinates back down to [0..width]
             let x = x >> self.scale;
