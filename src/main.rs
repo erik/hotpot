@@ -47,6 +47,14 @@ enum Commands {
         /// Tile to render, in "z/x/y" format
         zxy: Tile,
 
+        /// Select activities before this date
+        #[arg(short, long)]
+        before: Option<String>,
+
+        /// Select activities after this date
+        #[arg(short, long)]
+        after: Option<String>,
+
         /// Width of output image
         #[arg(short, long, default_value = "1024")]
         width: u32,
@@ -106,9 +114,19 @@ fn run() -> Result<()> {
             ingest_dir(&path, &Database::new(&opts.global.db_path)?)?;
         }
 
-        Commands::Tile { zxy, width, output } => {
+        Commands::Tile { zxy, width, output, before, after } => {
             let db = Database::open(&opts.global.db_path)?;
-            let filter = ActivityFilter::default();
+
+            // TODO: `time` crate is too restrictive, switch to `chrono`
+            let parse = |t: String| OffsetDateTime::parse(t.as_str(), &time::format_description::well_known::Iso8601::DATE);
+
+            let before = before.map(parse).transpose()?;
+            let after = after.map(parse).transpose()?;
+
+            let filter = ActivityFilter::new(
+                before,
+                after,
+            );
             let raster = render_tile(zxy, &db, &filter, width)?;
             let image = raster.apply_gradient(&DEFAULT_GRADIENT);
 
@@ -125,18 +143,10 @@ fn run() -> Result<()> {
 }
 
 // TODO: move to db.rs
+#[derive(Default)]
 pub struct ActivityFilter {
     before: Option<i64>,
     after: Option<i64>,
-}
-
-impl Default for ActivityFilter {
-    fn default() -> Self {
-        Self {
-            before: None,
-            after: None,
-        }
-    }
 }
 
 impl ActivityFilter {
