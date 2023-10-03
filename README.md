@@ -18,7 +18,7 @@ open http://localhost:8080
 ## TODO
 
 - Trimming initial start/end of activity (distance, privacy zones, etc.)
-- Dynamic filtering for web endpoint (time based, activity based)
+- Dynamic filtering for web endpoint (activity based, etc.)
 - Filter out errant points (jumps greater than several hundred meters etc.)
 - MVT endpoint
 - TCX support

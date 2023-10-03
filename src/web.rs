@@ -9,8 +9,10 @@ use axum::http::header;
 use axum::{response::IntoResponse, routing::get, Router};
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use serde::Deserialize;
+use time::OffsetDateTime;
 use tokio::runtime::Runtime;
 
+use crate::ActivityFilter;
 use crate::db::Database;
 use crate::raster::DEFAULT_GRADIENT;
 use crate::tile::Tile;
@@ -47,8 +49,14 @@ async fn index() -> impl IntoResponse {
 
 #[derive(Debug, Deserialize)]
 struct RenderQueryParams {
+    #[serde(default)]
     color: Option<String>,
-    // TODO: time based filters etc.
+
+    // TODO: OffsetDateTime has really inflexible parsing.
+    #[serde(default, with = "time::serde::iso8601::option")]
+    before: Option<OffsetDateTime>,
+    #[serde(default, with = "time::serde::iso8601::option")]
+    after: Option<OffsetDateTime>,
 }
 
 async fn render_tile(
@@ -67,10 +75,12 @@ async fn render_tile(
         _ => &DEFAULT_GRADIENT,
     };
 
+    let filter = ActivityFilter::new(params.before, params.after);
+
     let tile = Tile::new(x, y, z);
 
     let start = Instant::now();
-    let raster = super::render_tile(tile, &db, 512).unwrap();
+    let raster = super::render_tile(tile, &db, &filter, 512).unwrap();
     let render_time = start.elapsed();
 
     let image = raster.apply_gradient(color);

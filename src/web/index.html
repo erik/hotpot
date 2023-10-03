@@ -29,7 +29,7 @@
             map.addSource('hotpot', {
                 type: 'raster',
                 tiles: [
-                    '/tile/{z}/{x}/{y}?color=orange'
+                    '/tile/{z}/{x}/{y}' + window.location.search,
                 ],
                 tileSize: 512,
                 minzoom: 0,

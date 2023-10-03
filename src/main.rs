@@ -13,7 +13,7 @@ use flate2::read::GzDecoder;
 use geo::HaversineLength;
 use geo_types::{Coord, LineString, MultiLineString, Point};
 use rayon::prelude::*;
-use rusqlite::params;
+use rusqlite::{params, ToSql};
 use time::OffsetDateTime;
 use walkdir::WalkDir;
 
@@ -108,7 +108,8 @@ fn run() -> Result<()> {
 
         Commands::Tile { zxy, width, output } => {
             let db = Database::open(&opts.global.db_path)?;
-            let raster = render_tile(zxy, &db, width)?;
+            let filter = ActivityFilter::default();
+            let raster = render_tile(zxy, &db, &filter, width)?;
             let image = raster.apply_gradient(&DEFAULT_GRADIENT);
 
             image.write_to(&mut File::create(output)?, image::ImageOutputFormat::Png)?;
@@ -123,7 +124,56 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-pub fn render_tile(tile: Tile, db: &Database, width: u32) -> Result<TileRaster> {
+// TODO: move to db.rs
+pub struct ActivityFilter {
+    before: Option<i64>,
+    after: Option<i64>,
+}
+
+impl Default for ActivityFilter {
+    fn default() -> Self {
+        Self {
+            before: None,
+            after: None,
+        }
+    }
+}
+
+impl ActivityFilter {
+    pub fn new(before: Option<OffsetDateTime>, after: Option<OffsetDateTime>) -> Self {
+        Self {
+            before: before.map(OffsetDateTime::unix_timestamp),
+            after: after.map(OffsetDateTime::unix_timestamp),
+        }
+    }
+    fn to_query<'a>(&'a self, params: &mut Vec<&'a dyn ToSql>) -> String {
+        let mut clauses = vec![];
+
+        if let Some(ref before) = self.before {
+            clauses.push("start_time < ?");
+            params.push(before);
+        }
+
+        if let Some(ref after) = self.after {
+            clauses.push("start_time > ?");
+            params.push(after);
+        }
+
+        if clauses.is_empty() {
+            return String::from("1 = 1");
+        }
+
+        clauses.join(" AND ")
+    }
+}
+
+// TODO: doesn't belong in main
+pub fn render_tile(
+    tile: Tile,
+    db: &Database,
+    filter: &ActivityFilter,
+    width: u32,
+) -> Result<TileRaster> {
     let zoom_level = db
         .meta
         .source_level(tile.z)
@@ -133,21 +183,26 @@ pub fn render_tile(tile: Tile, db: &Database, width: u32) -> Result<TileRaster> 
     let mut raster = TileRaster::new(tile, bounds, width);
     let conn = db.connection()?;
 
+    let mut params = params![bounds.z, bounds.xmin, bounds.xmax, bounds.ymin, bounds.ymax].to_vec();
+    let filter_clause = filter.to_query(&mut params);
+
+    // TODO: don't always need to join
     let mut stmt = conn.prepare(
-        "\
-        SELECT x, y, z, coords \
-        FROM activity_tiles \
-        WHERE z = ? \
-            AND (x >= ? AND x < ?) \
-            AND (y >= ? AND y < ?);",
+        format!(
+            "\
+                SELECT x, y, z, coords \
+                FROM activity_tiles \
+                JOIN activities ON activities.id = activity_tiles.activity_id \
+                WHERE z = ? \
+                    AND (x >= ? AND x < ?) \
+                    AND (y >= ? AND y < ?) \
+                    AND {};",
+            filter_clause,
+        )
+        .as_str(),
     )?;
-    let mut rows = stmt.query(params![
-        bounds.z,
-        bounds.xmin,
-        bounds.xmax,
-        bounds.ymin,
-        bounds.ymax
-    ])?;
+
+    let mut rows = stmt.query(params.as_slice())?;
     while let Some(row) = rows.next()? {
         let tile = Tile::new(row.get_unwrap(0), row.get_unwrap(1), row.get_unwrap(2));
 
