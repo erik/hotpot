@@ -2,27 +2,24 @@
 
 Heatmap tile server.
 
+## Usage
+
 ```
-Usage: hotpot [DB_PATH] <COMMAND>
+# Create a new activity database
+cargo run --release -- import [path to GPX files]
 
-Commands:
-import  Import GPX and FIT files from a directory
-tile    Render a tile
-serve   Start a raster tile server
-help    Print this message or the help of the given subcommand(s)
+# Start a web server
+cargo run --release -- serve
 
-Arguments:
-[DB_PATH]  Path to database [default: ./hotpot.sqlite3]
-
-Options:
--h, --help     Print help
--V, --version  Print version
+open http://localhost:8080
 ```
+
 
 ## TODO
 
 - Trimming initial start/end of activity (distance, privacy zones, etc.)
 - Dynamic filtering for web endpoint (time based, activity based)
+- Filter out errant points (jumps greater than several hundred meters etc.)
 - MVT endpoint
 - TCX support
 - Webhook for new activities from Strava
