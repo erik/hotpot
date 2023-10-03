@@ -18,7 +18,7 @@ use time::OffsetDateTime;
 use walkdir::WalkDir;
 
 use crate::db::{decode_line, encode_line, Database};
-use crate::raster::{LinearGradient, TileRaster};
+use crate::raster::{TileRaster, DEFAULT_GRADIENT};
 use crate::tile::{BBox, LngLat, Tile, TileBounds, WebMercator};
 
 mod db;
@@ -109,12 +109,7 @@ fn run() -> Result<()> {
         Commands::Tile { zxy, width, output } => {
             let db = Database::open(&opts.global.db_path)?;
             let raster = render_tile(zxy, &db, width)?;
-            let image = raster.apply_gradient(&LinearGradient::from_stops(&[
-                (0.0, [0xff, 0xb1, 0xff, 0x7f]),
-                (0.05, [0xff, 0xb1, 0xff, 0xff]),
-                (0.25, [0xff, 0xff, 0xff, 0xff]),
-                (1.0, [0xff, 0xff, 0xff, 0xff]),
-            ]));
+            let image = raster.apply_gradient(&DEFAULT_GRADIENT);
 
             image.write_to(&mut File::create(output)?, image::ImageOutputFormat::Png)?;
         }

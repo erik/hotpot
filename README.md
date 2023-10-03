@@ -25,3 +25,4 @@ open http://localhost:8080
 - Webhook for new activities from Strava
 - Import single file
 - Pull additional metadata from Strava's `activities.csv` file.
+- Exclude virtual activities

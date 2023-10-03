@@ -1,7 +1,45 @@
-use crate::tile::{Tile, TileBounds};
-use crate::DEFAULT_TILE_EXTENT;
 use geo_types::Coord;
 use image::{Rgba, RgbaImage};
+use once_cell::sync::Lazy;
+
+use crate::tile::{Tile, TileBounds};
+use crate::DEFAULT_TILE_EXTENT;
+
+// Redish to whiteish
+pub static DEFAULT_GRADIENT: Lazy<LinearGradient> = Lazy::new(|| {
+    LinearGradient::from_stops(&[
+        (0.0, [0xff, 0xb1, 0xff, 0x7f]),
+        (0.05, [0xff, 0xb1, 0xff, 0xff]),
+        (0.25, [0xff, 0xff, 0xff, 0xff]),
+        (1.0, [0xff, 0xff, 0xff, 0xff]),
+    ])
+});
+
+pub static BLUE_RED: Lazy<LinearGradient> = Lazy::new(|| {
+    LinearGradient::from_stops(&[
+        (0.0, [0x3f, 0x5e, 0xfb, 0xff]),
+        (0.05, [0xfc, 0x46, 0x6b, 0xff]),
+        (0.25, [0xff, 0xff, 0xff, 0xff]),
+        (1.0, [0xff, 0xff, 0xff, 0xff]),
+    ])
+});
+
+pub static RED: Lazy<LinearGradient> = Lazy::new(|| {
+    LinearGradient::from_stops(&[
+        (0.0, [0xb2, 0x0a, 0x2c, 0xff]),
+        (0.05, [0xff, 0xfb, 0xd5, 0xff]),
+        (0.25, [0xff, 0xff, 0xff, 0xff]),
+        (1.0, [0xff, 0xff, 0xff, 0xff]),
+    ])
+});
+
+pub static ORANGE: Lazy<LinearGradient> = Lazy::new(|| {
+    LinearGradient::from_stops(&[
+        (0.0, [0xfc, 0x4a, 0x1a, 0xff]),
+        (0.25, [0xf7, 0xb7, 0x33, 0xff]),
+        (1.0, [0xf7, 0xb7, 0x33, 0xff]),
+    ])
+});
 
 pub struct LinearGradient {
     empty_value: Rgba<u8>,
@@ -64,10 +102,11 @@ impl TileRaster {
 
                 for (ix, iy) in line_iter {
                     // TODO: exclude rather than clamp?
-                    let ix = ix.clamp(0, self.width as i32 - 1) as u32;
-                    let iy = iy.clamp(0, self.width as i32 - 1) as u32;
+                    if ix < 0 || iy < 0 || ix >= self.width as i32 || iy >= self.width as i32 {
+                        continue;
+                    }
 
-                    let idx = (iy * self.width + ix) as usize;
+                    let idx = (iy as u32 * self.width + ix as u32) as usize;
                     self.pixels[idx] = self.pixels[idx].saturating_add(1);
                 }
             }
