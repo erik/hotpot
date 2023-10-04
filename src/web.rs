@@ -12,10 +12,10 @@ use serde::Deserialize;
 use time::OffsetDateTime;
 use tokio::runtime::Runtime;
 
-use crate::ActivityFilter;
 use crate::db::Database;
 use crate::raster::DEFAULT_GRADIENT;
 use crate::tile::Tile;
+use crate::ActivityFilter;
 
 pub fn run(db: Database, host: &str, port: u16) -> Result<()> {
     let rt = Runtime::new()?;

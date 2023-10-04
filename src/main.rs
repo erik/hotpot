@@ -10,7 +10,7 @@ use clap::{Args, Parser, Subcommand};
 use fitparser::de::{from_reader_with_options, DecodeOption};
 use fitparser::profile::MesgNum;
 use flate2::read::GzDecoder;
-use geo::HaversineLength;
+use geo::{EuclideanDistance, HaversineLength};
 use geo_types::{Coord, LineString, MultiLineString, Point};
 use rayon::prelude::*;
 use rusqlite::{params, ToSql};
@@ -114,19 +114,27 @@ fn run() -> Result<()> {
             ingest_dir(&path, &Database::new(&opts.global.db_path)?)?;
         }
 
-        Commands::Tile { zxy, width, output, before, after } => {
+        Commands::Tile {
+            zxy,
+            width,
+            output,
+            before,
+            after,
+        } => {
             let db = Database::open(&opts.global.db_path)?;
 
             // TODO: `time` crate is too restrictive, switch to `chrono`
-            let parse = |t: String| OffsetDateTime::parse(t.as_str(), &time::format_description::well_known::Iso8601::DATE);
+            let parse = |t: String| {
+                OffsetDateTime::parse(
+                    t.as_str(),
+                    &time::format_description::well_known::Iso8601::DATE,
+                )
+            };
 
             let before = before.map(parse).transpose()?;
             let after = after.map(parse).transpose()?;
 
-            let filter = ActivityFilter::new(
-                before,
-                after,
-            );
+            let filter = ActivityFilter::new(before, after);
             let raster = render_tile(zxy, &db, &filter, width)?;
             let image = raster.apply_gradient(&DEFAULT_GRADIENT);
 
@@ -460,12 +468,17 @@ impl RawActivity {
         for line in self.tracks.iter() {
             let points = line.points().map(LngLat::from).filter_map(|pt| pt.xy());
 
-            let mut prev = None;
+            let mut prev: Option<WebMercator> = None;
             for next in points {
-                // TODO: should try to filter based on distance to previous point.
                 if let Some(prev) = prev {
-                    for clip in clippers.iter_mut() {
-                        clip.add_line_segment(prev, next);
+                    // TODO: hacky?
+                    // Skip over large jumps
+                    if prev.0.euclidean_distance(&next.0) <= 5000.0 {
+                        for clip in clippers.iter_mut() {
+                            clip.add_line_segment(prev, next);
+                        }
+                    } else {
+                        println!("Skipping: {:?} -> {:?}", prev, next);
                     }
                 }
                 prev = Some(next);

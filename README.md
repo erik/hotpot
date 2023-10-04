@@ -26,3 +26,4 @@ open http://localhost:8080
 - Import single file
 - Pull additional metadata from Strava's `activities.csv` file.
 - Exclude virtual activities
+- Render based on bounding box rather than individual tile
