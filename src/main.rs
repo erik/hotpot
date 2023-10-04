@@ -9,6 +9,7 @@ use anyhow::{anyhow, Result};
 use clap::{Args, Parser, Subcommand};
 use fitparser::de::{from_reader_with_options, DecodeOption};
 use fitparser::profile::MesgNum;
+use fitparser::Value;
 use flate2::read::GzDecoder;
 use geo::{EuclideanDistance, HaversineLength};
 use geo_types::{Coord, LineString, MultiLineString, Point};
@@ -527,30 +528,47 @@ fn parse_fit<R: Read>(r: &mut R) -> Option<RawActivity> {
     let (mut start_time, mut duration_secs) = (None, None);
     let mut points = vec![];
     for data in from_reader_with_options(r, &opts).unwrap() {
-        if data.kind() == MesgNum::Record {
-            let mut lat: Option<i64> = None;
-            let mut lng: Option<i64> = None;
-
-            for f in data.fields() {
-                match f.name() {
-                    "position_lat" => lat = f.value().try_into().ok(),
-                    "position_long" => lng = f.value().try_into().ok(),
-                    "timestamp" => {
-                        let ts: i64 = f.value().try_into().unwrap();
-
-                        match start_time {
-                            None => start_time = Some(ts),
-                            Some(t) => duration_secs = Some((ts - t) as u64),
+        match data.kind() {
+            MesgNum::FileId => {
+                for f in data.fields() {
+                    // Skip over virtual rides
+                    // TODO: not an exhaustive check
+                    if f.name() == "manufacturer" {
+                        match f.value() {
+                            Value::String(val) if val.as_str() == "zwift" => return None,
+                            _ => {}
                         }
                     }
-                    _ => {}
                 }
             }
+            MesgNum::Record => {
+                let mut lat: Option<i64> = None;
+                let mut lng: Option<i64> = None;
 
-            if let (Some(lat), Some(lng)) = (lat, lng) {
-                let pt = Point::new(lng as f64, lat as f64) / SCALE_FACTOR;
-                points.push(pt);
+                for f in data.fields() {
+                    match f.name() {
+                        "position_lat" => lat = f.value().try_into().ok(),
+                        "position_long" => lng = f.value().try_into().ok(),
+                        "timestamp" => {
+                            let ts: i64 = f.value().try_into().unwrap();
+
+                            match start_time {
+                                None => start_time = Some(ts),
+                                Some(t) => duration_secs = Some((ts - t) as u64),
+                            }
+                        }
+                        xx => {
+                            println!("Unknown field: {}", xx);
+                        }
+                    }
+                }
+
+                if let (Some(lat), Some(lng)) = (lat, lng) {
+                    let pt = Point::new(lng as f64, lat as f64) / SCALE_FACTOR;
+                    points.push(pt);
+                }
             }
+            _ => {}
         }
     }
 

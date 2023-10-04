@@ -19,11 +19,9 @@ open http://localhost:8080
 
 - Trimming initial start/end of activity (distance, privacy zones, etc.)
 - Dynamic filtering for web endpoint (activity based, etc.)
-- Filter out errant points (jumps greater than several hundred meters etc.)
 - MVT endpoint
 - TCX support
 - Webhook for new activities from Strava
 - Import single file
 - Pull additional metadata from Strava's `activities.csv` file.
-- Exclude virtual activities
 - Render based on bounding box rather than individual tile
