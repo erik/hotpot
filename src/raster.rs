@@ -94,14 +94,12 @@ impl TileRaster {
                     continue;
                 }
 
-                // TODO: is the perf hit of this worth it?
                 let line_iter = line_drawing::Bresenham::<i32>::new(
                     (px as i32, py as i32),
                     (x as i32, y as i32),
                 );
 
                 for (ix, iy) in line_iter {
-                    // TODO: exclude rather than clamp?
                     if ix < 0 || iy < 0 || ix >= self.width as i32 || iy >= self.width as i32 {
                         continue;
                     }

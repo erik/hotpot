@@ -15,7 +15,7 @@ use tokio::runtime::Runtime;
 use crate::db::Database;
 use crate::raster::DEFAULT_GRADIENT;
 use crate::tile::Tile;
-use crate::ActivityFilter;
+use crate::db::ActivityFilter;
 
 pub fn run(db: Database, host: &str, port: u16) -> Result<()> {
     let rt = Runtime::new()?;

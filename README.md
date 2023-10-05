@@ -24,4 +24,5 @@ open http://localhost:8080
 - Webhook for new activities from Strava
 - Import single file
 - Pull additional metadata from Strava's `activities.csv` file.
-- Render based on bounding box rather than individual tile
+- Render CLI based on bounding box rather than individual tile
+- Arbitrary filters on CLI (unsafe interpolation)

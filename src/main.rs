@@ -7,19 +7,20 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
 use clap::{Args, Parser, Subcommand};
-use fitparser::de::{from_reader_with_options, DecodeOption};
+use fitparser::de::{DecodeOption, from_reader_with_options};
 use fitparser::profile::MesgNum;
 use fitparser::Value;
 use flate2::read::GzDecoder;
 use geo::{EuclideanDistance, HaversineLength};
 use geo_types::{Coord, LineString, MultiLineString, Point};
 use rayon::prelude::*;
-use rusqlite::{params, ToSql};
+use rusqlite::{params, };
 use time::OffsetDateTime;
 use walkdir::WalkDir;
+use db::ActivityFilter;
 
-use crate::db::{decode_line, encode_line, Database};
-use crate::raster::{TileRaster, DEFAULT_GRADIENT};
+use crate::db::{Database, decode_line, encode_line};
+use crate::raster::{DEFAULT_GRADIENT, TileRaster};
 use crate::tile::{BBox, LngLat, Tile, TileBounds, WebMercator};
 
 mod db;
@@ -149,41 +150,6 @@ fn run() -> Result<()> {
     };
 
     Ok(())
-}
-
-// TODO: move to db.rs
-#[derive(Default)]
-pub struct ActivityFilter {
-    before: Option<i64>,
-    after: Option<i64>,
-}
-
-impl ActivityFilter {
-    pub fn new(before: Option<OffsetDateTime>, after: Option<OffsetDateTime>) -> Self {
-        Self {
-            before: before.map(OffsetDateTime::unix_timestamp),
-            after: after.map(OffsetDateTime::unix_timestamp),
-        }
-    }
-    fn to_query<'a>(&'a self, params: &mut Vec<&'a dyn ToSql>) -> String {
-        let mut clauses = vec![];
-
-        if let Some(ref before) = self.before {
-            clauses.push("start_time < ?");
-            params.push(before);
-        }
-
-        if let Some(ref after) = self.after {
-            clauses.push("start_time > ?");
-            params.push(after);
-        }
-
-        if clauses.is_empty() {
-            return String::from("1 = 1");
-        }
-
-        clauses.join(" AND ")
-    }
 }
 
 // TODO: doesn't belong in main

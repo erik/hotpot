@@ -5,6 +5,8 @@ use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use geo_types::Coord;
 use r2d2_sqlite::SqliteConnectionManager;
+use time::OffsetDateTime;
+use rusqlite::ToSql;
 
 use crate::{DEFAULT_TILE_EXTENT, DEFAULT_ZOOM_LEVELS};
 
@@ -208,4 +210,38 @@ pub fn decode_line(bytes: &[u8]) -> Result<Vec<Coord<u32>>> {
         });
     }
     Ok(coords)
+}
+
+#[derive(Default)]
+pub struct ActivityFilter {
+    before: Option<i64>,
+    after: Option<i64>,
+}
+
+impl ActivityFilter {
+    pub fn new(before: Option<OffsetDateTime>, after: Option<OffsetDateTime>) -> Self {
+        Self {
+            before: before.map(OffsetDateTime::unix_timestamp),
+            after: after.map(OffsetDateTime::unix_timestamp),
+        }
+    }
+    pub fn to_query<'a>(&'a self, params: &mut Vec<&'a dyn ToSql>) -> String {
+        let mut clauses = vec![];
+
+        if let Some(ref before) = self.before {
+            clauses.push("start_time < ?");
+            params.push(before);
+        }
+
+        if let Some(ref after) = self.after {
+            clauses.push("start_time > ?");
+            params.push(after);
+        }
+
+        if clauses.is_empty() {
+            return String::from("1 = 1");
+        }
+
+        clauses.join(" AND ")
+    }
 }
