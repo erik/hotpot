@@ -5,8 +5,10 @@ use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use geo_types::Coord;
 use r2d2_sqlite::SqliteConnectionManager;
-use time::OffsetDateTime;
 use rusqlite::ToSql;
+use rusqlite::types::{ToSqlOutput, Value};
+use time::{Date, OffsetDateTime};
+use time::format_description::well_known::Iso8601;
 
 use crate::{DEFAULT_TILE_EXTENT, DEFAULT_ZOOM_LEVELS};
 
@@ -212,17 +214,42 @@ pub fn decode_line(bytes: &[u8]) -> Result<Vec<Coord<u32>>> {
     Ok(coords)
 }
 
+pub struct SqlDate(Date);
+
+#[derive(Clone, Debug)]
+pub struct SqlDateTime(pub OffsetDateTime);
+
+impl ToSql for SqlDate {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        self.0
+            .format(&Iso8601::DATE)
+            // TODO: InvalidParameterName is not the right error type
+            .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))
+            .map(|s| ToSqlOutput::Owned(Value::Text(s)))
+    }
+}
+
+impl ToSql for SqlDateTime {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        self.0
+            .format(&Iso8601::DATE_TIME)
+            // TODO: InvalidParameterName is not the right error type
+            .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))
+            .map(|s| ToSqlOutput::Owned(Value::Text(s)))
+    }
+}
+
 #[derive(Default)]
 pub struct ActivityFilter {
-    before: Option<i64>,
-    after: Option<i64>,
+    before: Option<SqlDate>,
+    after: Option<SqlDate>,
 }
 
 impl ActivityFilter {
-    pub fn new(before: Option<OffsetDateTime>, after: Option<OffsetDateTime>) -> Self {
+    pub fn new(before: Option<Date>, after: Option<Date>) -> Self {
         Self {
-            before: before.map(OffsetDateTime::unix_timestamp),
-            after: after.map(OffsetDateTime::unix_timestamp),
+            before: before.map(SqlDate),
+            after: after.map(SqlDate),
         }
     }
     pub fn to_query<'a>(&'a self, params: &mut Vec<&'a dyn ToSql>) -> String {

@@ -26,3 +26,4 @@ open http://localhost:8080
 - Pull additional metadata from Strava's `activities.csv` file.
 - Render CLI based on bounding box rather than individual tile
 - Arbitrary filters on CLI (unsafe interpolation)
+- Better logging / debug output split.

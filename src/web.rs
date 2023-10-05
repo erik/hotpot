@@ -6,16 +6,16 @@ use std::time::Instant;
 use anyhow::Result;
 use axum::extract::{Path, Query, State};
 use axum::http::header;
-use axum::{response::IntoResponse, routing::get, Router};
+use axum::{response::IntoResponse, Router, routing::get};
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use serde::Deserialize;
-use time::OffsetDateTime;
+use time::Date;
 use tokio::runtime::Runtime;
 
+use crate::db::ActivityFilter;
 use crate::db::Database;
 use crate::raster::DEFAULT_GRADIENT;
 use crate::tile::Tile;
-use crate::db::ActivityFilter;
 
 pub fn run(db: Database, host: &str, port: u16) -> Result<()> {
     let rt = Runtime::new()?;
@@ -52,11 +52,10 @@ struct RenderQueryParams {
     #[serde(default)]
     color: Option<String>,
 
-    // TODO: OffsetDateTime has really inflexible parsing.
-    #[serde(default, with = "time::serde::iso8601::option")]
-    before: Option<OffsetDateTime>,
-    #[serde(default, with = "time::serde::iso8601::option")]
-    after: Option<OffsetDateTime>,
+    #[serde(default, with = "crate::date::parse")]
+    before: Option<Date>,
+    #[serde(default, with = "crate::date::parse")]
+    after: Option<Date>,
 }
 
 async fn render_tile(
@@ -68,6 +67,7 @@ async fn render_tile(
         return axum::http::StatusCode::NO_CONTENT.into_response();
     }
 
+    // TODO: this should be supported by CLI as well
     let color = match params.color.as_deref() {
         Some("blue-red") => &crate::raster::BLUE_RED,
         Some("red") => &crate::raster::RED,

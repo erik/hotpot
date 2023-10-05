@@ -14,12 +14,13 @@ use flate2::read::GzDecoder;
 use geo::{EuclideanDistance, HaversineLength};
 use geo_types::{Coord, LineString, MultiLineString, Point};
 use rayon::prelude::*;
-use rusqlite::{params, };
-use time::OffsetDateTime;
+use rusqlite::params;
+use time::{Date, OffsetDateTime};
 use walkdir::WalkDir;
+
 use db::ActivityFilter;
 
-use crate::db::{Database, decode_line, encode_line};
+use crate::db::{Database, decode_line, encode_line, SqlDateTime};
 use crate::raster::{DEFAULT_GRADIENT, TileRaster};
 use crate::tile::{BBox, LngLat, Tile, TileBounds, WebMercator};
 
@@ -27,6 +28,7 @@ mod db;
 mod raster;
 mod tile;
 mod web;
+mod date;
 
 // TODO: make this configurable
 const DEFAULT_ZOOM_LEVELS: [u8; 5] = [2, 6, 10, 14, 16];
@@ -125,9 +127,9 @@ fn run() -> Result<()> {
         } => {
             let db = Database::open(&opts.global.db_path)?;
 
-            // TODO: `time` crate is too restrictive, switch to `chrono`
+            // TODO: can we reuse the parser in web.rs?
             let parse = |t: String| {
-                OffsetDateTime::parse(
+                Date::parse(
                     t.as_str(),
                     &time::format_description::well_known::Iso8601::DATE,
                 )
@@ -184,7 +186,7 @@ pub fn render_tile(
                     AND {};",
             filter_clause,
         )
-        .as_str(),
+            .as_str(),
     )?;
 
     let mut rows = stmt.query(params.as_slice())?;
@@ -251,7 +253,7 @@ fn ingest_dir(p: &Path, db: &Database) -> Result<()> {
                         activity.distance(),
                     ],
                 )
-                .expect("insert activity");
+                    .expect("insert activity");
 
                 let activity_id = conn.last_insert_rowid();
 
@@ -419,7 +421,7 @@ fn open_reader(p: &Path, gzip: bool) -> Box<dyn BufRead> {
 #[derive(Clone)]
 struct RawActivity {
     title: Option<String>,
-    start_time: Option<u64>,
+    start_time: Option<SqlDateTime>,
     duration_secs: Option<u64>,
     tracks: MultiLineString,
 }
@@ -489,7 +491,7 @@ fn parse_fit<R: Read>(r: &mut R) -> Option<RawActivity> {
         DecodeOption::SkipDataCrcValidation,
         DecodeOption::SkipHeaderCrcValidation,
     ]
-    .into();
+        .into();
 
     let (mut start_time, mut duration_secs) = (None, None);
     let mut points = vec![];
@@ -523,9 +525,7 @@ fn parse_fit<R: Read>(r: &mut R) -> Option<RawActivity> {
                                 Some(t) => duration_secs = Some((ts - t) as u64),
                             }
                         }
-                        xx => {
-                            println!("Unknown field: {}", xx);
-                        }
+                        _ => {}
                     }
                 }
 
@@ -546,7 +546,9 @@ fn parse_fit<R: Read>(r: &mut R) -> Option<RawActivity> {
     Some(RawActivity {
         duration_secs,
         title: None,
-        start_time: start_time.map(|it| it as u64),
+        start_time: start_time
+            .map(|ts| OffsetDateTime::from_unix_timestamp(ts).unwrap())
+            .map(SqlDateTime),
         tracks: MultiLineString::from(line),
     })
 }
@@ -560,7 +562,7 @@ fn parse_gpx<R: Read>(reader: &mut R) -> Option<RawActivity> {
     let start_time = gpx
         .metadata
         .and_then(|m| m.time)
-        .map(|t| OffsetDateTime::from(t).unix_timestamp() as u64);
+        .map(|t| OffsetDateTime::from(t));
 
     // Grab the timestamp from the last point to calculate duration
     let end_time = track
@@ -571,13 +573,14 @@ fn parse_gpx<R: Read>(reader: &mut R) -> Option<RawActivity> {
         .map(|t| OffsetDateTime::from(t).unix_timestamp() as u64);
 
     let duration_secs = start_time
+        .map(|t| t.unix_timestamp() as u64)
         .zip(end_time)
         .filter(|(start, end)| end > start)
         .map(|(start, end)| end - start);
 
     Some(RawActivity {
-        start_time,
         duration_secs,
+        start_time: start_time.map(SqlDateTime),
         title: track.name.clone(),
         tracks: track.multilinestring(),
     })
