@@ -6,7 +6,7 @@ use std::time::Instant;
 use anyhow::Result;
 use axum::extract::{Path, Query, State};
 use axum::http::header;
-use axum::{response::IntoResponse, Router, routing::get};
+use axum::{response::IntoResponse, routing::get, Router};
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use serde::Deserialize;
 use time::Date;

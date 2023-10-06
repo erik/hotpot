@@ -5,10 +5,10 @@ use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use geo_types::Coord;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::ToSql;
 use rusqlite::types::{ToSqlOutput, Value};
-use time::{Date, OffsetDateTime};
+use rusqlite::ToSql;
 use time::format_description::well_known::Iso8601;
+use time::{Date, OffsetDateTime};
 
 use crate::{DEFAULT_TILE_EXTENT, DEFAULT_ZOOM_LEVELS};
 
