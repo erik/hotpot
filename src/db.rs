@@ -266,7 +266,7 @@ impl ActivityFilter {
         }
 
         if clauses.is_empty() {
-            return String::from("1 = 1");
+            return String::from("true");
         }
 
         clauses.join(" AND ")

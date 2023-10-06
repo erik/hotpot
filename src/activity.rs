@@ -16,7 +16,7 @@ use crate::db::SqlDateTime;
 use crate::tile::{BBox, LngLat, Tile, WebMercator};
 use crate::DEFAULT_TILE_EXTENT;
 
-// TODO: not happy with the ergonomics of this class.
+// TODO: not happy with the ergonomics of this.
 struct TileClipper {
     zoom: u8,
     current: Option<(Tile, BBox)>,
@@ -83,8 +83,6 @@ impl TileClipper {
                 if b != end {
                     self.finish_segment();
 
-                    // TODO: theoretically could jump large distances here
-                    //   (requiring supercover iterator), but unlikely.
                     let (next_tile, next_bbox) = self.bounding_tile(&end);
                     if next_tile != tile {
                         self.current = Some((next_tile, next_bbox));
@@ -101,31 +99,6 @@ impl TileClipper {
                 lines.push(LineString::new(vec![]));
             });
         }
-    }
-}
-
-/// "foo.bar.gz" -> Some("bar", true)
-/// "foo.bar" -> Some("bar", false)
-/// "foo" -> None
-fn get_extensions(p: &Path) -> Option<(&str, bool)> {
-    let mut exts = p
-        .file_name()
-        .and_then(OsStr::to_str)
-        .map(|f| f.split('.'))?;
-
-    Some(match exts.next_back()? {
-        "gz" => (exts.next_back()?, true),
-        ext => (ext, false),
-    })
-}
-
-fn open_reader(p: &Path, gzip: bool) -> Box<dyn BufRead> {
-    let file = File::open(p).expect("open file");
-
-    if gzip {
-        Box::new(BufReader::new(GzDecoder::new(file)))
-    } else {
-        Box::new(BufReader::new(file))
     }
 }
 
@@ -187,7 +160,7 @@ impl RawActivity {
                 .rev()
                 .enumerate()
                 .find(|(_, pt)| pt.0.euclidean_distance(last) >= trim_dist)
-                .map(|(i, _)| points.len() - i);
+                .map(|(i, _)| points.len() - 1 - i);
 
             if let Some((i, j)) = start_idx.zip(end_idx) {
                 if i >= j {
@@ -336,6 +309,31 @@ fn parse_gpx<R: Read>(reader: &mut R) -> Option<RawActivity> {
         title: track.name.clone(),
         tracks: track.multilinestring(),
     })
+}
+
+/// "foo.bar.gz" -> Some("bar", true)
+/// "foo.bar" -> Some("bar", false)
+/// "foo" -> None
+fn get_extensions(p: &Path) -> Option<(&str, bool)> {
+    let mut exts = p
+        .file_name()
+        .and_then(OsStr::to_str)
+        .map(|f| f.split('.'))?;
+
+    Some(match exts.next_back()? {
+        "gz" => (exts.next_back()?, true),
+        ext => (ext, false),
+    })
+}
+
+fn open_reader(p: &Path, gzip: bool) -> Box<dyn BufRead> {
+    let file = File::open(p).expect("open file");
+
+    if gzip {
+        Box::new(BufReader::new(GzDecoder::new(file)))
+    } else {
+        Box::new(BufReader::new(file))
+    }
 }
 
 // Ramer–Douglas–Peucker algorithm

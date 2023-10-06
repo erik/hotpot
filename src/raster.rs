@@ -1,11 +1,13 @@
+use anyhow::{anyhow, Result};
 use geo_types::Coord;
 use image::{Rgba, RgbaImage};
 use once_cell::sync::Lazy;
+use rusqlite::{params, ToSql};
 
-use crate::tile::{Tile, TileBounds};
+use crate::db::{ActivityFilter, Database, decode_line};
 use crate::DEFAULT_TILE_EXTENT;
+use crate::tile::{Tile, TileBounds};
 
-// Redish to whiteish
 pub static DEFAULT_GRADIENT: Lazy<LinearGradient> = Lazy::new(|| {
     LinearGradient::from_stops(&[
         (0.0, [0xff, 0xb1, 0xff, 0x7f]),
@@ -46,7 +48,7 @@ pub struct LinearGradient {
     palette: [Rgba<u8>; 256],
 }
 
-pub struct TileRaster {
+struct TileRaster {
     bounds: TileBounds,
     scale: u32,
     width: u32,
@@ -54,7 +56,7 @@ pub struct TileRaster {
 }
 
 impl TileRaster {
-    pub fn new(tile: Tile, source: TileBounds, width: u32) -> Self {
+    fn new(tile: Tile, source: TileBounds, width: u32) -> Self {
         // TODO: support upscaling
         assert!(width <= DEFAULT_TILE_EXTENT, "Upscaling not supported");
         assert!(width.is_power_of_two(), "width must be power of two");
@@ -71,7 +73,7 @@ impl TileRaster {
         }
     }
 
-    pub fn add_activity(&mut self, source_tile: &Tile, coords: &[Coord<u32>]) {
+    fn add_activity(&mut self, source_tile: &Tile, coords: &[Coord<u32>]) {
         debug_assert_eq!(source_tile.z, self.bounds.z);
 
         // Origin of source tile within target tile
@@ -112,7 +114,7 @@ impl TileRaster {
         }
     }
 
-    pub fn apply_gradient(&self, gradient: &LinearGradient) -> RgbaImage {
+    fn apply_gradient(&self, gradient: &LinearGradient) -> RgbaImage {
         RgbaImage::from_fn(self.width, self.width, |x, y| {
             let idx = (y * self.width + x) as usize;
             gradient.sample(self.pixels[idx])
@@ -167,3 +169,64 @@ impl LinearGradient {
         self.palette[val as usize]
     }
 }
+
+pub fn render_tile(
+    tile: Tile,
+    gradient: &LinearGradient,
+    width: u32,
+    filter: &ActivityFilter,
+    db: &Database,
+) -> Result<Option<RgbaImage>> {
+    let zoom_level = db
+        .meta
+        .source_level(tile.z)
+        .ok_or_else(|| anyhow!("no source level for tile: {:?}", tile))?;
+
+    let bounds = TileBounds::from(zoom_level, &tile);
+    let mut raster = TileRaster::new(tile, bounds, width);
+
+    let mut have_activity = false;
+
+    let conn = db.connection()?;
+    let (mut stmt, params) = prepare_query_activities(&conn, filter, &bounds)?;
+    let mut rows = stmt.query(params.as_slice())?;
+    while let Some(row) = rows.next()? {
+        let source_tile = Tile::new(row.get_unwrap(0), row.get_unwrap(1), row.get_unwrap(2));
+
+        let bytes: Vec<u8> = row.get_unwrap(3);
+        raster.add_activity(&source_tile, &decode_line(&bytes)?);
+
+        have_activity = true;
+    }
+
+    if !have_activity {
+        return Ok(None);
+    }
+
+    Ok(Some(raster.apply_gradient(gradient)))
+}
+
+fn prepare_query_activities<'a>(
+    conn: &'a rusqlite::Connection,
+    filter: &'a ActivityFilter,
+    bounds: &'a TileBounds,
+) -> Result<(rusqlite::Statement<'a>, Vec<&'a dyn ToSql>)> {
+    let mut params = params![bounds.z, bounds.xmin, bounds.xmax, bounds.ymin, bounds.ymax].to_vec();
+    let filter_clause = filter.to_query(&mut params);
+
+    // TODO: don't always need to join
+    let stmt = conn.prepare(
+        &format!("SELECT x, y, z, coords \
+                      FROM activity_tiles \
+                      JOIN activities ON activities.id = activity_tiles.activity_id \
+                      WHERE z = ? \
+                          AND (x >= ? AND x < ?) \
+                          AND (y >= ? AND y < ?) \
+                          AND {};",
+                 filter_clause,
+        )
+    )?;
+
+    Ok((stmt, params))
+}
+

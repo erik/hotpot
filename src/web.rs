@@ -79,41 +79,34 @@ async fn render_tile(
 
     let tile = Tile::new(x, y, z);
 
-    let start = Instant::now();
-    let raster = super::render_tile(tile, &db, &filter, 512).unwrap();
-    let render_time = start.elapsed();
+    match raster::render_tile(tile, color, 512, &filter, &db) {
+        Ok(Some(image)) => {
+            let mut bytes = Vec::new();
+            let mut cursor = Cursor::new(&mut bytes);
 
-    let image = raster.apply_gradient(color);
-    let grad_time = start.elapsed() - render_time;
+            image
+                .write_with_encoder(PngEncoder::new_with_quality(
+                    &mut cursor,
+                    CompressionType::Fast,
+                    FilterType::NoFilter,
+                ))
+                .unwrap();
 
-    let mut bytes = Vec::new();
-    let mut cursor = Cursor::new(&mut bytes);
-
-    image
-        .write_with_encoder(PngEncoder::new_with_quality(
-            &mut cursor,
-            CompressionType::Fast,
-            FilterType::NoFilter,
-        ))
-        .unwrap();
-    let write_time = start.elapsed() - render_time - grad_time;
-
-    println!(
-        "render:\t{:?}\tgradient:\t{:?}\twrite:\t{:?}\ttotal:\t{:?}",
-        render_time,
-        grad_time,
-        write_time,
-        start.elapsed()
-    );
-
-    // TODO: seems hacky
-    (
-        axum::response::AppendHeaders([
-            (header::CONTENT_TYPE, "image/png"),
-            (header::CACHE_CONTROL, "max-age=3600"),
-            (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
-        ]),
-        bytes,
-    )
-        .into_response()
+            // TODO: seems hacky
+            (
+                axum::response::AppendHeaders([
+                    (header::CONTENT_TYPE, "image/png"),
+                    (header::CACHE_CONTROL, "max-age=3600"),
+                    (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
+                ]),
+                bytes,
+            )
+                .into_response()
+        }
+        Ok(None) => axum::http::StatusCode::NO_CONTENT.into_response(),
+        Err(e) => {
+            tracing::error!("error rendering tile: {:?}", e);
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }

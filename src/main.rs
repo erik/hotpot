@@ -3,8 +3,9 @@ use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
+use image::RgbaImage;
 use rayon::prelude::*;
 use rusqlite::params;
 use time::Date;
@@ -12,9 +13,9 @@ use walkdir::WalkDir;
 
 use db::ActivityFilter;
 
-use crate::db::{decode_line, encode_line, Database};
-use crate::raster::{TileRaster, DEFAULT_GRADIENT};
-use crate::tile::{Tile, TileBounds};
+use crate::db::{encode_line, Database};
+use crate::raster::DEFAULT_GRADIENT;
+use crate::tile::Tile;
 
 mod activity;
 mod date;
@@ -135,11 +136,17 @@ fn run() -> Result<()> {
             let before = before.map(parse).transpose()?;
             let after = after.map(parse).transpose()?;
 
-            let filter = ActivityFilter::new(before, after);
-            let raster = render_tile(zxy, &db, &filter, width)?;
-            let image = raster.apply_gradient(&DEFAULT_GRADIENT);
+            let mut file = File::create(output)?;
 
-            image.write_to(&mut File::create(output)?, image::ImageOutputFormat::Png)?;
+            let filter = ActivityFilter::new(before, after);
+
+            let image = raster::render_tile(zxy, &DEFAULT_GRADIENT, width, &filter, &db)?
+                .unwrap_or_else(|| {
+                    // note: could also just use RgbaImage::default() here if we don't care about size.
+                    RgbaImage::new(width, width)
+                });
+
+            image.write_to(&mut file, image::ImageOutputFormat::Png)?;
         }
 
         Commands::Serve { host, port } => {
@@ -149,52 +156,6 @@ fn run() -> Result<()> {
     };
 
     Ok(())
-}
-
-// TODO: doesn't belong in main
-pub fn render_tile(
-    tile: Tile,
-    db: &Database,
-    filter: &ActivityFilter,
-    width: u32,
-) -> Result<TileRaster> {
-    let zoom_level = db
-        .meta
-        .source_level(tile.z)
-        .ok_or_else(|| anyhow!("no source level for tile: {:?}", tile))?;
-
-    let bounds = TileBounds::from(zoom_level, &tile);
-    let mut raster = TileRaster::new(tile, bounds, width);
-    let conn = db.connection()?;
-
-    let mut params = params![bounds.z, bounds.xmin, bounds.xmax, bounds.ymin, bounds.ymax].to_vec();
-    let filter_clause = filter.to_query(&mut params);
-
-    // TODO: don't always need to join
-    let mut stmt = conn.prepare(
-        format!(
-            "\
-                SELECT x, y, z, coords \
-                FROM activity_tiles \
-                JOIN activities ON activities.id = activity_tiles.activity_id \
-                WHERE z = ? \
-                    AND (x >= ? AND x < ?) \
-                    AND (y >= ? AND y < ?) \
-                    AND {};",
-            filter_clause,
-        )
-        .as_str(),
-    )?;
-
-    let mut rows = stmt.query(params.as_slice())?;
-    while let Some(row) = rows.next()? {
-        let tile = Tile::new(row.get_unwrap(0), row.get_unwrap(1), row.get_unwrap(2));
-
-        let bytes: Vec<u8> = row.get_unwrap(3);
-        raster.add_activity(&tile, &decode_line(&bytes)?);
-    }
-
-    Ok(raster)
 }
 
 fn ingest_dir(p: &Path, db: &Database, trim_dist: f64) -> Result<()> {
