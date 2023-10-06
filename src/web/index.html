@@ -25,7 +25,7 @@
     <div>
         <label for="color">Theme</label>
         <select key="color" name="color">
-            <option value="default">Pinkish</option>
+            <option value="default" selected>Pinkish</option>
             <option value="orange">Orange</option>
             <option value="blue-red">Blue/Red</option>
             <option value="red">Red</option>
@@ -35,8 +35,18 @@
     <div>
         <label for="size">Size</label>
         <select key="size" name="size">
-            <option value="256">256</option>
+            <option value="256" selected>256</option>
             <option value="512">512</option>
+        </select>
+    </div>
+
+    <div>
+        <label for="map">Map</label>
+        <select key="map" name="map">
+            <option value="dark-matter-nolabels" selected>Dark (no labels)</option>
+            <option value="positron-nolabels">Light (no labels)</option>
+            <option value="dark-matter">Dark</option>
+            <option value="positron">Light</option>
         </select>
     </div>
 </div>
@@ -87,7 +97,7 @@
     document.querySelectorAll('#map-overlay [key]').forEach(function (el) {
         el.addEventListener('change', function (e) {
             options[e.target.getAttribute('key')] = e.target.value;
-            updateMapOptions();
+            updateMapStyle();
         });
     });
 
@@ -103,10 +113,17 @@
         before: null,
         after: null,
         size: '256',
+        map: 'dark-matter-nolabels',
     };
 
-    function updateMapOptions() {
-        if (map.isSourceLoaded('hotpot')) {
+    function updateMapStyle() {
+        console.log('update style')
+        map.setStyle('https://basemaps.cartocdn.com/gl/' + options.map + '-gl-style/style.json');
+        map.once('styledata', () => updateSource());
+    }
+
+    function updateSource() {
+        if (typeof map.getSource('hotpot') !== 'undefined') {
             map.removeLayer('hotpot');
             map.removeSource('hotpot');
         }
@@ -133,7 +150,7 @@
             });
     }
 
-    map.on('load', updateMapOptions);
+    map.on('load', updateSource);
     map.addControl(new maplibregl.NavigationControl());
 </script>
 </body>
