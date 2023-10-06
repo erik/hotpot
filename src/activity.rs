@@ -16,14 +16,15 @@ use crate::db::SqlDateTime;
 use crate::tile::{BBox, LngLat, Tile, WebMercator};
 use crate::DEFAULT_TILE_EXTENT;
 
-pub struct TileClipper {
+// TODO: not happy with the ergonomics of this class.
+struct TileClipper {
     zoom: u8,
     current: Option<(Tile, BBox)>,
     tiles: HashMap<Tile, Vec<LineString<u16>>>,
 }
 
 impl TileClipper {
-    pub fn new(zoom: u8) -> Self {
+    fn new(zoom: u8) -> Self {
         Self {
             zoom,
             tiles: HashMap::new(),
@@ -38,7 +39,7 @@ impl TileClipper {
     }
 
     fn last_line(&mut self, tile: &Tile) -> &mut LineString<u16> {
-        let lines = self.tiles.entry(*tile).or_insert_with(|| vec![]);
+        let lines = self.tiles.entry(*tile).or_insert_with(Vec::new);
 
         if lines.is_empty() {
             lines.push(LineString::new(vec![]));
@@ -157,28 +158,58 @@ impl RawActivity {
         self.tracks.iter().map(LineString::haversine_length).sum()
     }
 
-    pub fn clip_to_tiles(&self, zooms: &[u8]) -> ClippedTiles {
+    pub fn clip_to_tiles(&self, zooms: &[u8], trim_dist: f64) -> ClippedTiles {
         let mut clippers: Vec<_> = zooms.iter().map(|zoom| TileClipper::new(*zoom)).collect();
 
         for line in self.tracks.iter() {
-            let points = line.points().map(LngLat::from).filter_map(|pt| pt.xy());
+            let points: Vec<_> = line
+                .points()
+                .map(LngLat::from)
+                .filter_map(|pt| pt.xy())
+                .collect();
 
-            let mut prev: Option<WebMercator> = None;
-            for next in points {
-                if let Some(prev) = prev {
-                    // TODO: hacky?
-                    // Skip over large jumps
-                    if prev.0.euclidean_distance(&next.0) <= Self::MAX_POINT_DISTANCE {
-                        for clip in clippers.iter_mut() {
-                            clip.add_line_segment(prev, next);
-                        }
-                    }
-                }
-                prev = Some(next);
+            if points.len() < 2 {
+                continue;
             }
 
-            for clip in clippers.iter_mut() {
-                clip.finish_segment();
+            let first = &points[0].0;
+            let last = &points[points.len() - 1].0;
+
+            // Find points which are >= trim_dist away from start/end
+            let start_idx = points
+                .iter()
+                .enumerate()
+                .find(|(_, pt)| pt.0.euclidean_distance(first) >= trim_dist)
+                .map(|(i, _)| i);
+
+            let end_idx = points
+                .iter()
+                .rev()
+                .enumerate()
+                .find(|(_, pt)| pt.0.euclidean_distance(last) >= trim_dist)
+                .map(|(i, _)| points.len() - i);
+
+            if let Some((i, j)) = start_idx.zip(end_idx) {
+                if i >= j {
+                    continue;
+                }
+
+                let mut pairs = points[i..j].windows(2);
+                while let Some(&[p0, p1]) = pairs.next() {
+                    // Skip over large jumps
+                    let len = p0.0.euclidean_distance(&p1.0);
+                    if len > Self::MAX_POINT_DISTANCE {
+                        continue;
+                    }
+
+                    for clip in clippers.iter_mut() {
+                        clip.add_line_segment(p0, p1);
+                    }
+                }
+
+                for clip in clippers.iter_mut() {
+                    clip.finish_segment();
+                }
             }
         }
 
@@ -283,10 +314,7 @@ fn parse_gpx<R: Read>(reader: &mut R) -> Option<RawActivity> {
     // Just take the first track (generally the only one).
     let track = gpx.tracks.first()?;
 
-    let start_time = gpx
-        .metadata
-        .and_then(|m| m.time)
-        .map(|t| OffsetDateTime::from(t));
+    let start_time = gpx.metadata.and_then(|m| m.time).map(OffsetDateTime::from);
 
     // Grab the timestamp from the last point to calculate duration
     let end_time = track

@@ -37,6 +37,10 @@ enum Commands {
         /// Reset the database before importing
         #[arg(short, long, default_value = "false")]
         create: bool,
+
+        /// Hide points within given distance (in meters) of start/end of activity.
+        #[arg(short, long, default_value = "200.0")]
+        trim: f64,
     },
 
     /// Render a tile
@@ -103,12 +107,12 @@ fn run() -> Result<()> {
 
     // TODO: pull out into separate function
     match opts.cmd {
-        Commands::Import { path, create } => {
+        Commands::Import { path, create, trim } => {
             if create {
                 Database::delete(&opts.global.db_path)?;
             }
 
-            ingest_dir(&path, &Database::new(&opts.global.db_path)?)?;
+            ingest_dir(&path, &Database::new(&opts.global.db_path)?, trim)?;
         }
 
         Commands::Tile {
@@ -193,7 +197,7 @@ pub fn render_tile(
     Ok(raster)
 }
 
-fn ingest_dir(p: &Path, db: &Database) -> Result<()> {
+fn ingest_dir(p: &Path, db: &Database, trim_dist: f64) -> Result<()> {
     let conn = db.connection()?;
 
     // Skip any files that are already in the database.
@@ -252,7 +256,7 @@ fn ingest_dir(p: &Path, db: &Database) -> Result<()> {
 
                 // TODO: split out into separate function
                 // TODO: encode multiline strings together in same blob?
-                let tiles = activity.clip_to_tiles(&db.meta.zoom_levels);
+                let tiles = activity.clip_to_tiles(&db.meta.zoom_levels, trim_dist);
                 for (tile, line) in tiles.iter() {
                     // TODO: can consider storing post rasterization for faster renders.
                     let simplified = activity::simplify(&line.0, 4.0);

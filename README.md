@@ -17,7 +17,6 @@ open http://localhost:8080
 
 ## TODO
 
-- Trimming initial start/end of activity (distance, privacy zones, etc.)
 - Dynamic filtering for web endpoint (activity based, etc.)
 - MVT endpoint
 - TCX support
@@ -25,5 +24,5 @@ open http://localhost:8080
 - Import single file
 - Pull additional metadata from Strava's `activities.csv` file.
 - Render CLI based on bounding box rather than individual tile
-- Arbitrary filters on CLI (unsafe interpolation)
+- Arbitrary filters on CLI (unsafe SQL interpolation)
 - Better logging / debug output split.

@@ -48,7 +48,7 @@ impl<'de> serde::de::Visitor<'de> for Visitor<Option<Date>> {
     where
         D: Deserializer<'de>,
     {
-        Ok(d.deserialize_str(self)?)
+        d.deserialize_str(self)
     }
 
     fn visit_unit<E>(self) -> Result<Self::Value, E>
