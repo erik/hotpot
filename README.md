@@ -1,6 +1,8 @@
 # hotpot
 
-Heatmap tile server.
+A zippy little heatmap tile server.
+
+![](https://user-images.githubusercontent.com/188935/273125894-7f76eabb-585b-405d-af16-a93df2d85cb4.png)
 
 ## Usage
 
