@@ -5,48 +5,137 @@
     <meta charset="UTF-8">
     <title>Heatmap Viewer</title>
     <script src="https://unpkg.com/maplibre-gl/dist/maplibre-gl.js"></script>
-    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl/dist/maplibre-gl.css" />
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl/dist/maplibre-gl.css"/>
 </head>
 
 <body>
-    <div id="map" style="width: 100vw; height: 100vh;"></div>
+<div id="map" style="width: 100vw; height: 100vh;"></div>
+<div id="map-overlay">
+    <h1>Settings</h1>
+    <div>
+        <label for="after">After</label>
+        <input key="after" type="date" name="after" id="after" value=""/>
+    </div>
 
-    <style type="text/css">
-        body {
-            margin: 0;
-            padding: 0;
-        }
-    </style>
+    <div>
+        <label for="before">Before</label>
+        <input key="before" type="date" name="before" id="before" value=""/>
+    </div>
 
-    <script>
-        map = new maplibregl.Map({
-            container: 'map',
-            style: 'https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json',
-            center: [0, 0],
+    <div>
+        <label for="color">Theme</label>
+        <select key="color" name="color">
+            <option value="default">Pinkish</option>
+            <option value="orange">Orange</option>
+            <option value="blue-red">Blue/Red</option>
+            <option value="red">Red</option>
+        </select>
+    </div>
+
+    <div>
+        <label for="size">Size</label>
+        <select key="size" name="size">
+            <option value="256">256</option>
+            <option value="512">512</option>
+        </select>
+    </div>
+</div>
+
+<style>
+    body {
+        margin: 0;
+        padding: 0;
+        font-family: system-ui, sans-serif;
+        box-sizing: border-box;
+    }
+
+    h1 {
+        font-size: 1em;
+        text-align: center;
+    }
+
+    label {
+        display: inline-block;
+        width: 40%;
+    }
+
+    select, input {
+        width: 50%;
+        font-family: system-ui, sans-serif;
+        border-radius: 10%;
+    }
+
+    #map-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        padding: 1em;
+        background-color: rgba(0, 0, 0, 0.5);
+        color: white;
+    }
+
+    #map-overlay > div {
+        width: 200px;
+    }
+
+    #map-overlay > div + div {
+        margin: 0.5em 0;
+    }
+</style>
+
+<script>
+    document.querySelectorAll('#map-overlay [key]').forEach(function (el) {
+        el.addEventListener('change', function (e) {
+            options[e.target.getAttribute('key')] = e.target.value;
+            updateMapOptions();
         });
+    });
 
-        map.on('load', function () {
-            map.addSource('hotpot', {
+    map = new maplibregl.Map({
+        container: 'map',
+        style: 'https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json',
+        center: [0, 0],
+        hash: true,
+    });
+
+    options = {
+        color: 'default',
+        before: null,
+        after: null,
+        size: '256',
+    };
+
+    function updateMapOptions() {
+        if (map.isSourceLoaded('hotpot')) {
+            map.removeLayer('hotpot');
+            map.removeSource('hotpot');
+        }
+
+        let qs = [
+            options.color && `color=${options.color}`,
+            options.before && `before=${options.before}`,
+            options.after && `after=${options.after}`,
+        ].filter(Boolean).join('&');
+
+        map
+            .addSource('hotpot', {
                 type: 'raster',
-                tiles: [
-                    '/tile/{z}/{x}/{y}' + window.location.search,
-                ],
-                tileSize: 512,
-                minzoom: 0,
-                maxzoom: 16,
-
-            });
-
-            map.addLayer({
+                tiles: ['/tile/{z}/{x}/{y}?' + qs],
+                tileSize: +options.size,
+                minZoom: 0,
+                maxZoom: 16,
+            })
+            .addLayer({
                 id: 'hotpot',
                 type: 'raster',
                 source: 'hotpot',
-                minzoom: 0,
+                minZoom: 0,
             });
-        });
+    }
 
-        map.addControl(new maplibregl.NavigationControl());
-    </script>
+    map.on('load', updateMapOptions);
+    map.addControl(new maplibregl.NavigationControl());
+</script>
 </body>
 
 </html>
