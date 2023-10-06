@@ -26,3 +26,6 @@ open http://localhost:8080
 - Render CLI based on bounding box rather than individual tile
 - Arbitrary filters on CLI (unsafe SQL interpolation)
 - Better logging / debug output split.
+- Strip noisy points from GPX files (e.g. inside buildings, etc.)
+- Try varying gradient stops based on zoom level
+- CORS, caching config for web server

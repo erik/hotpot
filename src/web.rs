@@ -1,19 +1,24 @@
 use std::io::Cursor;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::Duration;
 
 use anyhow::Result;
+use axum::body::HttpBody;
 use axum::extract::{Path, Query, State};
-use axum::http::header;
+use axum::http::{header, Method, Request, Uri};
+use axum::middleware::Next;
+use axum::response::Response;
 use axum::{response::IntoResponse, routing::get, Router};
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use serde::Deserialize;
 use time::Date;
 use tokio::runtime::Runtime;
+use tower_http::trace::TraceLayer;
 
 use crate::db::ActivityFilter;
 use crate::db::Database;
+use crate::raster;
 use crate::raster::DEFAULT_GRADIENT;
 use crate::tile::Tile;
 
@@ -24,11 +29,51 @@ pub fn run(db: Database, host: &str, port: u16) -> Result<()> {
     Ok(())
 }
 
+struct RequestData {
+    method: Method,
+    uri: Uri,
+}
+
+async fn store_request_data<B>(req: Request<B>, next: Next<B>) -> Response {
+    let data = RequestData {
+        method: req.method().clone(),
+        uri: req.uri().clone(),
+    };
+
+    let mut res = next.run(req).await;
+    res.extensions_mut().insert(data);
+
+    res
+}
+
+fn trace_response(res: &Response, latency: Duration, _span: &tracing::Span) {
+    let data = res.extensions().get::<RequestData>().unwrap();
+
+    tracing::info!(
+        status = %res.status().as_u16(),
+        method = %data.method,
+        uri = %data.uri,
+        latency = ?latency,
+        size = res.size_hint().exact(),
+        "response"
+    );
+}
+
 async fn run_async(db: Database, host: &str, port: u16) -> Result<()> {
+    tracing_subscriber::fmt()
+        .compact()
+        .with_max_level(tracing::Level::INFO)
+        .init();
+
     // TODO: MVT endpoint?
     let app = Router::new()
         .route("/", get(index))
         .route("/tile/:z/:x/:y", get(render_tile))
+        .layer(axum::middleware::from_fn(store_request_data))
+        .layer(
+            // TODO: .on_failure(trace_failure)
+            TraceLayer::new_for_http().on_response(trace_response),
+        )
         .with_state(Arc::new(db));
 
     let host = host.parse::<IpAddr>()?;
