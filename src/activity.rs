@@ -225,7 +225,13 @@ pub fn read_file(p: &Path) -> Option<RawActivity> {
     match get_file_type(file_name.to_str()?) {
         Some((file_type, comp)) => {
             let file = File::open(p).expect("open file");
-            read(file, file_type, comp).expect("read file")
+            match read(file, file_type, comp) {
+                Ok(activity) => activity,
+                Err(e) => {
+                    println!("Error reading {:?}: {:?}", p, e);
+                    None
+                }
+            }
         }
 
         _ => None,

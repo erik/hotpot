@@ -12,47 +12,38 @@ use time::{Date, OffsetDateTime};
 
 use crate::{DEFAULT_TILE_EXTENT, DEFAULT_ZOOM_LEVELS};
 
-// TODO: migrations are a complication, just use a single schema file
-const MIGRATIONS: [&str; 2] = [
-    "-- Create migrations table
-CREATE TABLE IF NOT EXISTS migrations (
-    id         INTEGER PRIMARY KEY,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);",
-    "-- Initial schema
-CREATE TABLE metadata (
-      key   TEXT NOT NULL
+const SCHEMA: &str = "\
+CREATE TABLE IF NOT EXISTS metadata (
+      key   TEXT NOT NULL PRIMARY KEY
     , value TEXT NOT NULL
 );
 
-CREATE TABLE activities (
+CREATE TABLE IF NOT EXISTS activities (
       id            INTEGER PRIMARY KEY
-    -- TODO: maybe do a hash of contents?
-    , file          TEXT NOT NULL
+    , file          TEXT    NOT NULL
     , title         TEXT
     , start_time    INTEGER
     , duration_secs INTEGER
-    , dist_meters   REAL NOT NULL
+    , dist_meters   REAL
 
-    -- TODO:
+    -- TODO: other metadata for filtering?
     -- , kind     TEXT -- run, bike, etc
-    -- , polyline TEXT
 );
 
-CREATE UNIQUE INDEX activities_file ON activities (file);
+CREATE UNIQUE INDEX IF NOT EXISTS activities_file ON activities (file);
 
-CREATE TABLE activity_tiles (
+CREATE TABLE IF NOT EXISTS activity_tiles (
       id          INTEGER PRIMARY KEY
     , activity_id INTEGER NOT NULL
     , z           INTEGER NOT NULL
     , x           INTEGER NOT NULL
     , y           INTEGER NOT NULL
-    , coords      BLOB NOT NULL
+    , coords      BLOB    NOT NULL
 );
 
-CREATE INDEX activity_tiles_activity_id ON activity_tiles (activity_id);
-CREATE INDEX activity_tiles_zxy ON activity_tiles (z, x, y);",
-];
+CREATE INDEX IF NOT EXISTS activity_tiles_activity_id ON activity_tiles (activity_id);
+CREATE INDEX IF NOT EXISTS activity_tiles_zxy ON activity_tiles (z, x, y);
+";
 
 pub struct Database {
     pool: r2d2::Pool<SqliteConnectionManager>,
@@ -87,7 +78,7 @@ impl Database {
             conn.pragma_update(None, k, v)?;
         }
 
-        apply_migrations(&mut conn)?;
+        apply_schema(&mut conn)?;
 
         // TODO: need to write metadata if it doesn't exist (and support updates)
         let meta = read_metadata(&mut conn)?;
@@ -113,27 +104,10 @@ impl Database {
     }
 }
 
-fn apply_migrations(conn: &mut rusqlite::Connection) -> Result<()> {
-    let cur_migration: usize = conn
-        .query_row("SELECT max(id) FROM migrations", [], |row| row.get(0))
-        .unwrap_or(0);
-
-    if cur_migration == MIGRATIONS.len() {
-        return Ok(());
-    }
-
-    println!("Applying migrations");
+fn apply_schema(conn: &mut rusqlite::Connection) -> Result<()> {
     let tx = conn.transaction()?;
-    for (i, m) in MIGRATIONS[cur_migration..].iter().enumerate() {
-        println!("\t{}", cur_migration + i + 1);
-        tx.execute_batch(m)?;
-        tx.execute(
-            "INSERT INTO migrations (id) VALUES (?)",
-            [cur_migration + i + 1],
-        )?;
-    }
+    tx.execute_batch(SCHEMA)?;
     tx.commit()?;
-    println!("Done.");
 
     Ok(())
 }
