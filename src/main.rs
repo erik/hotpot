@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::fs::File;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -7,13 +8,12 @@ use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use image::RgbaImage;
 use rayon::prelude::*;
-use rusqlite::params;
 use time::Date;
 use walkdir::WalkDir;
 
 use db::ActivityFilter;
 
-use crate::db::{encode_line, Database};
+use crate::db::Database;
 use crate::raster::DEFAULT_GRADIENT;
 use crate::tile::Tile;
 
@@ -189,46 +189,12 @@ fn ingest_dir(p: &Path, db: &Database, trim_dist: f64) -> Result<()> {
         .for_each_init(
             || db.shared_pool(),
             |pool, (path, activity)| {
-                let conn = pool.get().expect("db connection pool timed out");
+                print!("\r\x1b[2KReading {:?}...", path);
+                std::io::stdout().flush().unwrap();
 
-                let mut insert_coords = conn
-                    .prepare_cached(
-                        "\
-                        INSERT INTO activity_tiles (activity_id, z, x, y, coords) \
-                        VALUES (?, ?, ?, ?, ?)",
-                    )
-                    .unwrap();
-
-                conn.execute(
-                    "\
-                    INSERT INTO activities (file, title, start_time, duration_secs, dist_meters)\
-                    VALUES (?, ?, ?, ?, ?)",
-                    params![
-                        path.to_str().unwrap(),
-                        activity.title,
-                        activity.start_time,
-                        activity.duration_secs,
-                        activity.length(),
-                    ],
-                )
-                .expect("insert activity");
-
-                let activity_id = conn.last_insert_rowid();
-
-                // TODO: split out into separate function
-                // TODO: encode multiline strings together in same blob?
-                let tiles = activity.clip_to_tiles(&db.meta.zoom_levels, trim_dist);
-                for (tile, line) in tiles.iter() {
-                    // TODO: can consider storing post rasterization for faster renders.
-                    let simplified = activity::simplify(&line.0, 4.0);
-                    let encoded = encode_line(&simplified).expect("encode line");
-
-                    insert_coords
-                        .insert(params![activity_id, tile.z, tile.x, tile.y, encoded])
-                        .expect("insert coords");
-                }
-
-                print!(".");
+                let mut conn = pool.get().expect("db connection pool timed out");
+                activity::upsert(&mut conn, path.to_str().unwrap(), &activity, trim_dist)
+                    .expect("insert activity");
             },
         );
 

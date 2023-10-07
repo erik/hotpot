@@ -4,9 +4,9 @@ use image::{Rgba, RgbaImage};
 use once_cell::sync::Lazy;
 use rusqlite::{params, ToSql};
 
-use crate::db::{ActivityFilter, Database, decode_line};
-use crate::DEFAULT_TILE_EXTENT;
+use crate::db::{decode_line, ActivityFilter, Database};
 use crate::tile::{Tile, TileBounds};
+use crate::DEFAULT_TILE_EXTENT;
 
 pub static DEFAULT_GRADIENT: Lazy<LinearGradient> = Lazy::new(|| {
     LinearGradient::from_stops(&[
@@ -215,18 +215,16 @@ fn prepare_query_activities<'a>(
     let filter_clause = filter.to_query(&mut params);
 
     // TODO: don't always need to join
-    let stmt = conn.prepare(
-        &format!("SELECT x, y, z, coords \
+    let stmt = conn.prepare(&format!(
+        "SELECT x, y, z, coords \
                       FROM activity_tiles \
                       JOIN activities ON activities.id = activity_tiles.activity_id \
                       WHERE z = ? \
                           AND (x >= ? AND x < ?) \
                           AND (y >= ? AND y < ?) \
                           AND {};",
-                 filter_clause,
-        )
-    )?;
+        filter_clause,
+    ))?;
 
     Ok((stmt, params))
 }
-

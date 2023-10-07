@@ -5,11 +5,13 @@ use std::time::Duration;
 
 use anyhow::Result;
 use axum::body::HttpBody;
-use axum::extract::{Path, Query, State};
-use axum::http::{header, Method, Request, Uri};
+use axum::extract::{Multipart, Path, Query, State};
+use axum::headers::authorization::Bearer;
+use axum::http::{header, Method, Request, StatusCode, Uri};
 use axum::middleware::Next;
-use axum::response::Response;
-use axum::{response::IntoResponse, routing::get, Router};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Router, TypedHeader};
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use serde::Deserialize;
 use time::Date;
@@ -18,9 +20,9 @@ use tower_http::trace::TraceLayer;
 
 use crate::db::ActivityFilter;
 use crate::db::Database;
-use crate::raster;
 use crate::raster::DEFAULT_GRADIENT;
 use crate::tile::Tile;
+use crate::{activity, raster};
 
 pub fn run(db: Database, host: &str, port: u16) -> Result<()> {
     let rt = Runtime::new()?;
@@ -69,6 +71,8 @@ async fn run_async(db: Database, host: &str, port: u16) -> Result<()> {
     let app = Router::new()
         .route("/", get(index))
         .route("/tile/:z/:x/:y", get(render_tile))
+        // TODO: should be able to disable this
+        .route("/upload", post(upload_activity))
         .layer(axum::middleware::from_fn(store_request_data))
         .layer(
             // TODO: .on_failure(trace_failure)
@@ -96,7 +100,6 @@ async fn index() -> impl IntoResponse {
 struct RenderQueryParams {
     #[serde(default)]
     color: Option<String>,
-
     #[serde(default, with = "crate::date::parse")]
     before: Option<Date>,
     #[serde(default, with = "crate::date::parse")]
@@ -109,14 +112,14 @@ async fn render_tile(
     Query(params): Query<RenderQueryParams>,
 ) -> impl IntoResponse {
     if z > *db.meta.zoom_levels.iter().max().unwrap_or(&0) {
-        return axum::http::StatusCode::NO_CONTENT.into_response();
+        return StatusCode::NO_CONTENT.into_response();
     }
 
     // TODO: this should be supported by CLI as well
     let color = match params.color.as_deref() {
-        Some("blue-red") => &crate::raster::BLUE_RED,
-        Some("red") => &crate::raster::RED,
-        Some("orange") => &crate::raster::ORANGE,
+        Some("blue-red") => &raster::BLUE_RED,
+        Some("red") => &raster::RED,
+        Some("orange") => &raster::ORANGE,
         _ => &DEFAULT_GRADIENT,
     };
 
@@ -142,16 +145,60 @@ async fn render_tile(
                 axum::response::AppendHeaders([
                     (header::CONTENT_TYPE, "image/png"),
                     (header::CACHE_CONTROL, "max-age=3600"),
+                    // TODO: should be configurable.
                     (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
                 ]),
                 bytes,
             )
                 .into_response()
         }
-        Ok(None) => axum::http::StatusCode::NO_CONTENT.into_response(),
+        Ok(None) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => {
             tracing::error!("error rendering tile: {:?}", e);
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
+}
+
+async fn upload_activity(
+    State(db): State<Arc<Database>>,
+    TypedHeader(auth): TypedHeader<axum::headers::Authorization<Bearer>>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    // TODO: real auth
+    if auth.token() != "magic" {
+        return (StatusCode::UNAUTHORIZED, "bad token");
+    }
+
+    while let Some(field) = multipart.next_field().await.unwrap() {
+        if Some("file") != field.name() {
+            continue;
+        }
+
+        let file_name = match field.file_name() {
+            Some(file_name) => file_name.to_string(),
+            None => return (StatusCode::BAD_REQUEST, "no filename"),
+        };
+
+        let Some((kind, comp)) = activity::get_file_type(&file_name) else {
+            return (StatusCode::BAD_REQUEST, "unsupported file type");
+        };
+
+        tracing::info!("uploading {}", file_name);
+
+        // TODO: Should be possible to use a streaming reader here.
+        let bytes = field.bytes().await.unwrap();
+        let reader = Cursor::new(bytes);
+
+        let activity = activity::read(reader, kind, comp).unwrap();
+        if let Some(activity) = activity {
+            let mut conn = db.connection().unwrap();
+            let id = format!("upload:{}", file_name);
+            let trim_dist = 0.0;
+
+            activity::upsert(&mut conn, &id, &activity, trim_dist).unwrap();
+        }
+    }
+
+    (StatusCode::OK, "added!")
 }

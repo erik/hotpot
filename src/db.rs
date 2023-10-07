@@ -12,6 +12,7 @@ use time::{Date, OffsetDateTime};
 
 use crate::{DEFAULT_TILE_EXTENT, DEFAULT_ZOOM_LEVELS};
 
+// TODO: migrations are a complication, just use a single schema file
 const MIGRATIONS: [&str; 2] = [
     "-- Create migrations table
 CREATE TABLE IF NOT EXISTS migrations (
@@ -37,6 +38,8 @@ CREATE TABLE activities (
     -- , kind     TEXT -- run, bike, etc
     -- , polyline TEXT
 );
+
+CREATE UNIQUE INDEX activities_file ON activities (file);
 
 CREATE TABLE activity_tiles (
       id          INTEGER PRIMARY KEY

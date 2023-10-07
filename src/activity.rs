@@ -1,20 +1,21 @@
 use std::collections::HashMap;
-use std::ffi::OsStr;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufReader, Read};
 use std::path::Path;
 
+use anyhow::Result;
 use fitparser::de::{from_reader_with_options, DecodeOption};
 use fitparser::profile::MesgNum;
 use fitparser::Value;
 use flate2::read::GzDecoder;
 use geo::{EuclideanDistance, HaversineLength};
 use geo_types::{Coord, LineString, MultiLineString, Point};
+use rusqlite::params;
 use time::OffsetDateTime;
 
-use crate::db::SqlDateTime;
+use crate::db::{encode_line, SqlDateTime};
 use crate::tile::{BBox, LngLat, Tile, WebMercator};
-use crate::DEFAULT_TILE_EXTENT;
+use crate::{DEFAULT_TILE_EXTENT, DEFAULT_ZOOM_LEVELS};
 
 // TODO: not happy with the ergonomics of this.
 struct TileClipper {
@@ -190,29 +191,48 @@ impl RawActivity {
     }
 }
 
+pub enum FileType {
+    Gpx,
+    Fit,
+    Tcx,
+}
+
+pub enum CompressionType {
+    None,
+    Gzip,
+}
+
+pub fn read<R>(rdr: R, kind: FileType, comp: CompressionType) -> Result<Option<RawActivity>>
+where
+    R: Read + 'static,
+{
+    let mut reader: BufReader<Box<dyn Read>> = BufReader::new(match comp {
+        CompressionType::None => Box::new(rdr),
+        CompressionType::Gzip => Box::new(GzDecoder::new(rdr)),
+    });
+
+    match kind {
+        FileType::Gpx => parse_gpx(&mut reader),
+        FileType::Fit => parse_fit(&mut reader),
+        // TODO: implement TCX
+        FileType::Tcx => Ok(None),
+    }
+}
+
 // TODO: should return a Result
 pub fn read_file(p: &Path) -> Option<RawActivity> {
-    match get_extensions(p) {
-        Some(("gpx", compressed)) => {
-            let mut reader = open_reader(p, compressed);
-            parse_gpx(&mut reader)
-        }
-
-        Some(("fit", compressed)) => {
-            let mut reader = open_reader(p, compressed);
-            parse_fit(&mut reader)
-        }
-
-        Some(("tcx", _compressed)) => {
-            // TODO: parse tcx
-            None
+    let file_name = p.file_name()?;
+    match get_file_type(file_name.to_str()?) {
+        Some((file_type, comp)) => {
+            let file = File::open(p).expect("open file");
+            read(file, file_type, comp).expect("read file")
         }
 
         _ => None,
     }
 }
 
-fn parse_fit<R: Read>(r: &mut R) -> Option<RawActivity> {
+fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
     const SCALE_FACTOR: f64 = (1u64 << 32) as f64 / 360.0;
 
     let opts = [
@@ -223,7 +243,7 @@ fn parse_fit<R: Read>(r: &mut R) -> Option<RawActivity> {
 
     let (mut start_time, mut duration_secs) = (None, None);
     let mut points = vec![];
-    for data in from_reader_with_options(r, &opts).unwrap() {
+    for data in from_reader_with_options(r, &opts)? {
         match data.kind() {
             MesgNum::FileId => {
                 for f in data.fields() {
@@ -231,7 +251,7 @@ fn parse_fit<R: Read>(r: &mut R) -> Option<RawActivity> {
                     // TODO: not an exhaustive check
                     if f.name() == "manufacturer" {
                         match f.value() {
-                            Value::String(val) if val.as_str() == "zwift" => return None,
+                            Value::String(val) if val.as_str() == "zwift" => return Ok(None),
                             _ => {}
                         }
                     }
@@ -246,7 +266,7 @@ fn parse_fit<R: Read>(r: &mut R) -> Option<RawActivity> {
                         "position_lat" => lat = f.value().try_into().ok(),
                         "position_long" => lng = f.value().try_into().ok(),
                         "timestamp" => {
-                            let ts: i64 = f.value().try_into().unwrap();
+                            let ts: i64 = f.value().try_into()?;
 
                             match start_time {
                                 None => start_time = Some(ts),
@@ -267,25 +287,27 @@ fn parse_fit<R: Read>(r: &mut R) -> Option<RawActivity> {
     }
 
     if points.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     let line = points.into_iter().collect::<LineString>();
-    Some(RawActivity {
+    Ok(Some(RawActivity {
         duration_secs,
         title: None,
         start_time: start_time
             .map(|ts| OffsetDateTime::from_unix_timestamp(ts).unwrap())
             .map(SqlDateTime),
         tracks: MultiLineString::from(line),
-    })
+    }))
 }
 
-fn parse_gpx<R: Read>(reader: &mut R) -> Option<RawActivity> {
-    let gpx = gpx::read(reader).ok()?;
+fn parse_gpx<R: Read>(reader: &mut R) -> Result<Option<RawActivity>> {
+    let gpx = gpx::read(reader)?;
 
     // Just take the first track (generally the only one).
-    let track = gpx.tracks.first()?;
+    let Some(track) = gpx.tracks.first() else {
+        return Ok(None);
+    };
 
     let start_time = gpx.metadata.and_then(|m| m.time).map(OffsetDateTime::from);
 
@@ -303,40 +325,76 @@ fn parse_gpx<R: Read>(reader: &mut R) -> Option<RawActivity> {
         .filter(|(start, end)| end > start)
         .map(|(start, end)| end - start);
 
-    Some(RawActivity {
+    Ok(Some(RawActivity {
         duration_secs,
         start_time: start_time.map(SqlDateTime),
         title: track.name.clone(),
         tracks: track.multilinestring(),
-    })
+    }))
 }
 
-/// "foo.bar.gz" -> Some("bar", true)
-/// "foo.bar" -> Some("bar", false)
-/// "foo" -> None
-fn get_extensions(p: &Path) -> Option<(&str, bool)> {
-    let mut exts = p
-        .file_name()
-        .and_then(OsStr::to_str)
-        .map(|f| f.split('.'))?;
+/// Allows us to treat `bar.gpx.gz` the same as `bar.gpx`.
+pub fn get_file_type(file_name: &str) -> Option<(FileType, CompressionType)> {
+    let mut exts = file_name.rsplit('.');
 
-    Some(match exts.next_back()? {
-        "gz" => (exts.next_back()?, true),
-        ext => (ext, false),
-    })
-}
+    let (comp, ext) = match exts.next()? {
+        "gz" => (CompressionType::Gzip, exts.next()?),
+        ext => (CompressionType::None, ext),
+    };
 
-fn open_reader(p: &Path, gzip: bool) -> Box<dyn BufRead> {
-    let file = File::open(p).expect("open file");
-
-    if gzip {
-        Box::new(BufReader::new(GzDecoder::new(file)))
-    } else {
-        Box::new(BufReader::new(file))
+    match ext {
+        "gpx" => Some((FileType::Gpx, comp)),
+        "fit" => Some((FileType::Fit, comp)),
+        "tcx" => Some((FileType::Tcx, comp)),
+        _ => None,
     }
 }
 
-// Ramer–Douglas–Peucker algorithm
+pub fn upsert(
+    conn: &mut rusqlite::Connection,
+    name: &str,
+    activity: &RawActivity,
+    trim_dist: f64,
+) -> Result<i64> {
+    let mut insert_coords = conn.prepare_cached(
+        "\
+        INSERT INTO activity_tiles (activity_id, z, x, y, coords) \
+        VALUES (?, ?, ?, ?, ?)",
+    )?;
+
+    // TODO: The `OR REPLACE` works for activities, but we'd still end up inserting the
+    //   tiles again.
+    conn.execute(
+        "\
+        INSERT OR REPLACE \
+        INTO activities (file, title, start_time, duration_secs, dist_meters)\
+        VALUES (?, ?, ?, ?, ?)",
+        params![
+            name,
+            activity.title,
+            activity.start_time,
+            activity.duration_secs,
+            activity.length(),
+        ],
+    )?;
+
+    let activity_id = conn.last_insert_rowid();
+
+    // TODO: encode multiline strings together in same blob?
+    let tiles = activity.clip_to_tiles(&DEFAULT_ZOOM_LEVELS, trim_dist);
+    for (tile, line) in tiles.iter() {
+        // TODO: can consider storing post rasterization for faster renders.
+        let simplified = simplify(&line.0, 4.0);
+        let encoded = encode_line(&simplified)?;
+
+        insert_coords.insert(params![activity_id, tile.z, tile.x, tile.y, encoded])?;
+    }
+
+    Ok(activity_id)
+}
+
+// TODO: just reuse the thing from `geo`
+/// Ramer–Douglas–Peucker algorithm
 pub fn simplify(line: &[Coord<u16>], epsilon: f32) -> Vec<Coord<u16>> {
     if line.len() < 3 {
         return line.to_vec();
