@@ -21,6 +21,7 @@ mod activity;
 mod date;
 mod db;
 mod raster;
+mod simplify;
 mod tile;
 mod web;
 
@@ -150,7 +151,7 @@ fn run() -> Result<()> {
         }
 
         Commands::Serve { host, port } => {
-            let db = Database::open(&opts.global.db_path)?;
+            let db = Database::new(&opts.global.db_path)?;
             web::run(db, &host, port)?;
         }
     };

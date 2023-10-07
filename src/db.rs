@@ -104,6 +104,8 @@ impl Database {
     }
 }
 
+// NOTE: we can use PRAGMA.user_version to track schema versions
+// https://www.sqlite.org/pragma.html#pragma_user_version
 fn apply_schema(conn: &mut rusqlite::Connection) -> Result<()> {
     let tx = conn.transaction()?;
     tx.execute_batch(SCHEMA)?;
