@@ -124,7 +124,6 @@ async fn render_tile(
     };
 
     let filter = ActivityFilter::new(params.before, params.after);
-
     let tile = Tile::new(x, y, z);
 
     match raster::render_tile(tile, color, 512, &filter, &db) {
@@ -176,7 +175,7 @@ async fn upload_activity(
         }
 
         let file_name = match field.file_name() {
-            Some(file_name) => file_name.to_string(),
+            Some(f) => f.to_string(),
             None => return (StatusCode::BAD_REQUEST, "no filename"),
         };
 
@@ -194,6 +193,8 @@ async fn upload_activity(
         if let Some(activity) = activity {
             let mut conn = db.connection().unwrap();
             let id = format!("upload:{}", file_name);
+
+            // TODO: where does this come from?
             let trim_dist = 0.0;
 
             activity::upsert(&mut conn, &id, &activity, trim_dist).unwrap();

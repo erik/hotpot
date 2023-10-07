@@ -368,9 +368,7 @@ pub fn upsert(
         VALUES (?, ?, ?, ?, ?)",
     )?;
 
-    // TODO: The `OR REPLACE` works for activities, but we'd still end up inserting the
-    //   tiles again.
-    conn.execute(
+    let num_rows = conn.execute(
         "\
         INSERT OR REPLACE \
         INTO activities (file, title, start_time, duration_secs, dist_meters)\
@@ -385,6 +383,15 @@ pub fn upsert(
     )?;
 
     let activity_id = conn.last_insert_rowid();
+
+    // If we've affected more than one row, we've replaced an existing one... so we need to
+    // delete the existing tiles.
+    if num_rows != 1 {
+        conn.execute(
+            "DELETE FROM activity_tiles WHERE activity_id = ?",
+            params![activity_id],
+        )?;
+    }
 
     let tiles = activity.clip_to_tiles(&DEFAULT_ZOOM_LEVELS, trim_dist);
     for (tile, line) in tiles.iter() {
