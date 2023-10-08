@@ -22,7 +22,6 @@ open http://localhost:8080
 - Dynamic filtering for web endpoint (activity based, etc.)
 - MVT endpoint
 - TCX support
-- Webhook for new activities from Strava
 - Import single file
 - Pull additional metadata from Strava's `activities.csv` file.
 - Render CLI based on bounding box rather than individual tile
@@ -30,4 +29,5 @@ open http://localhost:8080
 - Better logging / debug output split.
 - Strip noisy points from GPX files (e.g. inside buildings, etc.)
 - Try varying gradient stops based on zoom level
+- Dynamic gradients (as query param)
 - CORS, caching config for web server

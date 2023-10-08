@@ -1,5 +1,5 @@
 use std::io::Cursor;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,12 +11,13 @@ use axum::http::{header, Method, Request, StatusCode, Uri};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::{Router, TypedHeader};
+use axum::{Router, Server, TypedHeader};
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use serde::Deserialize;
 use time::Date;
 use tokio::runtime::Runtime;
 use tower_http::trace::TraceLayer;
+use tracing::log::info;
 
 use crate::db::ActivityFilter;
 use crate::db::Database;
@@ -26,13 +27,6 @@ use crate::web::strava::StravaAuth;
 use crate::{activity, raster};
 
 mod strava;
-
-pub fn run(db: Database, host: &str, port: u16, strava_auth: bool) -> Result<()> {
-    let rt = Runtime::new()?;
-
-    rt.block_on(run_async(db, host, port, strava_auth))?;
-    Ok(())
-}
 
 struct RequestData {
     method: Method,
@@ -70,37 +64,71 @@ pub struct AppState {
     strava: StravaAuth,
 }
 
-async fn run_async(db: Database, host: &str, port: u16, with_strava_login: bool) -> Result<()> {
+pub fn run_blocking(addr: SocketAddr, db: Database, routes: RouteConfig) -> Result<()> {
+    let rt = Runtime::new()?;
+    let fut = run_async(addr, db, routes);
+    rt.block_on(fut)?;
+    Ok(())
+}
+
+pub struct RouteConfig {
+    pub tiles: bool,
+    pub strava_webhook: bool,
+    pub strava_auth: bool,
+    pub allow_upload: bool,
+}
+
+impl RouteConfig {
+    fn build<S>(&self, db: Database) -> Result<Router<S>> {
+        // TODO: MVT endpoint?
+        let mut router = Router::new()
+            .layer(axum::middleware::from_fn(store_request_data))
+            // TODO: .on_failure(trace_failure)
+            .layer(TraceLayer::new_for_http().on_response(trace_response));
+
+        if self.tiles {
+            router = router
+                .route("/", get(index))
+                .route("/tile/:z/:x/:y", get(render_tile));
+        }
+
+        if self.strava_webhook {
+            router = router.nest("/strava", strava::webhook_routes());
+        }
+
+        if self.strava_auth {
+            router = router.nest("/strava", strava::auth_routes());
+        }
+
+        if self.allow_upload {
+            router = router.route("/upload", post(upload_activity));
+        }
+
+        let strava = if self.strava_webhook || self.strava_auth {
+            StravaAuth::from_env()?
+        } else {
+            // TODO: possibly better better as an Option
+            StravaAuth::unset()
+        };
+
+        Ok(router.with_state(AppState {
+            strava,
+            db: Arc::new(db),
+        }))
+    }
+}
+
+async fn run_async(addr: SocketAddr, db: Database, routes: RouteConfig) -> Result<()> {
     tracing_subscriber::fmt()
         .compact()
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    let app_state = AppState {
-        db: Arc::new(db),
-        strava: StravaAuth::from_env()?,
-    };
+    info!("Listening on http://{}", addr);
 
-    // TODO: MVT endpoint?
-    let app = Router::new()
-        .route("/", get(index))
-        .route("/tile/:z/:x/:y", get(render_tile))
-        // TODO: should be able to disable this
-        .nest("/strava", strava::routes(with_strava_login))
-        .route("/upload", post(upload_activity))
-        .layer(axum::middleware::from_fn(store_request_data))
-        .layer(
-            // TODO: .on_failure(trace_failure)
-            TraceLayer::new_for_http().on_response(trace_response),
-        )
-        .with_state(app_state);
-
-    let host = host.parse::<IpAddr>()?;
-    let addr = SocketAddr::from((host, port));
-
-    println!("Listening on http://{}", addr);
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
+    let router = routes.build(db)?;
+    Server::bind(&addr)
+        .serve(router.into_make_service())
         .await?;
 
     Ok(())

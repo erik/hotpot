@@ -70,9 +70,6 @@ enum Commands {
     },
 
     /// Start a raster tile server
-    // TODO: add options to:
-    //   - disable uploads
-    //   - disable strava webhook
     Serve {
         /// Host to listen on
         #[arg(short = 'H', long, default_value = "127.0.0.1")]
@@ -82,12 +79,24 @@ enum Commands {
         #[arg(short, long, default_value = "8080")]
         port: u16,
 
-        // TODO: maybe this is a separate command? Always meant to be for one-off use
-        //  e.g. `hotpot strava login --url http://localhost:8080`
-        //       `hotpot strava webhook --url http://localhost:8080`
-        /// Enable Strava OAuth registration (should be disabled for public servers)
+        /// Allow uploading of activities via `/upload`
         #[arg(long, default_value = "false")]
-        with_strava_auth: bool,
+        allow_upload: bool,
+
+        /// Enable Strava activity webhook (requires authenticating via `strava-auth`)
+        #[arg(long, default_value = "false")]
+        strava_webhook: bool,
+    },
+
+    /// Authenticate with Strava to fetch OAuth tokens for webhook.
+    StravaAuth {
+        /// Host to listen on
+        #[arg(short = 'H', long, default_value = "127.0.0.1")]
+        host: String,
+
+        /// Port to listen on
+        #[arg(short, long, default_value = "8080")]
+        port: u16,
     },
 }
 
@@ -165,10 +174,38 @@ fn run() -> Result<()> {
         Commands::Serve {
             host,
             port,
-            with_strava_auth,
+            allow_upload,
+            strava_webhook,
         } => {
             let db = Database::new(&opts.global.db_path)?;
-            web::run(db, &host, port, with_strava_auth)?;
+            let addr = format!("{}:{}", host, port).parse()?;
+            let routes = web::RouteConfig {
+                strava_webhook,
+                allow_upload,
+                tiles: true,
+                strava_auth: false,
+            };
+
+            web::run_blocking(addr, db, routes)?;
+        }
+
+        Commands::StravaAuth { host, port } => {
+            let db = Database::new(&opts.global.db_path)?;
+            let addr = format!("{}:{}", host, port).parse()?;
+            let routes = web::RouteConfig {
+                strava_auth: true,
+                tiles: false,
+                strava_webhook: false,
+                allow_upload: false,
+            };
+
+            println!(
+                "==============================\
+                \nOpen http://{}/strava/auth in your browser.\
+                \n==============================",
+                addr
+            );
+            web::run_blocking(addr, db, routes)?;
         }
     };
 

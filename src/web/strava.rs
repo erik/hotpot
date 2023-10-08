@@ -5,7 +5,9 @@ use axum::response::{IntoResponse, Redirect};
 use axum::routing::{get, post};
 use axum::{headers, Json, Router, TypedHeader};
 use geo_types::MultiLineString;
+use reqwest::Response;
 use rusqlite::params;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -84,11 +86,29 @@ impl StravaAuth {
             webhook_secret,
         })
     }
+
+    pub fn unset() -> StravaAuth {
+        Self {
+            client_id: 0,
+            client_secret: String::from("unset"),
+            webhook_secret: String::from("unset"),
+        }
+    }
 }
 
 struct StravaClient<'a> {
     auth: &'a StravaAuth,
     db: &'a Database,
+}
+
+async fn unwrap_response<T: DeserializeOwned>(res: Response) -> Result<T> {
+    if !res.status().is_success() {
+        let status = res.status();
+        let body = res.text().await?;
+        return Err(anyhow!("{}: {}", status, body));
+    }
+
+    Ok(res.json().await?)
 }
 
 impl<'a> StravaClient<'a> {
@@ -106,16 +126,9 @@ impl<'a> StravaClient<'a> {
             .send()
             .await?;
 
-        if !res.status().is_success() {
-            let status = res.status();
-            let body = res.text().await?;
-            return Err(anyhow::anyhow!("{}: {}", status, body));
-        }
-
-        let token = res.json::<AuthTokenWithAthlete>().await?;
+        let token: AuthTokenWithAthlete = unwrap_response(res).await?;
 
         self.store_token(token.athlete.id, &token.token)?;
-        println!("got a token! {:#?}", token.token);
         Ok(token.token)
     }
     async fn get_activity(&self, athlete_id: u64, activity_id: u64) -> Result<SummaryActivity> {
@@ -131,14 +144,7 @@ impl<'a> StravaClient<'a> {
             .send()
             .await?;
 
-        if !res.status().is_success() {
-            let status = res.status();
-            let body = res.text().await?;
-            return Err(anyhow::anyhow!("{}: {}", status, body));
-        }
-
-        let activity = res.json::<SummaryActivity>().await?;
-
+        let activity: SummaryActivity = unwrap_response(res).await?;
         Ok(activity)
     }
 
@@ -211,21 +217,16 @@ impl<'a> StravaClient<'a> {
     }
 }
 
-pub fn routes(with_login: bool) -> Router<AppState> {
-    let router = Router::new()
+pub fn webhook_routes() -> Router<AppState> {
+    Router::new()
         .route("/webhook", get(confirm_webhook))
-        .route("/webhook", post(receive_webhook));
+        .route("/webhook", post(receive_webhook))
+}
 
-    // TODO: messy, let's split this out
-    if with_login {
-        println!("To auth with Strava, visit: http://127.0.0.1:8080/strava/auth");
-
-        router
-            .route("/auth", get(auth_redirect))
-            .route("/auth/exchange_token", get(exchange_token))
-    } else {
-        router
-    }
+pub fn auth_routes() -> Router<AppState> {
+    Router::new()
+        .route("/auth", get(auth_redirect))
+        .route("/auth/exchange_token", get(exchange_token))
 }
 
 #[derive(Deserialize)]
@@ -258,13 +259,36 @@ async fn exchange_token(
         db: &db,
     };
 
-    match client.exchange_token(&params.code).await {
-        Ok(_) => (StatusCode::OK, "OK"),
-        Err(e) => {
-            tracing::error!("error exchanging token: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "error exchanging token")
-        }
+    if let Err(e) = client.exchange_token(&params.code).await {
+        tracing::error!("failed to exchange token: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, "error exchanging token").into_response();
     }
+
+    (
+        StatusCode::OK,
+        format!(
+            "Successfully authenticated with Strava.
+
+Next, make sure the webhook is set up to be called for new activities:
+
+    curl https://www.strava.com/api/v3/push_subscriptions \\
+         -F \"client_id={0}\" \\
+         -F \"client_secret={1}\" \\
+         -F \"callback_url=https://[example.com]/strava/webhook\" \\
+         -F \"verify_token={2}\"
+
+Confirm the webhook was set up correctly with:
+
+    curl --get https://www.strava.com/api/v3/push_subscriptions \\
+         -F \"client_id={0}\" \\
+         -F \"client_secret={1}\"
+
+More information: https://developers.strava.com/docs/getting-started
+",
+            strava.client_id, strava.client_secret, strava.webhook_secret,
+        ),
+    )
+        .into_response()
 }
 
 #[derive(Debug, Deserialize)]
