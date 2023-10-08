@@ -43,6 +43,13 @@ CREATE TABLE IF NOT EXISTS activity_tiles (
 
 CREATE INDEX IF NOT EXISTS activity_tiles_activity_id ON activity_tiles (activity_id);
 CREATE INDEX IF NOT EXISTS activity_tiles_zxy ON activity_tiles (z, x, y);
+
+CREATE TABLE IF NOT EXISTS strava_tokens (
+      athlete_id    INTEGER PRIMARY KEY
+    , access_token  TEXT    NOT NULL
+    , refresh_token TEXT    NOT NULL
+    , expires_at    INTEGER NOT NULL
+);
 ";
 
 pub struct Database {

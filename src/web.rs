@@ -22,12 +22,15 @@ use crate::db::ActivityFilter;
 use crate::db::Database;
 use crate::raster::DEFAULT_GRADIENT;
 use crate::tile::Tile;
+use crate::web::strava::StravaAuth;
 use crate::{activity, raster};
 
-pub fn run(db: Database, host: &str, port: u16) -> Result<()> {
+mod strava;
+
+pub fn run(db: Database, host: &str, port: u16, strava_auth: bool) -> Result<()> {
     let rt = Runtime::new()?;
 
-    rt.block_on(run_async(db, host, port))?;
+    rt.block_on(run_async(db, host, port, strava_auth))?;
     Ok(())
 }
 
@@ -61,24 +64,36 @@ fn trace_response(res: &Response, latency: Duration, _span: &tracing::Span) {
     );
 }
 
-async fn run_async(db: Database, host: &str, port: u16) -> Result<()> {
+#[derive(Clone)]
+pub struct AppState {
+    db: Arc<Database>,
+    strava: StravaAuth,
+}
+
+async fn run_async(db: Database, host: &str, port: u16, with_strava_login: bool) -> Result<()> {
     tracing_subscriber::fmt()
         .compact()
         .with_max_level(tracing::Level::INFO)
         .init();
+
+    let app_state = AppState {
+        db: Arc::new(db),
+        strava: StravaAuth::from_env()?,
+    };
 
     // TODO: MVT endpoint?
     let app = Router::new()
         .route("/", get(index))
         .route("/tile/:z/:x/:y", get(render_tile))
         // TODO: should be able to disable this
+        .nest("/strava", strava::routes(with_strava_login))
         .route("/upload", post(upload_activity))
         .layer(axum::middleware::from_fn(store_request_data))
         .layer(
             // TODO: .on_failure(trace_failure)
             TraceLayer::new_for_http().on_response(trace_response),
         )
-        .with_state(Arc::new(db));
+        .with_state(app_state);
 
     let host = host.parse::<IpAddr>()?;
     let addr = SocketAddr::from((host, port));
@@ -107,7 +122,7 @@ struct RenderQueryParams {
 }
 
 async fn render_tile(
-    State(db): State<Arc<Database>>,
+    State(AppState { db, .. }): State<AppState>,
     Path((z, x, y)): Path<(u8, u32, u32)>,
     Query(params): Query<RenderQueryParams>,
 ) -> impl IntoResponse {
@@ -160,7 +175,7 @@ async fn render_tile(
 }
 
 async fn upload_activity(
-    State(db): State<Arc<Database>>,
+    State(AppState { db, .. }): State<AppState>,
     TypedHeader(auth): TypedHeader<axum::headers::Authorization<Bearer>>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {

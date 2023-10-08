@@ -36,6 +36,8 @@ enum Commands {
         /// Path to directory of activities
         path: PathBuf,
 
+        // TODO: switch to a `reset` flag to clear existing activities without
+        //   affecting other metadata?
         /// Reset the database before importing
         #[arg(short, long, default_value = "false")]
         create: bool,
@@ -68,6 +70,9 @@ enum Commands {
     },
 
     /// Start a raster tile server
+    // TODO: add options to:
+    //   - disable uploads
+    //   - disable strava webhook
     Serve {
         /// Host to listen on
         #[arg(short = 'H', long, default_value = "127.0.0.1")]
@@ -76,6 +81,13 @@ enum Commands {
         /// Port to listen on
         #[arg(short, long, default_value = "8080")]
         port: u16,
+
+        // TODO: maybe this is a separate command? Always meant to be for one-off use
+        //  e.g. `hotpot strava login --url http://localhost:8080`
+        //       `hotpot strava webhook --url http://localhost:8080`
+        /// Enable Strava OAuth registration (should be disabled for public servers)
+        #[arg(long, default_value = "false")]
+        with_strava_auth: bool,
     },
 }
 
@@ -150,9 +162,13 @@ fn run() -> Result<()> {
             image.write_to(&mut file, image::ImageOutputFormat::Png)?;
         }
 
-        Commands::Serve { host, port } => {
+        Commands::Serve {
+            host,
+            port,
+            with_strava_auth,
+        } => {
             let db = Database::new(&opts.global.db_path)?;
-            web::run(db, &host, port)?;
+            web::run(db, &host, port, with_strava_auth)?;
         }
     };
 
