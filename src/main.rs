@@ -32,14 +32,12 @@ const DEFAULT_TILE_EXTENT: u32 = 2048;
 enum Commands {
     /// Import GPX and FIT files from a directory
     Import {
-        /// Path to directory of activities
+        /// Path to directory of activities.
         path: PathBuf,
 
-        // TODO: switch to a `reset` flag to clear existing activities without
-        //   affecting other metadata?
-        /// Reset the database before importing
-        #[arg(short, long, default_value = "false")]
-        create: bool,
+        /// Remove all existing activity data before importing.
+        #[arg(long, default_value = "false")]
+        reset: bool,
 
         /// Hide points within given distance (in meters) of start/end of activity.
         #[arg(short, long, default_value = "200.0")]
@@ -137,12 +135,14 @@ fn run() -> Result<()> {
 
     // TODO: pull out into separate function
     match opts.cmd {
-        Commands::Import { path, create, trim } => {
-            if create {
-                Database::delete(&opts.global.db_path)?;
+        Commands::Import { path, reset, trim } => {
+            let db = Database::new(&opts.global.db_path)?;
+
+            if reset {
+                db.reset_activities()?;
             }
 
-            ingest_dir(&path, &Database::new(&opts.global.db_path)?, trim)?;
+            ingest_dir(&path, &db, trim)?;
         }
 
         Commands::Tile {
@@ -261,7 +261,7 @@ fn ingest_dir(p: &Path, db: &Database, trim_dist: f64) -> Result<()> {
         .for_each_init(
             || db.shared_pool(),
             |pool, (path, activity)| {
-                print!("Reading {:?}...", path);
+                print!(".");
 
                 let mut conn = pool.get().expect("db connection pool timed out");
                 activity::upsert(&mut conn, path.to_str().unwrap(), &activity, trim_dist)

@@ -58,23 +58,6 @@ pub struct Database {
 }
 
 impl Database {
-    pub fn delete(path: &Path) -> Result<()> {
-        let db_files = [path, &path.join("-wal"), &path.join("-shm")];
-
-        println!("Removing existing DB.");
-        for p in &db_files {
-            match std::fs::remove_file(p) {
-                Ok(_) => {
-                    println!("\t{}", p.display());
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => panic!("error removing db: {}", e),
-            }
-        }
-
-        Ok(())
-    }
-
     pub fn new(path: &Path) -> Result<Self> {
         let manager = SqliteConnectionManager::file(path);
         let pool = r2d2::Pool::new(manager)?;
@@ -100,6 +83,18 @@ impl Database {
         }
 
         Self::new(path)
+    }
+
+    pub fn reset_activities(&self) -> Result<()> {
+        let conn = self.connection()?;
+
+        let x = conn.execute("DELETE FROM activities", [])?;
+        let y = conn.execute("DELETE FROM activity_tiles", [])?;
+        conn.execute_batch("VACUUM")?;
+
+        println!("Removed existing data: {} activities, {} tiles", x, y);
+
+        Ok(())
     }
 
     pub fn connection(&self) -> Result<r2d2::PooledConnection<SqliteConnectionManager>> {
