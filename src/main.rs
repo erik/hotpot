@@ -79,13 +79,22 @@ enum Commands {
         #[arg(short, long, default_value = "8080")]
         port: u16,
 
-        /// Allow uploading of activities via `/upload`
+        // TODO: specify token somehow
+        /// Allow uploading of activities via `/upload`.
+        ///
+        /// Remember to set `HOTPOT_UPLOAD_TOKEN` environment variable.
         #[arg(long, default_value = "false")]
-        allow_upload: bool,
+        upload: bool,
 
-        /// Enable Strava activity webhook (requires authenticating via `strava-auth`)
+        /// Enable Strava activity webhook
+        ///
+        /// Use `strava-auth` subcommand to grab OAuth tokens.
         #[arg(long, default_value = "false")]
         strava_webhook: bool,
+
+        /// Allow cross origin requests (CORS headers)
+        #[arg(long, default_value = "false")]
+        cors: bool,
     },
 
     /// Authenticate with Strava to fetch OAuth tokens for webhook.
@@ -174,19 +183,25 @@ fn run() -> Result<()> {
         Commands::Serve {
             host,
             port,
-            allow_upload,
+            upload,
             strava_webhook,
+            cors,
         } => {
             let db = Database::new(&opts.global.db_path)?;
             let addr = format!("{}:{}", host, port).parse()?;
             let routes = web::RouteConfig {
                 strava_webhook,
-                allow_upload,
+                upload,
                 tiles: true,
                 strava_auth: false,
             };
 
-            web::run_blocking(addr, db, routes)?;
+            let config = web::Config {
+                cors,
+                upload_token: std::env::var("HOTPOT_UPLOAD_TOKEN").ok(),
+            };
+
+            web::run_blocking(addr, db, config, routes)?;
         }
 
         Commands::StravaAuth { host, port } => {
@@ -196,7 +211,12 @@ fn run() -> Result<()> {
                 strava_auth: true,
                 tiles: false,
                 strava_webhook: false,
-                allow_upload: false,
+                upload: false,
+            };
+
+            let config = web::Config {
+                cors: false,
+                upload_token: None,
             };
 
             println!(
@@ -205,7 +225,7 @@ fn run() -> Result<()> {
                 \n==============================",
                 addr
             );
-            web::run_blocking(addr, db, routes)?;
+            web::run_blocking(addr, db, config, routes)?;
         }
     };
 

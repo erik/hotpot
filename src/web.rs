@@ -19,8 +19,7 @@ use tokio::runtime::Runtime;
 use tower_http::trace::TraceLayer;
 use tracing::log::info;
 
-use crate::db::ActivityFilter;
-use crate::db::Database;
+use crate::db::{ActivityFilter, Database};
 use crate::raster::DEFAULT_GRADIENT;
 use crate::tile::Tile;
 use crate::web::strava::StravaAuth;
@@ -28,45 +27,27 @@ use crate::{activity, raster};
 
 mod strava;
 
-struct RequestData {
-    method: Method,
-    uri: Uri,
-}
-
-async fn store_request_data<B>(req: Request<B>, next: Next<B>) -> Response {
-    let data = RequestData {
-        method: req.method().clone(),
-        uri: req.uri().clone(),
-    };
-
-    let mut res = next.run(req).await;
-    res.extensions_mut().insert(data);
-
-    res
-}
-
-fn trace_response(res: &Response, latency: Duration, _span: &tracing::Span) {
-    let data = res.extensions().get::<RequestData>().unwrap();
-
-    tracing::info!(
-        status = %res.status().as_u16(),
-        method = %data.method,
-        uri = %data.uri,
-        latency = ?latency,
-        size = res.size_hint().exact(),
-        "response"
-    );
+#[derive(Clone)]
+pub struct Config {
+    pub cors: bool,
+    pub upload_token: Option<String>,
 }
 
 #[derive(Clone)]
 pub struct AppState {
     db: Arc<Database>,
     strava: StravaAuth,
+    config: Config,
 }
 
-pub fn run_blocking(addr: SocketAddr, db: Database, routes: RouteConfig) -> Result<()> {
+pub fn run_blocking(
+    addr: SocketAddr,
+    db: Database,
+    config: Config,
+    routes: RouteConfig,
+) -> Result<()> {
     let rt = Runtime::new()?;
-    let fut = run_async(addr, db, routes);
+    let fut = run_async(addr, db, config, routes);
     rt.block_on(fut)?;
     Ok(())
 }
@@ -75,11 +56,11 @@ pub struct RouteConfig {
     pub tiles: bool,
     pub strava_webhook: bool,
     pub strava_auth: bool,
-    pub allow_upload: bool,
+    pub upload: bool,
 }
 
 impl RouteConfig {
-    fn build<S>(&self, db: Database) -> Result<Router<S>> {
+    fn build<S>(&self, db: Database, config: Config) -> Result<Router<S>> {
         // TODO: MVT endpoint?
         let mut router = Router::new()
             .layer(axum::middleware::from_fn(store_request_data))
@@ -100,7 +81,7 @@ impl RouteConfig {
             router = router.nest("/strava", strava::auth_routes());
         }
 
-        if self.allow_upload {
+        if self.upload {
             router = router.route("/upload", post(upload_activity));
         }
 
@@ -112,13 +93,19 @@ impl RouteConfig {
         };
 
         Ok(router.with_state(AppState {
+            config,
             strava,
             db: Arc::new(db),
         }))
     }
 }
 
-async fn run_async(addr: SocketAddr, db: Database, routes: RouteConfig) -> Result<()> {
+async fn run_async(
+    addr: SocketAddr,
+    db: Database,
+    config: Config,
+    routes: RouteConfig,
+) -> Result<()> {
     tracing_subscriber::fmt()
         .compact()
         .with_max_level(tracing::Level::INFO)
@@ -126,7 +113,7 @@ async fn run_async(addr: SocketAddr, db: Database, routes: RouteConfig) -> Resul
 
     info!("Listening on http://{}", addr);
 
-    let router = routes.build(db)?;
+    let router = routes.build(db, config)?;
     Server::bind(&addr)
         .serve(router.into_make_service())
         .await?;
@@ -150,7 +137,7 @@ struct RenderQueryParams {
 }
 
 async fn render_tile(
-    State(AppState { db, .. }): State<AppState>,
+    State(AppState { db, config, .. }): State<AppState>,
     Path((z, x, y)): Path<(u8, u32, u32)>,
     Query(params): Query<RenderQueryParams>,
 ) -> impl IntoResponse {
@@ -182,17 +169,15 @@ async fn render_tile(
                 ))
                 .unwrap();
 
-            // TODO: seems hacky
-            (
-                axum::response::AppendHeaders([
-                    (header::CONTENT_TYPE, "image/png"),
-                    (header::CACHE_CONTROL, "max-age=3600"),
-                    // TODO: should be configurable.
-                    (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
-                ]),
-                bytes,
-            )
-                .into_response()
+            let mut res = axum::response::Response::builder()
+                .header(header::CONTENT_TYPE, "image/png")
+                .header(header::CACHE_CONTROL, "max-age=86400");
+
+            if config.cors {
+                res = res.header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
+            }
+
+            res.body(bytes).unwrap().into_parts().into_response()
         }
         Ok(None) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => {
@@ -203,12 +188,11 @@ async fn render_tile(
 }
 
 async fn upload_activity(
-    State(AppState { db, .. }): State<AppState>,
+    State(AppState { db, config, .. }): State<AppState>,
     TypedHeader(auth): TypedHeader<axum::headers::Authorization<Bearer>>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
-    // TODO: real auth
-    if auth.token() != "magic" {
+    if Some(auth.token()) != config.upload_token.as_deref() {
         return (StatusCode::UNAUTHORIZED, "bad token");
     }
 
@@ -245,4 +229,34 @@ async fn upload_activity(
     }
 
     (StatusCode::OK, "added!")
+}
+
+struct RequestData {
+    method: Method,
+    uri: Uri,
+}
+
+async fn store_request_data<B>(req: Request<B>, next: Next<B>) -> Response {
+    let data = RequestData {
+        method: req.method().clone(),
+        uri: req.uri().clone(),
+    };
+
+    let mut res = next.run(req).await;
+    res.extensions_mut().insert(data);
+
+    res
+}
+
+fn trace_response(res: &Response, latency: Duration, _span: &tracing::Span) {
+    let data = res.extensions().get::<RequestData>().unwrap();
+
+    tracing::info!(
+        status = %res.status().as_u16(),
+        method = %data.method,
+        uri = %data.uri,
+        latency = ?latency,
+        size = res.size_hint().exact(),
+        "response"
+    );
 }
