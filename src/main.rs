@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -79,7 +78,6 @@ enum Commands {
         #[arg(short, long, default_value = "8080")]
         port: u16,
 
-        // TODO: specify token somehow
         /// Allow uploading of activities via `/upload`.
         ///
         /// Remember to set `HOTPOT_UPLOAD_TOKEN` environment variable.
@@ -263,8 +261,7 @@ fn ingest_dir(p: &Path, db: &Database, trim_dist: f64) -> Result<()> {
         .for_each_init(
             || db.shared_pool(),
             |pool, (path, activity)| {
-                print!("\r\x1b[2KReading {:?}...", path);
-                std::io::stdout().flush().unwrap();
+                print!("Reading {:?}...", path);
 
                 let mut conn = pool.get().expect("db connection pool timed out");
                 activity::upsert(&mut conn, path.to_str().unwrap(), &activity, trim_dist)

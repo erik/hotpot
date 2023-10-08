@@ -913,6 +913,7 @@ dependencies = [
  "reqwest",
  "rusqlite",
  "serde",
+ "tcx",
  "time",
  "tokio",
  "tower",
@@ -1767,6 +1768,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-xml-rs"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65162e9059be2f6a3421ebbb4fef3e74b7d9e7c60c50a0e292c6239f19f1edfa"
+dependencies = [
+ "log",
+ "serde",
+ "thiserror",
+ "xml-rs",
+]
+
+[[package]]
 name = "serde_derive"
 version = "1.0.188"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1939,6 +1952,19 @@ checksum = "a75fb188eb626b924683e3b95e3a48e63551fcfb51949de2f06a9d91dbee93c9"
 dependencies = [
  "core-foundation-sys",
  "libc",
+]
+
+[[package]]
+name = "tcx"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e389eecd150f4dd87538bdf0b5c5c6fc85063b8dd4fbeef3809219816493416b"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde-xml-rs",
+ "serde_derive",
+ "serde_json",
 ]
 
 [[package]]

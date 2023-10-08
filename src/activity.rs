@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 use anyhow::Result;
@@ -214,8 +214,7 @@ where
     match kind {
         FileType::Gpx => parse_gpx(&mut reader),
         FileType::Fit => parse_fit(&mut reader),
-        // TODO: implement TCX
-        FileType::Tcx => Ok(None),
+        FileType::Tcx => parse_tcx(&mut reader),
     }
 }
 
@@ -336,6 +335,64 @@ fn parse_gpx<R: Read>(reader: &mut R) -> Result<Option<RawActivity>> {
         start_time: start_time.map(SqlDateTime),
         title: track.name.clone(),
         tracks: track.multilinestring(),
+    }))
+}
+
+// FIXME: this is a mess
+fn parse_tcx<R: Read>(reader: &mut BufReader<R>) -> Result<Option<RawActivity>> {
+    // For some reason all my TCX files start with a bunch of spaces?
+    reader.fill_buf()?;
+    while let Some(&b' ') = reader.buffer().first() {
+        reader.consume(1);
+    }
+
+    let tcx = tcx::read(reader)?;
+    let Some(activities) = tcx.activities.map(|it| it.activities) else {
+        return Ok(None);
+    };
+
+    let Some(activity) = activities.first() else {
+        return Ok(None);
+    };
+
+    let duration_secs = activity
+        .laps
+        .iter()
+        .map(|lap| lap.total_time_seconds as u64)
+        .sum();
+
+    let start_time = activity
+        .laps
+        .first()
+        .and_then(|lap| lap.tracks.first())
+        .and_then(|track| track.trackpoints.first())
+        .map(|pt| OffsetDateTime::from_unix_timestamp(pt.time.timestamp()).unwrap())
+        .map(SqlDateTime);
+
+    let tracks = activity
+        .laps
+        .iter()
+        .flat_map(|lap| &lap.tracks)
+        .map(|track| &track.trackpoints)
+        .map(|points| {
+            points
+                .iter()
+                .filter_map(|pt| pt.position.as_ref())
+                .map(|pt| Point::new(pt.longitude, pt.latitude))
+                .collect::<LineString>()
+        })
+        .filter(|line| !line.0.is_empty())
+        .collect::<MultiLineString>();
+
+    if tracks.0.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(RawActivity {
+        start_time,
+        tracks,
+        duration_secs: Some(duration_secs),
+        title: None,
     }))
 }
 
