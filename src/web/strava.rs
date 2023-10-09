@@ -370,8 +370,7 @@ async fn receive_webhook(
             duration_secs: Some(activity.elapsed_time),
             tracks: MultiLineString::from(polyline),
         },
-        // TODO: where does this come from?
-        0.0,
+        db.meta.trim_dist,
     )
     .unwrap();
 

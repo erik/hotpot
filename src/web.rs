@@ -214,10 +214,7 @@ async fn upload_activity(
             let mut conn = db.connection().unwrap();
             let id = format!("upload:{}", file_name);
 
-            // TODO: where does this come from?
-            let trim_dist = 0.0;
-
-            activity::upsert(&mut conn, &id, &activity, trim_dist).unwrap();
+            activity::upsert(&mut conn, &id, &activity, db.meta.trim_dist).unwrap();
         }
     }
 

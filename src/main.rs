@@ -25,9 +25,10 @@ mod simplify;
 mod tile;
 mod web;
 
-// TODO: make this configurable
+// TODO: Remove all direct uses of these, replace with DB config.
 const DEFAULT_ZOOM_LEVELS: [u8; 5] = [2, 6, 10, 14, 16];
 const DEFAULT_TILE_EXTENT: u32 = 2048;
+const DEFAULT_TRIM_DIST: f64 = 200.0;
 
 #[derive(Subcommand, Debug)]
 enum Commands {

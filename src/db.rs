@@ -6,11 +6,11 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use geo_types::Coord;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::types::{ToSqlOutput, Value};
-use rusqlite::ToSql;
+use rusqlite::{params, ToSql};
 use time::format_description::well_known::Iso8601;
 use time::{Date, OffsetDateTime};
 
-use crate::{DEFAULT_TILE_EXTENT, DEFAULT_ZOOM_LEVELS};
+use crate::{DEFAULT_TILE_EXTENT, DEFAULT_TRIM_DIST, DEFAULT_ZOOM_LEVELS};
 
 const SCHEMA: &str = "\
 CREATE TABLE IF NOT EXISTS metadata (
@@ -70,8 +70,8 @@ impl Database {
 
         apply_schema(&mut conn)?;
 
-        // TODO: need to write metadata if it doesn't exist (and support updates)
         let meta = read_metadata(&mut conn)?;
+        set_metadata(&mut conn, &meta)?;
 
         Ok(Database { pool, meta })
     }
@@ -117,8 +117,12 @@ fn apply_schema(conn: &mut rusqlite::Connection) -> Result<()> {
 }
 
 pub struct Metadata {
+    /// Zoom levels that we store activity tiles for.
     pub zoom_levels: Vec<u8>,
-    pub stored_width: u32,
+    /// Width of the stored tiles, in pixels.
+    pub tile_extent: u32,
+    /// Distance to trim start/end of activities, in meters.
+    pub trim_dist: f64,
 }
 
 impl Metadata {
@@ -136,7 +140,8 @@ impl Default for Metadata {
     fn default() -> Self {
         Metadata {
             zoom_levels: DEFAULT_ZOOM_LEVELS.to_vec(),
-            stored_width: DEFAULT_TILE_EXTENT,
+            tile_extent: DEFAULT_TILE_EXTENT,
+            trim_dist: DEFAULT_TRIM_DIST,
         }
     }
 }
@@ -156,18 +161,40 @@ fn read_metadata(conn: &mut rusqlite::Connection) -> Result<Metadata> {
                     .map(|s| s.parse::<u8>().expect("zoom level"))
                     .collect();
             }
-
-            "stored_width" => {
-                meta.stored_width = row.get_unwrap(1);
-            }
-
-            key => {
-                tracing::warn!("Ignoring unknown metadata key: {}", key);
-            }
+            "tile_extent" => meta.tile_extent = row.get_unwrap(1),
+            "trim_dist" => meta.trim_dist = row.get_unwrap(1),
+            key => tracing::warn!("Ignoring unknown metadata key: {}", key),
         }
     }
 
     Ok(meta)
+}
+
+fn set_metadata(conn: &mut rusqlite::Connection, meta: &Metadata) -> Result<()> {
+    let zoom_levels = meta
+        .zoom_levels
+        .iter()
+        .map(u8::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+
+    conn.execute(
+        "\
+        INSERT OR REPLACE INTO metadata (key, value) \
+        VALUES (?, ?) \
+             , (?, ?) \
+             , (?, ?)",
+        params![
+            "zoom_levels",
+            &zoom_levels,
+            "tile_extent",
+            &meta.tile_extent,
+            "trim_dist",
+            &meta.trim_dist,
+        ],
+    )?;
+
+    Ok(())
 }
 
 // TODO: consider piping this through a compression step.
