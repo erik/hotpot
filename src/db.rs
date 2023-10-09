@@ -88,11 +88,11 @@ impl Database {
     pub fn reset_activities(&self) -> Result<()> {
         let conn = self.connection()?;
 
-        let x = conn.execute("DELETE FROM activities", [])?;
-        let y = conn.execute("DELETE FROM activity_tiles", [])?;
+        let num_activities = conn.execute("DELETE FROM activities", [])?;
+        let num_tiles = conn.execute("DELETE FROM activity_tiles", [])?;
         conn.execute_batch("VACUUM")?;
 
-        println!("Removed existing data: {} activities, {} tiles", x, y);
+        tracing::info!(num_activities, num_tiles, "Reset database",);
 
         Ok(())
     }
@@ -148,8 +148,7 @@ fn read_metadata(conn: &mut rusqlite::Connection) -> Result<Metadata> {
     let mut rows = stmt.query([])?;
 
     while let Some(row) = rows.next()? {
-        let key: String = row.get(0)?;
-        match key.as_str() {
+        match row.get::<_, String>(0)?.as_str() {
             "zoom_levels" => {
                 meta.zoom_levels = row
                     .get_unwrap::<_, String>(1)
@@ -162,8 +161,8 @@ fn read_metadata(conn: &mut rusqlite::Connection) -> Result<Metadata> {
                 meta.stored_width = row.get_unwrap(1);
             }
 
-            unk => {
-                println!("Ignoring unknown metadata key: {}", unk);
+            key => {
+                tracing::warn!("Ignoring unknown metadata key: {}", key);
             }
         }
     }

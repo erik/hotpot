@@ -61,11 +61,10 @@ pub struct RouteConfig {
 
 impl RouteConfig {
     fn build<S>(&self, db: Database, config: Config) -> Result<Router<S>> {
-        // TODO: MVT endpoint?
         let mut router = Router::new()
             .layer(axum::middleware::from_fn(store_request_data))
             // TODO: .on_failure(trace_failure)
-            .layer(TraceLayer::new_for_http().on_response(trace_response));
+            .layer(TraceLayer::new_for_http().on_response(trace_request));
 
         if self.tiles {
             router = router
@@ -106,11 +105,6 @@ async fn run_async(
     config: Config,
     routes: RouteConfig,
 ) -> Result<()> {
-    tracing_subscriber::fmt()
-        .compact()
-        .with_max_level(tracing::Level::INFO)
-        .init();
-
     info!("Listening on http://{}", addr);
 
     let router = routes.build(db, config)?;
@@ -212,7 +206,6 @@ async fn upload_activity(
 
         tracing::info!("uploading {}", file_name);
 
-        // TODO: Should be possible to use a streaming reader here.
         let bytes = field.bytes().await.unwrap();
         let reader = Cursor::new(bytes);
 
@@ -248,7 +241,7 @@ async fn store_request_data<B>(req: Request<B>, next: Next<B>) -> Response {
     res
 }
 
-fn trace_response(res: &Response, latency: Duration, _span: &tracing::Span) {
+fn trace_request(res: &Response, latency: Duration, _span: &tracing::Span) {
     let data = res.extensions().get::<RequestData>().unwrap();
 
     tracing::info!(

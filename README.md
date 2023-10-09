@@ -25,7 +25,6 @@ open http://localhost:8080
 - Pull additional metadata from Strava's `activities.csv` file.
 - Render CLI based on bounding box rather than individual tile
 - Arbitrary filters on CLI (unsafe SQL interpolation)
-- Better logging / debug output split.
 - Strip noisy points from GPX files (e.g. inside buildings, etc.)
 - Try varying gradient stops based on zoom level
 - Dynamic gradients (as query param)

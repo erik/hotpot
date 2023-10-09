@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
@@ -110,6 +111,9 @@ struct GlobalOpts {
     /// Path to database
     #[arg(default_value = "./hotpot.sqlite3")]
     db_path: PathBuf,
+    /// Enable verbose logging
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -132,6 +136,17 @@ fn main() {
 
 fn run() -> Result<()> {
     let opts = Opts::parse();
+
+    let log_level = if opts.global.verbose {
+        tracing::Level::DEBUG
+    } else {
+        tracing::Level::INFO
+    };
+
+    tracing_subscriber::fmt()
+        .compact()
+        .with_max_level(log_level)
+        .init();
 
     // TODO: pull out into separate function
     match opts.cmd {
@@ -234,13 +249,19 @@ fn ingest_dir(p: &Path, db: &Database, trim_dist: f64) -> Result<()> {
     let conn = db.connection()?;
 
     // Skip any files that are already in the database.
-    // TODO: avoid the collect call here?
     let known_files: HashSet<String> = conn
         .prepare("SELECT file FROM activities")?
         .query_map([], |row| row.get(0))?
         .filter_map(|n| n.ok())
         .collect();
 
+    tracing::info!(
+        path = ?p,
+        num_known = known_files.len(),
+        "starting activity import"
+    );
+
+    let num_imported = AtomicU32::new(0);
     WalkDir::new(p)
         .into_iter()
         .par_bridge()
@@ -255,20 +276,26 @@ fn ingest_dir(p: &Path, db: &Database, trim_dist: f64) -> Result<()> {
             }
         })
         .filter_map(|path| {
-            let activity = activity::read_file(&path)?;
+            let activity = activity::read_file(&path)
+                .map_err(|err| tracing::error!(?path, ?err, "failed to read activity"))
+                .ok()??;
+
             Some((path, activity))
         })
         .for_each_init(
             || db.shared_pool(),
             |pool, (path, activity)| {
-                print!(".");
+                tracing::debug!(?path, "importing activity");
 
                 let mut conn = pool.get().expect("db connection pool timed out");
                 activity::upsert(&mut conn, path.to_str().unwrap(), &activity, trim_dist)
                     .expect("insert activity");
+
+                num_imported.fetch_add(1, Ordering::Relaxed);
             },
         );
 
     conn.execute_batch("VACUUM")?;
+    tracing::info!(?num_imported, "finished import");
     Ok(())
 }

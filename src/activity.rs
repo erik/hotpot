@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use fitparser::de::{from_reader_with_options, DecodeOption};
 use fitparser::profile::MesgNum;
 use fitparser::Value;
@@ -218,23 +218,18 @@ where
     }
 }
 
-// TODO: should return a Result
-pub fn read_file(p: &Path) -> Option<RawActivity> {
-    let file_name = p.file_name()?;
-    match get_file_type(file_name.to_str()?) {
-        Some((file_type, comp)) => {
-            let file = File::open(p).expect("open file");
-            match read(file, file_type, comp) {
-                Ok(activity) => activity,
-                Err(e) => {
-                    println!("Error reading {:?}: {:?}", p, e);
-                    None
-                }
-            }
-        }
+pub fn read_file(p: &Path) -> Result<Option<RawActivity>> {
+    let Some(file_name) = p.file_name().and_then(|f| f.to_str()) else {
+        return Err(anyhow!("no file name"));
+    };
 
-        _ => None,
-    }
+    let Some((file_type, comp)) = get_file_type(file_name) else {
+        // Just skip over unsupported file types.
+        return Ok(None);
+    };
+
+    let file = File::open(p)?;
+    read(file, file_type, comp)
 }
 
 fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
