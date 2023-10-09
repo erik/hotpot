@@ -16,7 +16,7 @@ use crate::activity::RawActivity;
 use crate::db::{Database, SqlDateTime};
 use crate::web::AppState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct AuthToken {
     access_token: String,
     refresh_token: String,
@@ -232,9 +232,6 @@ pub fn auth_routes() -> Router<AppState> {
 #[derive(Deserialize)]
 struct ExchangeTokenQuery {
     code: String,
-    // TODO: not currently used.
-    // scope: String,
-    // state: String,
 }
 
 async fn auth_redirect(
@@ -242,9 +239,13 @@ async fn auth_redirect(
     State(AppState { strava, .. }): State<AppState>,
 ) -> impl IntoResponse {
     let url = format!(
-        "https://www.strava.com/oauth/authorize?client_id={}&approval_prompt=force&scope=activity:read_all&response_type=code&redirect_uri=http://{}/strava/auth/exchange_token",
-        strava.client_id,
-        host,
+        "https://www.strava.com/oauth/authorize\
+?client_id={}\
+&approval_prompt=force\
+&scope=activity:read_all\
+&response_type=code\
+&redirect_uri=http://{}/strava/auth/exchange_token",
+        strava.client_id, host,
     );
 
     Redirect::to(&url)

@@ -135,8 +135,9 @@ async fn render_tile(
     Path((z, x, y)): Path<(u8, u32, u32)>,
     Query(params): Query<RenderQueryParams>,
 ) -> impl IntoResponse {
-    if z > *db.meta.zoom_levels.iter().max().unwrap_or(&0) {
-        return StatusCode::NO_CONTENT.into_response();
+    // Fail fast when tile is higher zoom level than we store data for.
+    if db.meta.source_level(z).is_none() {
+        return StatusCode::NOT_FOUND.into_response();
     }
 
     // TODO: this should be supported by CLI as well

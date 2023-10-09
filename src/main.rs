@@ -30,7 +30,7 @@ const DEFAULT_ZOOM_LEVELS: [u8; 5] = [2, 6, 10, 14, 16];
 const DEFAULT_TILE_EXTENT: u32 = 2048;
 const DEFAULT_TRIM_DIST: f64 = 200.0;
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand)]
 enum Commands {
     /// Import GPX and FIT files from a directory
     Import {
@@ -107,7 +107,7 @@ enum Commands {
     },
 }
 
-#[derive(Args, Debug)]
+#[derive(Args)]
 struct GlobalOpts {
     /// Path to database
     #[arg(default_value = "./hotpot.sqlite3")]
