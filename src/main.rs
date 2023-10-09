@@ -117,7 +117,7 @@ struct GlobalOpts {
     verbose: bool,
 }
 
-#[derive(Parser, Debug)]
+#[derive(Parser)]
 #[command(author, version, about)]
 struct Opts {
     #[clap(flatten)]
@@ -138,15 +138,13 @@ fn main() {
 fn run() -> Result<()> {
     let opts = Opts::parse();
 
-    let log_level = if opts.global.verbose {
-        tracing::Level::DEBUG
-    } else {
-        tracing::Level::INFO
-    };
-
     tracing_subscriber::fmt()
         .compact()
-        .with_max_level(log_level)
+        .with_max_level(if opts.global.verbose {
+            tracing::Level::DEBUG
+        } else {
+            tracing::Level::INFO
+        })
         .init();
 
     // TODO: pull out into separate function

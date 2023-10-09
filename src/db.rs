@@ -153,16 +153,18 @@ fn read_metadata(conn: &mut rusqlite::Connection) -> Result<Metadata> {
     let mut rows = stmt.query([])?;
 
     while let Some(row) = rows.next()? {
-        match row.get::<_, String>(0)?.as_str() {
+        let key: String = row.get_unwrap(0);
+        let value: String = row.get_unwrap(1);
+
+        match key.as_str() {
             "zoom_levels" => {
-                meta.zoom_levels = row
-                    .get_unwrap::<_, String>(1)
+                meta.zoom_levels = value
                     .split(',')
                     .map(|s| s.parse::<u8>().expect("zoom level"))
                     .collect();
             }
-            "tile_extent" => meta.tile_extent = row.get_unwrap(1),
-            "trim_dist" => meta.trim_dist = row.get_unwrap(1),
+            "tile_extent" => meta.tile_extent = value.parse()?,
+            "trim_dist" => meta.trim_dist = value.parse()?,
             key => tracing::warn!("Ignoring unknown metadata key: {}", key),
         }
     }

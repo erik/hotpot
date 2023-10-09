@@ -16,8 +16,7 @@ use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use serde::Deserialize;
 use time::Date;
 use tokio::runtime::Runtime;
-use tower_http::trace::TraceLayer;
-use tracing::log::info;
+use tower_http::trace::{DefaultOnFailure, TraceLayer};
 
 use crate::db::{ActivityFilter, Database};
 use crate::raster::DEFAULT_GRADIENT;
@@ -61,11 +60,11 @@ pub struct RouteConfig {
 
 impl RouteConfig {
     fn build<S>(&self, db: Database, config: Config) -> Result<Router<S>> {
-        let mut router = Router::new()
-            .layer(axum::middleware::from_fn(store_request_data))
-            // TODO: .on_failure(trace_failure)
-            .layer(TraceLayer::new_for_http().on_response(trace_request));
+        let trace = TraceLayer::new_for_http()
+            .on_response(trace_request)
+            .on_failure(DefaultOnFailure::new());
 
+        let mut router = Router::new();
         if self.tiles {
             router = router
                 .route("/", get(index))
@@ -91,11 +90,16 @@ impl RouteConfig {
             StravaAuth::unset()
         };
 
-        Ok(router.with_state(AppState {
-            config,
-            strava,
-            db: Arc::new(db),
-        }))
+        let router = router
+            .layer(axum::middleware::from_fn(store_request_data))
+            .layer(trace)
+            .with_state(AppState {
+                config,
+                strava,
+                db: Arc::new(db),
+            });
+
+        Ok(router)
     }
 }
 
@@ -105,7 +109,7 @@ async fn run_async(
     config: Config,
     routes: RouteConfig,
 ) -> Result<()> {
-    info!("Listening on http://{}", addr);
+    tracing::info!("Listening on http://{}", addr);
 
     let router = routes.build(db, config)?;
     Server::bind(&addr)
