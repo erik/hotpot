@@ -81,6 +81,10 @@ impl RouteConfig {
 
         if self.upload {
             router = router.route("/upload", post(upload_activity));
+
+            if config.upload_token.is_none() {
+                tracing::warn!("HOTPOT_UPLOAD_TOKEN not set, uploads will be disabled");
+            }
         }
 
         let strava = if self.strava_webhook || self.strava_auth {
@@ -110,7 +114,6 @@ async fn run_async(
     routes: RouteConfig,
 ) -> Result<()> {
     tracing::info!("Listening on http://{}", addr);
-
     let router = routes.build(db, config)?;
     Server::bind(&addr)
         .serve(router.into_make_service())

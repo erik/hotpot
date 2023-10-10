@@ -214,7 +214,6 @@ fn prepare_query_activities<'a>(
     let mut params = params![bounds.z, bounds.xmin, bounds.xmax, bounds.ymin, bounds.ymax].to_vec();
     let filter_clause = filter.to_query(&mut params);
 
-    // TODO: don't always need to join
     let stmt = conn.prepare(&format!(
         "SELECT x, y, z, coords \
                       FROM activity_tiles \

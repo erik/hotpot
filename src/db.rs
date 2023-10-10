@@ -25,9 +25,6 @@ CREATE TABLE IF NOT EXISTS activities (
     , start_time    INTEGER
     , duration_secs INTEGER
     , dist_meters   REAL
-
-    -- TODO: other metadata for filtering?
-    -- , kind     TEXT -- run, bike, etc
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS activities_file ON activities (file);
@@ -199,7 +196,6 @@ fn set_metadata(conn: &mut rusqlite::Connection, meta: &Metadata) -> Result<()> 
     Ok(())
 }
 
-// TODO: consider piping this through a compression step.
 pub fn encode_line(data: &[Coord<u16>]) -> Result<Vec<u8>> {
     let mut w = Vec::with_capacity(data.len() * 2);
     for pt in data {

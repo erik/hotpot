@@ -16,7 +16,7 @@ pub struct Tile {
     pub z: u8,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct TileBounds {
     pub z: u8,
     pub xmin: u32,
@@ -172,7 +172,6 @@ impl WebMercator {
         Tile::new(x, y, zoom)
     }
 
-    // TODO: This returns [0, tile_width] but should be [0, tile_width - 1]
     pub fn to_pixel(self, bbox: &BBox, tile_width: u16) -> TilePixel {
         let Coord { x, y } = self.0.into();
 
@@ -214,8 +213,8 @@ impl LngLat {
 impl Tile {
     pub fn new(x: u32, y: u32, z: u8) -> Self {
         let num_tiles = 1u32 << z;
-        assert!(x < num_tiles);
-        assert!(y < num_tiles);
+        debug_assert!(x < num_tiles);
+        debug_assert!(y < num_tiles);
 
         Self { x, y, z }
     }

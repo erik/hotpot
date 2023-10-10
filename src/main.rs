@@ -11,9 +11,7 @@ use rayon::prelude::*;
 use time::Date;
 use walkdir::WalkDir;
 
-use db::ActivityFilter;
-
-use crate::db::Database;
+use crate::db::{ActivityFilter, Database};
 use crate::raster::DEFAULT_GRADIENT;
 use crate::tile::Tile;
 

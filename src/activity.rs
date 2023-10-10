@@ -65,8 +65,6 @@ impl TileClipper {
             None => {
                 self.finish_segment();
                 self.current = Some(self.bounding_tile(&start));
-                // todo: should we add new segment after shifting bbox?
-                // self.add_line_segment(start, end, c+1);
             }
 
             // [start, end] is at least partially contained within the current tile.
