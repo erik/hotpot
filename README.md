@@ -8,10 +8,10 @@ A zippy little heatmap tile server.
 
 ```
 # Create a new activity database
-cargo run --release -- import [path to GPX files]
+hotpot import [path to GPX files]
 
 # Start a web server
-cargo run --release -- serve
+hotpot serve
 
 open http://localhost:8080
 ```

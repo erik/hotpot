@@ -33,16 +33,21 @@ const DEFAULT_TRIM_DIST: f64 = 200.0;
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Import GPX and FIT files from a directory
+    /// Import activities from GPX, TCX, and FIT files.
+    ///
+    /// Imports will be deduplicated (based on file name), so it's safe to run
+    /// this twice on the same directory.
     Import {
-        /// Path to directory of activities.
+        /// Path to activity data.
+        ///
+        /// Can also pass a path to a single file.
         path: PathBuf,
 
         /// Remove all existing activity data before importing.
         #[arg(long, default_value = "false")]
         reset: bool,
 
-        /// Hide points within given distance (in meters) of start/end of activity.
+        /// Hide points within given distance (meters) of start/end of activity.
         #[arg(short, long, default_value = "200.0")]
         trim: f64,
 
@@ -59,39 +64,39 @@ enum Commands {
         // attrs_title_col: String,
     },
 
-    /// Render a tile
+    /// Render a single XYZ tile as a PNG.
     Tile {
-        /// Tile to render, in "z/x/y" format
+        /// Tile to render, in "z/x/y" format.
         zxy: Tile,
 
-        /// Select activities before this date
+        /// Select activities before this date (YYYY-MM-DD).
         #[arg(short, long)]
         before: Option<String>,
 
-        /// Select activities after this date
+        /// Select activities after this date (YYYY-MM-DD).
         #[arg(short, long)]
         after: Option<String>,
 
-        /// Width of output image
+        /// Width of output image in pixels.
         #[arg(short, long, default_value = "1024")]
         width: u32,
 
-        /// Path to output image
+        /// Path to output image.
         #[arg(short, long, default_value = "tile.png")]
         output: PathBuf,
     },
 
-    /// Start a raster tile server
+    /// Start an XYZ raster tile server.
     Serve {
-        /// Host to listen on
+        /// Host to listen on.
         #[arg(short = 'H', long, default_value = "127.0.0.1")]
         host: String,
 
-        /// Port to listen on
+        /// Port to listen on.
         #[arg(short, long, default_value = "8080")]
         port: u16,
 
-        /// Allow uploading of activities via `/upload`.
+        /// Allow uploading new activities via `/upload` endpoint.
         ///
         /// Remember to set `HOTPOT_UPLOAD_TOKEN` environment variable.
         #[arg(long, default_value = "false")]
@@ -103,7 +108,7 @@ enum Commands {
         #[arg(long, default_value = "false")]
         strava_webhook: bool,
 
-        /// Allow cross origin requests (CORS headers)
+        /// Allow cross origin requests (use CORS headers)
         #[arg(long, default_value = "false")]
         cors: bool,
     },
