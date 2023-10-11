@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::io::Cursor;
 use std::path::Path;
 
@@ -6,6 +7,7 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use geo_types::Coord;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, ToSql};
+use serde::Deserialize;
 use time::{Date, OffsetDateTime};
 
 use crate::{DEFAULT_TILE_EXTENT, DEFAULT_TRIM_DIST, DEFAULT_ZOOM_LEVELS};
@@ -199,30 +201,113 @@ pub fn decode_line(bytes: &[u8]) -> Result<Vec<Coord<u32>>> {
     Ok(coords)
 }
 
+#[derive(Clone, Deserialize, Debug)]
+#[serde(rename_all = "snake_case")]
+pub struct PropertyFilter {
+    key: String,
+
+    #[serde(flatten)]
+    op: FilterOp,
+}
+
+#[derive(Clone, Deserialize, Debug)]
+#[serde(rename_all = "snake_case")]
+enum FilterOp {
+    AnyOf(Vec<String>),
+    NoneOf(Vec<String>),
+    Matches(String),
+    HasKey(bool),
+
+    // TODO: these should all take Value rather than string
+    #[serde(rename = "=")]
+    Eq(String),
+    #[serde(rename = "!=")]
+    Neq(String),
+    #[serde(rename = ">")]
+    Gt(f64),
+    #[serde(rename = ">=")]
+    Gte(f64),
+    #[serde(rename = "<")]
+    Lt(f64),
+    #[serde(rename = "<=")]
+    Lte(f64),
+}
+
 #[derive(Default)]
 pub struct ActivityFilter {
     before: Option<OffsetDateTime>,
     after: Option<OffsetDateTime>,
+    props: Option<PropertyFilter>,
 }
 
 impl ActivityFilter {
-    pub fn new(before: Option<Date>, after: Option<Date>) -> Self {
+    pub fn new(before: Option<Date>, after: Option<Date>, props: Option<PropertyFilter>) -> Self {
         Self {
+            props,
             before: before.map(|date| date.midnight().assume_utc()),
             after: after.map(|date| date.midnight().assume_utc()),
         }
     }
     pub fn to_query<'a>(&'a self, params: &mut Vec<&'a dyn ToSql>) -> String {
-        let mut clauses = vec![];
+        let mut clauses: Vec<Cow<'a, str>> = vec![];
 
         if let Some(ref before) = self.before {
-            clauses.push("start_time < ?");
+            clauses.push("start_time < ?".into());
             params.push(before);
         }
 
         if let Some(ref after) = self.after {
-            clauses.push("start_time > ?");
+            clauses.push("start_time > ?".into());
             params.push(after);
+        }
+
+        // TODO: this could seriously use a cleanup.
+        if let Some(PropertyFilter { ref key, ref op }) = self.props {
+            let in_expr =
+                |params: &mut Vec<&'a dyn ToSql>, values: &'a Vec<String>, negate: bool| {
+                    params.push(key);
+                    params.extend(values.iter().map(|v| v as &dyn ToSql));
+
+                    let placeholders = values.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                    let op = if negate { "NOT IN" } else { "IN" };
+                    format!("properties ->> ? {op} ({placeholders})")
+                };
+
+            let cmp_expr = |params: &mut Vec<&'a dyn ToSql>, op: &str, rhs: &'a dyn ToSql| {
+                params.push(key);
+                params.push(rhs);
+                format!("properties ->> ? {op} ?")
+            };
+
+            let num_cmp_expr = |params: &mut Vec<&'a dyn ToSql>, op: &str, rhs: &'a dyn ToSql| {
+                params.push(key);
+                params.push(rhs);
+                format!("CAST(properties ->> ? AS FLOAT) {op} ?")
+            };
+
+            let clause = match op {
+                FilterOp::AnyOf(values) => in_expr(params, values, false),
+                FilterOp::NoneOf(values) => in_expr(params, values, true),
+                FilterOp::Matches(value) => {
+                    params.push(key);
+                    params.push(value);
+                    // note: could also use `properties->>? LIKE '%?%'`
+                    "instr(properties ->> ?, ?) > 0".into()
+                }
+                FilterOp::HasKey(non_null) => {
+                    params.push(key);
+                    let op = if *non_null { "IS NOT NULL" } else { "IS NULL" };
+                    format!("properties ->> ? {op}")
+                }
+                FilterOp::Eq(val) => cmp_expr(params, "=", val),
+                FilterOp::Neq(val) => cmp_expr(params, "!=", val),
+                FilterOp::Gt(val) => num_cmp_expr(params, ">", val),
+                FilterOp::Gte(val) => num_cmp_expr(params, ">=", val),
+                FilterOp::Lt(val) => num_cmp_expr(params, "<", val),
+                FilterOp::Lte(val) => num_cmp_expr(params, "<=", val),
+            };
+
+            clauses.push(clause.into());
         }
 
         if clauses.is_empty() {

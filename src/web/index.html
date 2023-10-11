@@ -49,6 +49,11 @@
             <option value="positron">Light</option>
         </select>
     </div>
+
+    <div>
+        <label for="filter">Filter</label>
+        <input key="filter" name="filter" />
+    </div>
 </div>
 
 <style>
@@ -112,6 +117,7 @@
         after: null,
         size: '256',
         map: 'dark-matter-nolabels',
+        filter: null,
     };
 
     function updateMapStyle() {
@@ -130,6 +136,7 @@
             options.color && `color=${options.color}`,
             options.before && `before=${options.before}`,
             options.after && `after=${options.after}`,
+            options.filter && `filter=${options.filter}`,
         ].filter(Boolean).join('&');
 
         map

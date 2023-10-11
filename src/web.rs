@@ -135,6 +135,8 @@ struct RenderQueryParams {
     before: Option<Date>,
     #[serde(default, with = "crate::date::parse")]
     after: Option<Date>,
+    // TODO: parse as a `PropertyFilter` directly using `with` annotation
+    filter: Option<String>,
 }
 
 async fn render_tile(
@@ -155,7 +157,16 @@ async fn render_tile(
         _ => &DEFAULT_GRADIENT,
     };
 
-    let filter = ActivityFilter::new(params.before, params.after);
+    let filter = params.filter.map(|s| serde_json::from_str(&s)).transpose();
+
+    let filter = match filter {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::error!("error parsing filter: {:?}", e);
+            return (StatusCode::BAD_REQUEST, format!("err: {e:?}")).into_response();
+        }
+    };
+    let filter = ActivityFilter::new(params.before, params.after, filter);
     let tile = Tile::new(x, y, z);
 
     match raster::render_tile(tile, color, 512, &filter, &db) {

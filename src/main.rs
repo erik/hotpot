@@ -8,10 +8,9 @@ use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use image::RgbaImage;
 use rayon::prelude::*;
+use serde_json::Value;
 use time::Date;
 use walkdir::WalkDir;
-
-use serde_json::Value;
 
 use crate::activity::RawActivity;
 use crate::db::{ActivityFilter, Database};
@@ -77,6 +76,10 @@ enum Commands {
         #[arg(short, long)]
         after: Option<String>,
 
+        // TODO: not yet supported (need to write a from_str)
+        // /// Filter activities by arbitrary metadata properties
+        // #[arg(short, long)]
+        // filter: Option<PropertyFilter>,
         /// Width of output image in pixels.
         #[arg(short, long, default_value = "1024")]
         width: u32,
@@ -214,7 +217,7 @@ fn run() -> Result<()> {
 
             let mut file = File::create(output)?;
 
-            let filter = ActivityFilter::new(before, after);
+            let filter = ActivityFilter::new(before, after, None);
 
             let image = raster::render_tile(zxy, &DEFAULT_GRADIENT, width, &filter, &db)?
                 .unwrap_or_else(|| {
