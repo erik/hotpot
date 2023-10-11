@@ -16,13 +16,11 @@ cargo run --release -- serve
 open http://localhost:8080
 ```
 
-
 ## TODO
 
 - Add filters based on arbitrary activity properties (sport type, bike name, commutes, etc.)
 - MVT endpoint
 - GeoJSON endpoint?
-- Import single file
 - Render CLI based on bounding box rather than individual tile
 - Strip noisy points from GPX files (e.g. inside buildings, etc.)
 - Try varying gradient stops based on zoom level
