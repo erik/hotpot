@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::{anyhow, Result};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -9,11 +11,12 @@ use reqwest::Response;
 use rusqlite::params;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use time::OffsetDateTime;
 
 use crate::activity;
 use crate::activity::RawActivity;
-use crate::db::{Database, SqlDateTime};
+use crate::db::Database;
 use crate::web::AppState;
 
 #[derive(Deserialize)]
@@ -61,10 +64,12 @@ struct PolyLineMap {
 struct SummaryActivity {
     id: u64,
     name: String,
-    elapsed_time: u64,
     map: PolyLineMap,
     #[serde(with = "time::serde::iso8601")]
     start_date: OffsetDateTime,
+
+    #[serde(flatten)]
+    properties: HashMap<String, Value>,
 }
 
 #[derive(Clone)]
@@ -76,9 +81,14 @@ pub struct StravaAuth {
 
 impl StravaAuth {
     pub fn from_env() -> Result<StravaAuth> {
-        let client_id = std::env::var("STRAVA_CLIENT_ID")?.parse()?;
-        let client_secret = std::env::var("STRAVA_CLIENT_SECRET")?;
-        let webhook_secret = std::env::var("STRAVA_WEBHOOK_SECRET")?;
+        let get_env = |k| {
+            std::env::var(k)
+                .map_err(|_| anyhow!("environment variable not set: {k}"))
+        };
+
+        let client_id = get_env("STRAVA_CLIENT_ID")?.parse()?;
+        let client_secret = get_env("STRAVA_CLIENT_SECRET")?;
+        let webhook_secret = get_env("STRAVA_WEBHOOK_SECRET")?;
 
         Ok(Self {
             client_id,
@@ -90,8 +100,8 @@ impl StravaAuth {
     pub fn unset() -> StravaAuth {
         Self {
             client_id: 0,
-            client_secret: String::from("unset"),
-            webhook_secret: String::from("unset"),
+            client_secret: String::from("UNSET"),
+            webhook_secret: String::from("UNSET"),
         }
     }
 }
@@ -105,7 +115,7 @@ async fn unwrap_response<T: DeserializeOwned>(res: Response) -> Result<T> {
     if !res.status().is_success() {
         let status = res.status();
         let body = res.text().await?;
-        return Err(anyhow!("{}: {}", status, body));
+        return Err(anyhow!("HTTP request failed with status {status}: {body}"));
     }
 
     Ok(res.json().await?)
@@ -165,7 +175,7 @@ impl<'a> StravaClient<'a> {
                     expires_at: row.get_unwrap(2),
                 })
             })
-            .map_err(|_| anyhow!("no credentials available for: {}", athlete_id))?
+            .map_err(|_| anyhow!("no credentials available for: {athlete_id}"))?
         };
 
         // Make sure we have at least a minute left on the token
@@ -367,11 +377,11 @@ async fn receive_webhook(
         &format!("strava:{}", activity.id),
         &RawActivity {
             title: Some(activity.name),
-            start_time: Some(activity.start_date).map(SqlDateTime),
-            duration_secs: Some(activity.elapsed_time),
+            start_time: Some(activity.start_date),
             tracks: MultiLineString::from(polyline),
+            properties: activity.properties,
         },
-        db.meta.trim_dist,
+        db.config.trim_dist,
     )
     .unwrap();
 

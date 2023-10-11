@@ -19,12 +19,11 @@ open http://localhost:8080
 
 ## TODO
 
-- Dynamic filtering for web endpoint (activity based, etc.)
+- Add filters based on arbitrary activity properties (sport type, bike name, commutes, etc.)
 - MVT endpoint
+- GeoJSON endpoint?
 - Import single file
-- Pull additional metadata from Strava's `activities.csv` file.
 - Render CLI based on bounding box rather than individual tile
-- Arbitrary filters on CLI (unsafe SQL interpolation)
 - Strip noisy points from GPX files (e.g. inside buildings, etc.)
 - Try varying gradient stops based on zoom level
 - Dynamic gradients (as query param)

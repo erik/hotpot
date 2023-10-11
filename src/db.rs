@@ -5,26 +5,23 @@ use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use geo_types::Coord;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::types::{ToSqlOutput, Value};
 use rusqlite::{params, ToSql};
-use time::format_description::well_known::Iso8601;
 use time::{Date, OffsetDateTime};
 
 use crate::{DEFAULT_TILE_EXTENT, DEFAULT_TRIM_DIST, DEFAULT_ZOOM_LEVELS};
 
 const SCHEMA: &str = "\
-CREATE TABLE IF NOT EXISTS metadata (
+CREATE TABLE IF NOT EXISTS config (
       key   TEXT NOT NULL PRIMARY KEY
     , value TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS activities (
       id            INTEGER PRIMARY KEY
-    , file          TEXT    NOT NULL
+    , file          TEXT     NOT NULL
     , title         TEXT
     , start_time    INTEGER
-    , duration_secs INTEGER
-    , dist_meters   REAL
+    , properties    TEXT    NOT NULL DEFAULT '{}'
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS activities_file ON activities (file);
@@ -51,7 +48,7 @@ CREATE TABLE IF NOT EXISTS strava_tokens (
 
 pub struct Database {
     pool: r2d2::Pool<SqliteConnectionManager>,
-    pub meta: Metadata,
+    pub config: Config,
 }
 
 impl Database {
@@ -67,10 +64,10 @@ impl Database {
 
         apply_schema(&mut conn)?;
 
-        let meta = read_metadata(&mut conn)?;
-        set_metadata(&mut conn, &meta)?;
+        let cfg = Config::load(&mut conn)?;
+        cfg.save(&mut conn)?;
 
-        Ok(Database { pool, meta })
+        Ok(Database { pool, config: cfg })
     }
 
     /// Open an existing database, fail if it doesn't exist
@@ -89,7 +86,7 @@ impl Database {
         let num_tiles = conn.execute("DELETE FROM activity_tiles", [])?;
         conn.execute_batch("VACUUM")?;
 
-        tracing::info!(num_activities, num_tiles, "Reset database",);
+        tracing::info!(num_activities, num_tiles, "Reset database");
 
         Ok(())
     }
@@ -113,7 +110,7 @@ fn apply_schema(conn: &mut rusqlite::Connection) -> Result<()> {
     Ok(())
 }
 
-pub struct Metadata {
+pub struct Config {
     /// Zoom levels that we store activity tiles for.
     pub zoom_levels: Vec<u8>,
     /// Width of the stored tiles, in pixels.
@@ -122,7 +119,43 @@ pub struct Metadata {
     pub trim_dist: f64,
 }
 
-impl Metadata {
+impl Config {
+    fn load(conn: &mut rusqlite::Connection) -> Result<Self> {
+        let mut cfg = Config::default();
+
+        let mut stmt = conn.prepare("SELECT key, value FROM config")?;
+        let mut rows = stmt.query([])?;
+
+        while let Some(row) = rows.next()? {
+            let key: String = row.get_unwrap(0);
+            let value: String = row.get_unwrap(1);
+
+            match key.as_str() {
+                "zoom_levels" => cfg.zoom_levels = serde_json::from_str(&value)?,
+                "tile_extent" => cfg.tile_extent = value.parse()?,
+                "trim_dist" => cfg.trim_dist = value.parse()?,
+                key => tracing::warn!("Ignoring unknown config key: {}", key),
+            }
+        }
+
+        Ok(cfg)
+    }
+
+    fn save(&self, conn: &mut rusqlite::Connection) -> Result<()> {
+        let zoom_levels = serde_json::to_string(&self.zoom_levels)?;
+
+        let mut stmt = conn.prepare(
+            "\
+            INSERT OR REPLACE INTO config (key, value) \
+            VALUES (?, ?)",
+        )?;
+        stmt.execute(params!["zoom_levels", &zoom_levels])?;
+        stmt.execute(params!["tile_extent", &self.tile_extent])?;
+        stmt.execute(params!["trim_dist", &self.trim_dist])?;
+
+        Ok(())
+    }
+
     pub fn source_level(&self, target_zoom: u8) -> Option<u8> {
         for z in &self.zoom_levels {
             if *z >= target_zoom {
@@ -133,67 +166,14 @@ impl Metadata {
     }
 }
 
-impl Default for Metadata {
+impl Default for Config {
     fn default() -> Self {
-        Metadata {
+        Config {
             zoom_levels: DEFAULT_ZOOM_LEVELS.to_vec(),
             tile_extent: DEFAULT_TILE_EXTENT,
             trim_dist: DEFAULT_TRIM_DIST,
         }
     }
-}
-
-fn read_metadata(conn: &mut rusqlite::Connection) -> Result<Metadata> {
-    let mut meta = Metadata::default();
-
-    let mut stmt = conn.prepare("SELECT key, value FROM metadata")?;
-    let mut rows = stmt.query([])?;
-
-    while let Some(row) = rows.next()? {
-        let key: String = row.get_unwrap(0);
-        let value: String = row.get_unwrap(1);
-
-        match key.as_str() {
-            "zoom_levels" => {
-                meta.zoom_levels = value
-                    .split(',')
-                    .map(|s| s.parse::<u8>().expect("zoom level"))
-                    .collect();
-            }
-            "tile_extent" => meta.tile_extent = value.parse()?,
-            "trim_dist" => meta.trim_dist = value.parse()?,
-            key => tracing::warn!("Ignoring unknown metadata key: {}", key),
-        }
-    }
-
-    Ok(meta)
-}
-
-fn set_metadata(conn: &mut rusqlite::Connection, meta: &Metadata) -> Result<()> {
-    let zoom_levels = meta
-        .zoom_levels
-        .iter()
-        .map(u8::to_string)
-        .collect::<Vec<_>>()
-        .join(",");
-
-    conn.execute(
-        "\
-        INSERT OR REPLACE INTO metadata (key, value) \
-        VALUES (?, ?) \
-             , (?, ?) \
-             , (?, ?)",
-        params![
-            "zoom_levels",
-            &zoom_levels,
-            "tile_extent",
-            &meta.tile_extent,
-            "trim_dist",
-            &meta.trim_dist,
-        ],
-    )?;
-
-    Ok(())
 }
 
 pub fn encode_line(data: &[Coord<u16>]) -> Result<Vec<u8>> {
@@ -219,42 +199,17 @@ pub fn decode_line(bytes: &[u8]) -> Result<Vec<Coord<u32>>> {
     Ok(coords)
 }
 
-pub struct SqlDate(Date);
-
-#[derive(Clone, Debug)]
-pub struct SqlDateTime(pub OffsetDateTime);
-
-impl ToSql for SqlDate {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        self.0
-            .format(&Iso8601::DATE)
-            // TODO: InvalidParameterName is not the right error type
-            .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))
-            .map(|s| ToSqlOutput::Owned(Value::Text(s)))
-    }
-}
-
-impl ToSql for SqlDateTime {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        self.0
-            .format(&Iso8601::DATE_TIME)
-            // TODO: InvalidParameterName is not the right error type
-            .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))
-            .map(|s| ToSqlOutput::Owned(Value::Text(s)))
-    }
-}
-
 #[derive(Default)]
 pub struct ActivityFilter {
-    before: Option<SqlDate>,
-    after: Option<SqlDate>,
+    before: Option<OffsetDateTime>,
+    after: Option<OffsetDateTime>,
 }
 
 impl ActivityFilter {
     pub fn new(before: Option<Date>, after: Option<Date>) -> Self {
         Self {
-            before: before.map(SqlDate),
-            after: after.map(SqlDate),
+            before: before.map(|date| date.midnight().assume_utc()),
+            after: after.map(|date| date.midnight().assume_utc()),
         }
     }
     pub fn to_query<'a>(&'a self, params: &mut Vec<&'a dyn ToSql>) -> String {

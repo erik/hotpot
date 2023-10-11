@@ -8,12 +8,12 @@ use fitparser::de::{from_reader_with_options, DecodeOption};
 use fitparser::profile::MesgNum;
 use fitparser::Value;
 use flate2::read::GzDecoder;
-use geo::{EuclideanDistance, HaversineLength};
+use geo::EuclideanDistance;
 use geo_types::{LineString, MultiLineString, Point};
 use rusqlite::params;
 use time::OffsetDateTime;
 
-use crate::db::{encode_line, SqlDateTime};
+use crate::db::encode_line;
 use crate::simplify::simplify_line;
 use crate::tile::{BBox, LngLat, Tile, WebMercator};
 use crate::{DEFAULT_TILE_EXTENT, DEFAULT_ZOOM_LEVELS};
@@ -115,20 +115,18 @@ impl ClippedTiles {
 
 #[derive(Clone)]
 pub struct RawActivity {
+    // TODO: should we treat this specially or just part of metadata?
     pub title: Option<String>,
-    pub start_time: Option<SqlDateTime>,
-    pub duration_secs: Option<u64>,
+
+    pub start_time: Option<OffsetDateTime>,
     pub tracks: MultiLineString,
+    pub properties: HashMap<String, serde_json::Value>,
 }
 
 impl RawActivity {
     /// How far apart two points can be before we consider them to be
     /// a separate line segment.
     const MAX_POINT_DISTANCE: f64 = 5000.0;
-
-    pub fn length(&self) -> f64 {
-        self.tracks.iter().map(LineString::haversine_length).sum()
-    }
 
     pub fn clip_to_tiles(&self, zooms: &[u8], trim_dist: f64) -> ClippedTiles {
         let mut clippers: Vec<_> = zooms.iter().map(|zoom| TileClipper::new(*zoom)).collect();
@@ -239,7 +237,7 @@ fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
     ]
     .into();
 
-    let (mut start_time, mut duration_secs) = (None, None);
+    let mut start_time = None;
     let mut points = vec![];
     for data in from_reader_with_options(r, &opts)? {
         match data.kind() {
@@ -264,11 +262,9 @@ fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
                         "position_lat" => lat = f.value().try_into().ok(),
                         "position_long" => lng = f.value().try_into().ok(),
                         "timestamp" => {
-                            let ts: i64 = f.value().try_into()?;
-
-                            match start_time {
-                                None => start_time = Some(ts),
-                                Some(t) => duration_secs = Some((ts - t) as u64),
+                            if start_time.is_none() {
+                                let ts: i64 = f.value().try_into()?;
+                                start_time = Some(ts);
                             }
                         }
                         _ => {}
@@ -290,12 +286,11 @@ fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
 
     let line = points.into_iter().collect::<LineString>();
     Ok(Some(RawActivity {
-        duration_secs,
         title: None,
-        start_time: start_time
-            .map(|ts| OffsetDateTime::from_unix_timestamp(ts).unwrap())
-            .map(SqlDateTime),
+        start_time: start_time.map(|ts| OffsetDateTime::from_unix_timestamp(ts).unwrap()),
         tracks: MultiLineString::from(line),
+        // TODO: populate metadata
+        properties: HashMap::new(),
     }))
 }
 
@@ -309,25 +304,12 @@ fn parse_gpx<R: Read>(reader: &mut R) -> Result<Option<RawActivity>> {
 
     let start_time = gpx.metadata.and_then(|m| m.time).map(OffsetDateTime::from);
 
-    // Grab the timestamp from the last point to calculate duration
-    let end_time = track
-        .segments
-        .last()
-        .and_then(|seg| seg.points.last())
-        .and_then(|wpt| wpt.time)
-        .map(|t| OffsetDateTime::from(t).unix_timestamp() as u64);
-
-    let duration_secs = start_time
-        .map(|t| t.unix_timestamp() as u64)
-        .zip(end_time)
-        .filter(|(start, end)| end > start)
-        .map(|(start, end)| end - start);
-
     Ok(Some(RawActivity {
-        duration_secs,
-        start_time: start_time.map(SqlDateTime),
+        start_time,
         title: track.name.clone(),
         tracks: track.multilinestring(),
+        // TODO: metadata - already have a serde-friendly value in gpx.metadata
+        properties: HashMap::new(),
     }))
 }
 
@@ -348,19 +330,12 @@ fn parse_tcx<R: Read>(reader: &mut BufReader<R>) -> Result<Option<RawActivity>> 
         return Ok(None);
     };
 
-    let duration_secs = activity
-        .laps
-        .iter()
-        .map(|lap| lap.total_time_seconds as u64)
-        .sum();
-
     let start_time = activity
         .laps
         .first()
         .and_then(|lap| lap.tracks.first())
         .and_then(|track| track.trackpoints.first())
-        .map(|pt| OffsetDateTime::from_unix_timestamp(pt.time.timestamp()).unwrap())
-        .map(SqlDateTime);
+        .map(|pt| OffsetDateTime::from_unix_timestamp(pt.time.timestamp()).unwrap());
 
     let tracks = activity
         .laps
@@ -384,8 +359,9 @@ fn parse_tcx<R: Read>(reader: &mut BufReader<R>) -> Result<Option<RawActivity>> 
     Ok(Some(RawActivity {
         start_time,
         tracks,
-        duration_secs: Some(duration_secs),
         title: None,
+        // TODO: populate metadata
+        properties: HashMap::new(),
     }))
 }
 
@@ -412,7 +388,7 @@ pub fn upsert(
     activity: &RawActivity,
     trim_dist: f64,
 ) -> Result<i64> {
-    let mut insert_coords = conn.prepare_cached(
+    let mut insert_tile = conn.prepare_cached(
         "\
         INSERT INTO activity_tiles (activity_id, z, x, y, coords) \
         VALUES (?, ?, ?, ?, ?)",
@@ -421,14 +397,13 @@ pub fn upsert(
     let num_rows = conn.execute(
         "\
         INSERT OR REPLACE \
-        INTO activities (file, title, start_time, duration_secs, dist_meters)\
-        VALUES (?, ?, ?, ?, ?)",
+        INTO activities (file, title, start_time, properties) \
+        VALUES (?, ?, ?, ?)",
         params![
             name,
             activity.title,
             activity.start_time,
-            activity.duration_secs,
-            activity.length(),
+            serde_json::to_string(&activity.properties)?,
         ],
     )?;
 
@@ -446,7 +421,7 @@ pub fn upsert(
     let tiles = activity.clip_to_tiles(&DEFAULT_ZOOM_LEVELS, trim_dist);
     for (tile, line) in tiles.iter() {
         let coords = encode_line(&simplify_line(&line.0, 4.0))?;
-        insert_coords.insert(params![activity_id, tile.z, tile.x, tile.y, coords])?;
+        insert_tile.insert(params![activity_id, tile.z, tile.x, tile.y, coords])?;
     }
 
     Ok(activity_id)

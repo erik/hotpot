@@ -113,7 +113,7 @@ async fn run_async(
     config: Config,
     routes: RouteConfig,
 ) -> Result<()> {
-    tracing::info!("Listening on http://{}", addr);
+    tracing::info!("starting server on http://{}", addr);
     let router = routes.build(db, config)?;
     Server::bind(&addr)
         .serve(router.into_make_service())
@@ -143,7 +143,7 @@ async fn render_tile(
     Query(params): Query<RenderQueryParams>,
 ) -> impl IntoResponse {
     // Fail fast when tile is higher zoom level than we store data for.
-    if db.meta.source_level(z).is_none() {
+    if db.config.source_level(z).is_none() {
         return StatusCode::NOT_FOUND.into_response();
     }
 
@@ -222,7 +222,7 @@ async fn upload_activity(
             let mut conn = db.connection().unwrap();
             let id = format!("upload:{}", file_name);
 
-            activity::upsert(&mut conn, &id, &activity, db.meta.trim_dist).unwrap();
+            activity::upsert(&mut conn, &id, &activity, db.config.trim_dist).unwrap();
         }
     }
 

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
@@ -11,6 +11,9 @@ use rayon::prelude::*;
 use time::Date;
 use walkdir::WalkDir;
 
+use serde_json::Value;
+
+use crate::activity::RawActivity;
 use crate::db::{ActivityFilter, Database};
 use crate::raster::DEFAULT_GRADIENT;
 use crate::tile::Tile;
@@ -42,6 +45,18 @@ enum Commands {
         /// Hide points within given distance (in meters) of start/end of activity.
         #[arg(short, long, default_value = "200.0")]
         trim: f64,
+
+        /// Path to CSV containing additional activity metadata.
+        #[arg(long)]
+        attrs_path: Option<PathBuf>,
+
+        /// Column from attribute file to join to activity file.
+        #[arg(long, default_value = "Filename")]
+        attrs_file_col: String,
+        // TODO: figure out if we should use this?
+        // /// Column from attribute file to use as activity title.
+        // #[arg(long, default_value = "Activity Name")]
+        // attrs_title_col: String,
     },
 
     /// Render a tile
@@ -147,14 +162,29 @@ fn run() -> Result<()> {
 
     // TODO: pull out into separate function
     match opts.cmd {
-        Commands::Import { path, reset, trim } => {
+        Commands::Import {
+            path,
+            reset,
+            attrs_path,
+            attrs_file_col,
+            ..
+            // TODO: update the database config with this
+            // trim,
+        } => {
             let db = Database::new(&opts.global.db_path)?;
+            let attrs = attrs_path
+                .map(|csv| AttributeSource::from_csv(
+                    &csv,
+                    &attrs_file_col,
+                ))
+                .transpose()?
+                .unwrap_or_default();
 
             if reset {
                 db.reset_activities()?;
             }
 
-            ingest_dir(&path, &db, trim)?;
+            import_activities(&path, &db, &attrs)?;
         }
 
         Commands::Tile {
@@ -242,7 +272,67 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn ingest_dir(p: &Path, db: &Database, trim_dist: f64) -> Result<()> {
+struct AttributeSource {
+    base_dir: PathBuf,
+    path_props: HashMap<PathBuf, HashMap<String, Value>>,
+}
+
+impl Default for AttributeSource {
+    fn default() -> Self {
+        Self {
+            base_dir: PathBuf::new(),
+            path_props: HashMap::new(),
+        }
+    }
+}
+
+impl AttributeSource {
+    fn from_csv(csv_path: &Path, file_col: &str) -> Result<Self> {
+        let base_dir = csv_path.parent().unwrap_or(Path::new("/")).canonicalize()?;
+
+        let mut rdr = csv::Reader::from_path(csv_path)?;
+        let mut path_props = HashMap::new();
+        for row in rdr.deserialize() {
+            let mut row: HashMap<String, String> = row?;
+
+            // Only keep the non-empty keys
+            row.retain(|_k, v| !v.trim().is_empty());
+
+            // TODO: report error if this is missing
+            let Some(filename) = row.remove(file_col) else {
+                continue;
+            };
+
+            let json_props = row
+                .into_iter()
+                .map(|(k, v)| (k, Value::String(v)))
+                .collect();
+
+            path_props.insert(PathBuf::from(filename), json_props);
+        }
+
+        Ok(Self {
+            base_dir,
+            path_props,
+        })
+    }
+
+    /// Merge properties from the attribute source into the activity.
+    fn enrich(&self, path: &Path, activity: &mut RawActivity) {
+        let path = path.strip_prefix(&self.base_dir).ok();
+        let Some(props) = path.and_then(|p| self.path_props.get(p)) else {
+            // We'll get here if there are activities in the import directory which don't have
+            // a corresponding line in the metadata file.
+            return;
+        };
+
+        for (k, v) in props {
+            activity.properties.insert(k.clone(), v.clone());
+        }
+    }
+}
+
+fn import_activities(p: &Path, db: &Database, prop_source: &AttributeSource) -> Result<()> {
     let conn = db.connection()?;
 
     // Skip any files that are already in the database.
@@ -281,12 +371,20 @@ fn ingest_dir(p: &Path, db: &Database, trim_dist: f64) -> Result<()> {
         })
         .for_each_init(
             || db.shared_pool(),
-            |pool, (path, activity)| {
+            |pool, (path, mut activity)| {
                 tracing::debug!(?path, "importing activity");
 
+                // Merge with activity properties
+                prop_source.enrich(&path, &mut activity);
+
                 let mut conn = pool.get().expect("db connection pool timed out");
-                activity::upsert(&mut conn, path.to_str().unwrap(), &activity, trim_dist)
-                    .expect("insert activity");
+                activity::upsert(
+                    &mut conn,
+                    path.to_str().unwrap(),
+                    &activity,
+                    db.config.trim_dist,
+                )
+                .expect("insert activity");
 
                 num_imported.fetch_add(1, Ordering::Relaxed);
             },

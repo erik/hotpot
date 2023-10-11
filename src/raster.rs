@@ -178,7 +178,7 @@ pub fn render_tile(
     db: &Database,
 ) -> Result<Option<RgbaImage>> {
     let zoom_level = db
-        .meta
+        .config
         .source_level(tile.z)
         .ok_or_else(|| anyhow!("no source level for tile: {:?}", tile))?;
 
@@ -215,13 +215,14 @@ fn prepare_query_activities<'a>(
     let filter_clause = filter.to_query(&mut params);
 
     let stmt = conn.prepare(&format!(
-        "SELECT x, y, z, coords \
-                      FROM activity_tiles \
-                      JOIN activities ON activities.id = activity_tiles.activity_id \
-                      WHERE z = ? \
-                          AND (x >= ? AND x < ?) \
-                          AND (y >= ? AND y < ?) \
-                          AND {};",
+        "\
+        SELECT x, y, z, coords \
+        FROM activity_tiles \
+        JOIN activities ON activities.id = activity_tiles.activity_id \
+        WHERE z = ? \
+            AND (x >= ? AND x < ?) \
+            AND (y >= ? AND y < ?) \
+            AND {};",
         filter_clause,
     ))?;
 
