@@ -1,0 +1,21 @@
+TODO
+
+More web endpoints
+  - Vector tiles
+  - Activity as GeoJSON
+  - Known property keys? For a UI dropdown
+
+Customization
+  - Support AND/OR/NOT for property filters
+  - Dynamic gradients + stops
+  - Vary gradient stops based on zoom level
+
+CLI
+  - Render arbitrary LatLng bounds rather than tile
+  - Filter support
+
+Misc
+  - "privacy zones" rather than start/end trim distance
+  - Strip noisy points from tracks (e.g. inside buildings, etc.)
+  - Remap column names from Strava API to match `activities.csv` (or vice versa?)
+
