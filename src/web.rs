@@ -220,7 +220,7 @@ async fn upload_activity(
             None => return (StatusCode::BAD_REQUEST, "no filename"),
         };
 
-        let Some((kind, comp)) = activity::get_file_type(&file_name) else {
+        let Some((media_type, comp)) = activity::get_file_type(&file_name) else {
             return (StatusCode::BAD_REQUEST, "unsupported file type");
         };
 
@@ -229,7 +229,7 @@ async fn upload_activity(
         let bytes = field.bytes().await.unwrap();
         let reader = Cursor::new(bytes);
 
-        let activity = activity::read(reader, kind, comp).unwrap();
+        let activity = activity::read(reader, media_type, comp).unwrap();
         if let Some(activity) = activity {
             let mut conn = db.connection().unwrap();
             let id = format!("upload:{}", file_name);

@@ -200,30 +200,30 @@ impl RawActivity {
     }
 }
 
-pub enum FileType {
+pub enum MediaType {
     Gpx,
     Fit,
     Tcx,
 }
 
-pub enum CompressionType {
+pub enum Compression {
     None,
     Gzip,
 }
 
-pub fn read<R>(rdr: R, kind: FileType, comp: CompressionType) -> Result<Option<RawActivity>>
+pub fn read<R>(rdr: R, kind: MediaType, comp: Compression) -> Result<Option<RawActivity>>
 where
     R: Read + 'static,
 {
     let mut reader: BufReader<Box<dyn Read>> = BufReader::new(match comp {
-        CompressionType::None => Box::new(rdr),
-        CompressionType::Gzip => Box::new(GzDecoder::new(rdr)),
+        Compression::None => Box::new(rdr),
+        Compression::Gzip => Box::new(GzDecoder::new(rdr)),
     });
 
     match kind {
-        FileType::Gpx => parse_gpx(&mut reader),
-        FileType::Fit => parse_fit(&mut reader),
-        FileType::Tcx => parse_tcx(&mut reader),
+        MediaType::Gpx => parse_gpx(&mut reader),
+        MediaType::Fit => parse_fit(&mut reader),
+        MediaType::Tcx => parse_tcx(&mut reader),
     }
 }
 
@@ -232,13 +232,13 @@ pub fn read_file(p: &Path) -> Result<Option<RawActivity>> {
         return Err(anyhow!("no file name"));
     };
 
-    let Some((file_type, comp)) = get_file_type(file_name) else {
+    let Some((media_type, comp)) = get_file_type(file_name) else {
         // Just skip over unsupported file types.
         return Ok(None);
     };
 
     let file = File::open(p)?;
-    read(file, file_type, comp)
+    read(file, media_type, comp)
 }
 
 fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
@@ -256,8 +256,7 @@ fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
         match data.kind() {
             MesgNum::FileId => {
                 for f in data.fields() {
-                    // Skip over virtual rides
-                    // TODO: not an exhaustive check
+                    // Skip over virtual rides (not an exhaustive check)
                     if f.name() == "manufacturer" {
                         match f.value() {
                             Value::String(val) if val.as_str() == "zwift" => return Ok(None),
@@ -379,18 +378,18 @@ fn parse_tcx<R: Read>(reader: &mut BufReader<R>) -> Result<Option<RawActivity>> 
 }
 
 /// Allows us to treat `bar.gpx.gz` the same as `bar.gpx`.
-pub fn get_file_type(file_name: &str) -> Option<(FileType, CompressionType)> {
+pub fn get_file_type(file_name: &str) -> Option<(MediaType, Compression)> {
     let mut exts = file_name.rsplit('.');
 
     let (comp, ext) = match exts.next()? {
-        "gz" => (CompressionType::Gzip, exts.next()?),
-        ext => (CompressionType::None, ext),
+        "gz" => (Compression::Gzip, exts.next()?),
+        ext => (Compression::None, ext),
     };
 
     match ext {
-        "gpx" => Some((FileType::Gpx, comp)),
-        "fit" => Some((FileType::Fit, comp)),
-        "tcx" => Some((FileType::Tcx, comp)),
+        "gpx" => Some((MediaType::Gpx, comp)),
+        "fit" => Some((MediaType::Fit, comp)),
+        "tcx" => Some((MediaType::Tcx, comp)),
         _ => None,
     }
 }
@@ -431,7 +430,7 @@ pub fn upsert(
         )?;
     }
 
-    let tiles = activity.clip_to_tiles(&config);
+    let tiles = activity.clip_to_tiles(config);
     for (tile, line) in tiles.iter() {
         let coords = encode_line(&simplify_line(&line.0, 4.0))?;
         insert_tile.insert(params![activity_id, tile.z, tile.x, tile.y, coords])?;

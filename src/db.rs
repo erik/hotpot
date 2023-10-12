@@ -95,6 +95,13 @@ impl Database {
         self.pool.get().map_err(Into::into)
     }
 
+    /// Get a connection which cannot mutate the database.
+    pub fn ro_connection(&self) -> Result<r2d2::PooledConnection<SqliteConnectionManager>> {
+        let conn = self.pool.get()?;
+        conn.pragma_update(None, "query_only", "true")?;
+        Ok(conn)
+    }
+
     pub fn shared_pool(&self) -> r2d2::Pool<SqliteConnectionManager> {
         self.pool.clone()
     }
@@ -109,7 +116,6 @@ fn apply_schema(conn: &mut rusqlite::Connection) -> Result<()> {
 
     Ok(())
 }
-
 
 const DEFAULT_TILE_EXTENT: u32 = 2048;
 const DEFAULT_ZOOM_LEVELS: [u8; 5] = [2, 6, 10, 14, 16];

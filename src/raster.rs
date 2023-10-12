@@ -188,7 +188,7 @@ pub fn render_tile(
 
     let mut have_activity = false;
 
-    let conn = db.connection()?;
+    let conn = db.ro_connection()?;
     let (mut stmt, params) = prepare_query_activities(&conn, filter, &bounds)?;
     let mut rows = stmt.query(params.as_slice())?;
     while let Some(row) = rows.next()? {
