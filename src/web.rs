@@ -135,7 +135,8 @@ struct RenderQueryParams {
     before: Option<Date>,
     #[serde(default, with = "crate::date::parse")]
     after: Option<Date>,
-    // TODO: parse as a `PropertyFilter` directly using `with` annotation
+    // TODO: support multiple filters which get AND'd together
+    // TODO: parse as a `PropertyFilter` directly using custom `with` annotation
     filter: Option<String>,
 }
 
@@ -233,7 +234,7 @@ async fn upload_activity(
             let mut conn = db.connection().unwrap();
             let id = format!("upload:{}", file_name);
 
-            activity::upsert(&mut conn, &id, &activity, db.config.trim_dist).unwrap();
+            activity::upsert(&mut conn, &id, &activity, &db.config).unwrap();
         }
     }
 

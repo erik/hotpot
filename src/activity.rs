@@ -13,22 +13,24 @@ use geo_types::{LineString, MultiLineString, Point};
 use rusqlite::params;
 use time::OffsetDateTime;
 
+use crate::db;
 use crate::db::encode_line;
 use crate::simplify::simplify_line;
 use crate::tile::{BBox, LngLat, Tile, WebMercator};
-use crate::{DEFAULT_TILE_EXTENT, DEFAULT_ZOOM_LEVELS};
 
 // TODO: not happy with the ergonomics of this.
 struct TileClipper {
     zoom: u8,
+    tile_extent: u16,
     current: Option<(Tile, BBox)>,
     tiles: HashMap<Tile, Vec<LineString<u16>>>,
 }
 
 impl TileClipper {
-    fn new(zoom: u8) -> Self {
+    fn new(zoom: u8, tile_extent: u16) -> Self {
         Self {
             zoom,
+            tile_extent,
             tiles: HashMap::new(),
             current: None,
         }
@@ -69,14 +71,13 @@ impl TileClipper {
 
             // [start, end] is at least partially contained within the current tile.
             Some((a, b)) => {
+                let extent = self.tile_extent;
                 let line = self.last_line(&tile);
                 if line.0.is_empty() {
-                    line.0
-                        .push(a.to_pixel(&bbox, DEFAULT_TILE_EXTENT as u16).into());
+                    line.0.push(a.to_pixel(&bbox, extent).into());
                 }
 
-                line.0
-                    .push(b.to_pixel(&bbox, DEFAULT_TILE_EXTENT as u16).into());
+                line.0.push(b.to_pixel(&bbox, extent).into());
 
                 // If we've modified the end point, we've left the current tile.
                 if b != end {
@@ -126,10 +127,22 @@ pub struct RawActivity {
 impl RawActivity {
     /// How far apart two points can be before we consider them to be
     /// a separate line segment.
+    ///
+    /// TODO: move to db config?
     const MAX_POINT_DISTANCE: f64 = 5000.0;
 
-    pub fn clip_to_tiles(&self, zooms: &[u8], trim_dist: f64) -> ClippedTiles {
-        let mut clippers: Vec<_> = zooms.iter().map(|zoom| TileClipper::new(*zoom)).collect();
+    pub fn clip_to_tiles(
+        &self,
+        db::Config {
+            ref zoom_levels,
+            ref trim_dist,
+            ref tile_extent,
+        }: &db::Config,
+    ) -> ClippedTiles {
+        let mut clippers: Vec<_> = zoom_levels
+            .iter()
+            .map(|z| TileClipper::new(*z, *tile_extent as u16))
+            .collect();
 
         for line in self.tracks.iter() {
             let points: Vec<_> = line
@@ -149,14 +162,14 @@ impl RawActivity {
             let start_idx = points
                 .iter()
                 .enumerate()
-                .find(|(_, pt)| pt.0.euclidean_distance(first) >= trim_dist)
+                .find(|(_, pt)| pt.0.euclidean_distance(first) >= *trim_dist)
                 .map(|(i, _)| i);
 
             let end_idx = points
                 .iter()
                 .rev()
                 .enumerate()
-                .find(|(_, pt)| pt.0.euclidean_distance(last) >= trim_dist)
+                .find(|(_, pt)| pt.0.euclidean_distance(last) >= *trim_dist)
                 .map(|(i, _)| points.len() - 1 - i);
 
             if let Some((i, j)) = start_idx.zip(end_idx) {
@@ -386,7 +399,7 @@ pub fn upsert(
     conn: &mut rusqlite::Connection,
     name: &str,
     activity: &RawActivity,
-    trim_dist: f64,
+    config: &db::Config,
 ) -> Result<i64> {
     let mut insert_tile = conn.prepare_cached(
         "\
@@ -418,7 +431,7 @@ pub fn upsert(
         )?;
     }
 
-    let tiles = activity.clip_to_tiles(&DEFAULT_ZOOM_LEVELS, trim_dist);
+    let tiles = activity.clip_to_tiles(&config);
     for (tile, line) in tiles.iter() {
         let coords = encode_line(&simplify_line(&line.0, 4.0))?;
         insert_tile.insert(params![activity_id, tile.z, tile.x, tile.y, coords])?;

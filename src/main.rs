@@ -25,11 +25,6 @@ mod simplify;
 mod tile;
 mod web;
 
-// TODO: Remove all direct uses of these, replace with DB config.
-const DEFAULT_ZOOM_LEVELS: [u8; 5] = [2, 6, 10, 14, 16];
-const DEFAULT_TILE_EXTENT: u32 = 2048;
-const DEFAULT_TRIM_DIST: f64 = 200.0;
-
 #[derive(Subcommand)]
 enum Commands {
     /// Import activities from GPX, TCX, and FIT files.
@@ -131,7 +126,7 @@ enum Commands {
 #[derive(Args)]
 struct GlobalOpts {
     /// Path to database
-    #[arg(default_value = "./hotpot.sqlite3")]
+    #[arg(short = 'D', long = "db", default_value = "./hotpot.sqlite3")]
     db_path: PathBuf,
     /// Enable verbose logging
     #[arg(short, long)]
@@ -386,13 +381,8 @@ fn import_activities(p: &Path, db: &Database, prop_source: &AttributeSource) -> 
                 prop_source.enrich(&path, &mut activity);
 
                 let mut conn = pool.get().expect("db connection pool timed out");
-                activity::upsert(
-                    &mut conn,
-                    path.to_str().unwrap(),
-                    &activity,
-                    db.config.trim_dist,
-                )
-                .expect("insert activity");
+                activity::upsert(&mut conn, path.to_str().unwrap(), &activity, &db.config)
+                    .expect("insert activity");
 
                 num_imported.fetch_add(1, Ordering::Relaxed);
             },

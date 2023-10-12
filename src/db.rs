@@ -10,8 +10,6 @@ use rusqlite::{params, ToSql};
 use serde::Deserialize;
 use time::{Date, OffsetDateTime};
 
-use crate::{DEFAULT_TILE_EXTENT, DEFAULT_TRIM_DIST, DEFAULT_ZOOM_LEVELS};
-
 const SCHEMA: &str = "\
 CREATE TABLE IF NOT EXISTS config (
       key   TEXT NOT NULL PRIMARY KEY
@@ -111,6 +109,11 @@ fn apply_schema(conn: &mut rusqlite::Connection) -> Result<()> {
 
     Ok(())
 }
+
+
+const DEFAULT_TILE_EXTENT: u32 = 2048;
+const DEFAULT_ZOOM_LEVELS: [u8; 5] = [2, 6, 10, 14, 16];
+const DEFAULT_TRIM_DIST: f64 = 200.0;
 
 pub struct Config {
     /// Zoom levels that we store activity tiles for.

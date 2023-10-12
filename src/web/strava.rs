@@ -379,7 +379,7 @@ async fn receive_webhook(
             tracks: MultiLineString::from(polyline),
             properties: activity.properties,
         },
-        db.config.trim_dist,
+        &db.config,
     )
     .unwrap();
 

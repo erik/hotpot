@@ -6,7 +6,6 @@ use rusqlite::{params, ToSql};
 
 use crate::db::{decode_line, ActivityFilter, Database};
 use crate::tile::{Tile, TileBounds};
-use crate::DEFAULT_TILE_EXTENT;
 
 pub static DEFAULT_GRADIENT: Lazy<LinearGradient> = Lazy::new(|| {
     LinearGradient::from_stops(&[
@@ -52,21 +51,23 @@ struct TileRaster {
     bounds: TileBounds,
     scale: u32,
     width: u32,
+    tile_extent: u32,
     pixels: Vec<u8>,
 }
 
 impl TileRaster {
-    fn new(tile: Tile, source: TileBounds, width: u32) -> Self {
+    fn new(tile: Tile, source: TileBounds, width: u32, tile_extent: u32) -> Self {
         // TODO: support upscaling
-        assert!(width <= DEFAULT_TILE_EXTENT, "Upscaling not supported");
+        assert!(width <= tile_extent, "Upscaling not supported");
         assert!(width.is_power_of_two(), "width must be power of two");
         assert!(source.z >= tile.z, "source zoom must be >= target zoom");
 
         let zoom_steps = (source.z - tile.z) as u32;
-        let width_steps = DEFAULT_TILE_EXTENT.ilog2() - width.ilog2();
+        let width_steps = tile_extent.ilog2() - width.ilog2();
 
         Self {
             width,
+            tile_extent,
             pixels: vec![0; (width * width) as usize],
             bounds: source,
             scale: zoom_steps + width_steps,
@@ -77,15 +78,15 @@ impl TileRaster {
         debug_assert_eq!(source_tile.z, self.bounds.z);
 
         // Origin of source tile within target tile
-        let x_offset = DEFAULT_TILE_EXTENT * (source_tile.x - self.bounds.xmin);
-        let y_offset = DEFAULT_TILE_EXTENT * (source_tile.y - self.bounds.ymin);
+        let x_offset = self.tile_extent * (source_tile.x - self.bounds.xmin);
+        let y_offset = self.tile_extent * (source_tile.y - self.bounds.ymin);
 
         let mut prev = None;
         for Coord { x, y } in coords {
             // Translate (x,y) to location in target tile.
             // [0..(width * STORED_TILE_WIDTH)]
             let x = x + x_offset;
-            let y = (DEFAULT_TILE_EXTENT - y) + y_offset;
+            let y = (self.tile_extent - y) + y_offset;
 
             // Scale the coordinates back down to [0..width]
             let x = x >> self.scale;
@@ -183,7 +184,7 @@ pub fn render_tile(
         .ok_or_else(|| anyhow!("no source level for tile: {:?}", tile))?;
 
     let bounds = TileBounds::from(zoom_level, &tile);
-    let mut raster = TileRaster::new(tile, bounds, width);
+    let mut raster = TileRaster::new(tile, bounds, width, db.config.tile_extent);
 
     let mut have_activity = false;
 
