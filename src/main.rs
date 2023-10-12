@@ -2,10 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
+use csv::StringRecord;
 use image::RgbaImage;
 use rayon::prelude::*;
 use serde_json::Value;
@@ -45,17 +47,12 @@ enum Commands {
         #[arg(short, long, default_value = "200.0")]
         trim: f64,
 
-        /// Path to CSV containing additional activity metadata.
+        /// Path to a CSV with additional activity metadata.
+        ///
+        /// The `filename` column contains paths (relative to the CSV file)
+        /// which will assign properties to each parsed activity.
         #[arg(long)]
-        attrs_path: Option<PathBuf>,
-
-        /// Column from attribute file to join to activity file.
-        #[arg(long, default_value = "Filename")]
-        attrs_file_col: String,
-        // TODO: figure out if we should use this?
-        // /// Column from attribute file to use as activity title.
-        // #[arg(long, default_value = "Activity Name")]
-        // attrs_title_col: String,
+        join: Option<PathBuf>,
     },
 
     /// Render a single XYZ tile as a PNG.
@@ -168,18 +165,15 @@ fn run() -> Result<()> {
         Commands::Import {
             path,
             reset,
-            attrs_path,
-            attrs_file_col,
+            join,
             ..
             // TODO: update the database config with this
             // trim,
         } => {
             let db = Database::new(&opts.global.db_path)?;
-            let attrs = attrs_path
-                .map(|csv| AttributeSource::from_csv(
-                    &csv,
-                    &attrs_file_col,
-                ))
+
+            let prop_source = join
+                .map(|csv| PropertySource::from_csv(&csv))
                 .transpose()?
                 .unwrap_or_default();
 
@@ -187,7 +181,7 @@ fn run() -> Result<()> {
                 db.reset_activities()?;
             }
 
-            import_activities(&path, &db, &attrs)?;
+            import_activities(&path, &db, &prop_source)?;
         }
 
         Commands::Tile {
@@ -275,12 +269,12 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-struct AttributeSource {
+struct PropertySource {
     base_dir: PathBuf,
     path_props: HashMap<PathBuf, HashMap<String, Value>>,
 }
 
-impl Default for AttributeSource {
+impl Default for PropertySource {
     fn default() -> Self {
         Self {
             base_dir: PathBuf::new(),
@@ -289,12 +283,23 @@ impl Default for AttributeSource {
     }
 }
 
-impl AttributeSource {
-    fn from_csv(csv_path: &Path, file_col: &str) -> Result<Self> {
+impl PropertySource {
+    fn from_csv(csv_path: &Path) -> Result<Self> {
+        const JOIN_COL: &str = "filename";
+
         let base_dir = csv_path.parent().unwrap_or(Path::new("/")).canonicalize()?;
 
         let mut rdr = csv::Reader::from_path(csv_path)?;
         let mut path_props = HashMap::new();
+
+        // Normalize header naming
+        let headers = StringRecord::from_iter(
+            rdr.headers()?
+                .iter()
+                .map(|hdr| hdr.to_lowercase().replace(' ', "_")),
+        );
+        rdr.set_headers(headers);
+
         for row in rdr.deserialize() {
             let mut row: HashMap<String, String> = row?;
 
@@ -302,13 +307,17 @@ impl AttributeSource {
             row.retain(|_k, v| !v.trim().is_empty());
 
             // TODO: report error if this is missing
-            let Some(filename) = row.remove(file_col) else {
+            let Some(filename) = row.remove(JOIN_COL) else {
+                tracing::warn!(?row, "missing {JOIN_COL} column");
                 continue;
             };
 
             let json_props = row
                 .into_iter()
-                .map(|(k, v)| (k, Value::String(v)))
+                .map(|(k, v)| {
+                    let val = Value::from_str(&v).unwrap_or_else(|_| Value::String(v));
+                    (k, val)
+                })
                 .collect();
 
             path_props.insert(PathBuf::from(filename), json_props);
@@ -335,7 +344,7 @@ impl AttributeSource {
     }
 }
 
-fn import_activities(p: &Path, db: &Database, prop_source: &AttributeSource) -> Result<()> {
+fn import_activities(p: &Path, db: &Database, prop_source: &PropertySource) -> Result<()> {
     let conn = db.connection()?;
 
     // Skip any files that are already in the database.

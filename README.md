@@ -39,14 +39,14 @@ hotpot import [path/to/files/]
 ```
 
 If importing activities from a [Strava data export], use
-`--attrs-path [path/to/activities.csv]` to include metadata about your
+`--join [path/to/activities.csv]` to include metadata about your
 activities usually not stored in the GPX (title, which bike you used, the
 weather, ...)
 
 ```
 hotpot import \
     strava_export/activities/ \
-    --attrs-path strava_export/activities.csv
+    --join strava_export/activities.csv
 ```
 
 [Strava data export]: https://support.strava.com/hc/en-us/articles/216918437-Exporting-your-Data-and-Bulk-Export
