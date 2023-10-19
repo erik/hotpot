@@ -1,11 +1,11 @@
 use std::fs::File;
 use std::path::PathBuf;
-use std::str::FromStr;
+
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use image::RgbaImage;
-use rayon::prelude::*;
 use time::Date;
+
 use activity::PropertySource;
 
 use crate::db::{ActivityFilter, Database};
@@ -37,8 +37,8 @@ enum Commands {
         reset: bool,
 
         /// Hide points within given distance (meters) of start/end of activity.
-        #[arg(short, long, default_value = "200.0")]
-        trim: f64,
+        #[arg(short, long)]
+        trim: Option<f64>,
 
         /// Path to a CSV with additional activity metadata.
         ///
@@ -159,11 +159,14 @@ fn run() -> Result<()> {
             path,
             reset,
             join,
-            ..
-            // TODO: update the database config with this
-            // trim,
+            trim,
         } => {
-            let db = Database::new(&opts.global.db_path)?;
+            let mut db = Database::new(&opts.global.db_path)?;
+
+            // TODO: should be persisted to DB
+            if let Some(trim) = trim {
+                db.config.trim_dist = trim;
+            }
 
             let prop_source = join
                 .map(|csv| PropertySource::from_csv(&csv))

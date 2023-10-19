@@ -4,22 +4,22 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
-use fitparser::de::{DecodeOption, from_reader_with_options};
+use csv::StringRecord;
+use fitparser::de::{from_reader_with_options, DecodeOption};
 use fitparser::profile::MesgNum;
 use fitparser::Value;
 use flate2::read::GzDecoder;
 use geo::EuclideanDistance;
 use geo_types::{LineString, MultiLineString, Point};
-use rusqlite::params;
-use time::OffsetDateTime;
-use std::sync::atomic::{AtomicU32, Ordering};
-use walkdir::WalkDir;
-use csv::StringRecord;
-use std::str::FromStr;
 use rayon::iter::{ParallelBridge, ParallelIterator};
+use rusqlite::params;
+use std::str::FromStr;
+use std::sync::atomic::{AtomicU32, Ordering};
+use time::OffsetDateTime;
+use walkdir::WalkDir;
 
 use crate::db;
-use crate::db::{Database, encode_line};
+use crate::db::{encode_line, Database};
 use crate::simplify::simplify_line;
 use crate::tile::{BBox, LngLat, Tile, WebMercator};
 
@@ -490,7 +490,8 @@ impl PropertySource {
             let json_props = row
                 .into_iter()
                 .map(|(k, v)| {
-                    let val = serde_json::Value::from_str(&v).unwrap_or(serde_json::Value::String(v));
+                    let val =
+                        serde_json::Value::from_str(&v).unwrap_or(serde_json::Value::String(v));
                     (k, val)
                 })
                 .collect();
