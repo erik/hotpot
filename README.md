@@ -6,11 +6,10 @@ A spicy little heatmap tile server.
 
 ## Overview
 
-Hotpot renders customizable activity heatmap images from GPS tracks extracted
+Renders customizable activity heatmap images from GPS tracks extracted
 from GPX, TCX, and FIT files. There's also a built-in web server to
 serve up [XYZ tiles], and endpoints to add new data via HTTP POST or
 [Strava webhooks].
-
 
 Designed to be self-hosted. It's lightweight and snappy enough to fit onto the
 free tier of pretty much anything that can run a Docker container. Even with
@@ -54,7 +53,7 @@ hotpot import \
 After the initial import, you'll have a `sqlite3` database, and can start
 creating heatmaps.
 
-Now let's run the tile server:
+Now run the tile server:
 
 ```
 hotpot serve
