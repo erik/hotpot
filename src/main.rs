@@ -315,7 +315,7 @@ impl PropertySource {
             let json_props = row
                 .into_iter()
                 .map(|(k, v)| {
-                    let val = Value::from_str(&v).unwrap_or_else(|_| Value::String(v));
+                    let val = Value::from_str(&v).unwrap_or(Value::String(v));
                     (k, val)
                 })
                 .collect();

@@ -59,17 +59,68 @@ struct PolyLineMap {
     polyline: String,
 }
 
-/// https://developers.strava.com/docs/reference/#api-models-SummaryActivity
 #[derive(Deserialize)]
+struct ActivityGear {
+    id: String,
+    name: String,
+}
+
+/// https://developers.strava.com/docs/reference/#api-models-SummaryActivity
+#[allow(dead_code)]
+#[derive(Deserialize, Serialize)]
 struct SummaryActivity {
     id: u64,
+    #[serde(skip_serializing)]
     name: String,
+    #[serde(skip_serializing)]
     map: PolyLineMap,
     #[serde(with = "time::serde::iso8601")]
     start_date: OffsetDateTime,
+    #[serde(rename(serialize = "elevation_gain"))]
+    total_elevation_gain: f64,
+    #[serde(rename(deserialize = "type", serialize = "activity_type"))]
+    kind: String,
+    // Custom serialization to flatten
+    #[serde(skip_serializing)]
+    gear: Option<ActivityGear>,
 
+    // Skip the useless properties
+    #[serde(skip)]
+    segment_efforts: Vec<Value>,
+    #[serde(skip)]
+    splits_metric: Vec<Value>,
+    #[serde(skip)]
+    laps: Vec<Value>,
+    #[serde(skip)]
+    photos: Vec<Value>,
+    #[serde(skip)]
+    highlighted_kudosers: Vec<Value>,
+
+    // Catch all for everything else
     #[serde(flatten)]
     properties: HashMap<String, Value>,
+}
+
+impl SummaryActivity {
+    /// Merge the activity's properties with the gear's properties.
+    fn properties(&self) -> HashMap<String, Value> {
+        // TODO: use custom serializer instead
+        let mut map = serde_json::to_value(self)
+            .ok()
+            .and_then(|it| it.as_object().cloned())
+            .unwrap();
+
+        // Unnest gear since it could be useful
+        if let Some(ref gear) = self.gear {
+            map.insert(
+                "activity_gear".to_string(),
+                Value::String(gear.name.clone()),
+            );
+            map.insert("gear_id".to_string(), Value::String(gear.id.clone()));
+        }
+
+        HashMap::from_iter(map)
+    }
 }
 
 #[derive(Clone)]
@@ -369,6 +420,7 @@ async fn receive_webhook(
     };
 
     let polyline = polyline::decode_polyline(&activity.map.polyline, 5).expect("valid polyline");
+    let properties = activity.properties();
 
     activity::upsert(
         &mut db.connection().unwrap(),
@@ -377,7 +429,7 @@ async fn receive_webhook(
             title: Some(activity.name),
             start_time: Some(activity.start_date),
             tracks: MultiLineString::from(polyline),
-            properties: activity.properties,
+            properties,
         },
         &db.config,
     )
