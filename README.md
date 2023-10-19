@@ -68,11 +68,46 @@ See `hotpot --help` for more.
 
 ### Gradients
 
-todo
+There are several built in palettes available for converting the raw frequency
+data into colored pixels, which can be set via the `?color={...}` query
+parameter. A list of these is available in the map view.
+
+In addition to the presets, custom gradients can also be used via the
+`?gradient={...}` parameter.
+
+For example, to smoothly transition from red (least activity) to white
+(most), we could use `0:f00;1:fff`. Pixels with no activity will be left
+transparent. Color codes are interpreted as hex RGB values in the following
+formats: `RGB`, `RRGGBB`, `RRGGBBAA`.
+
+If alpha values are not given, they are assumed to be `0xff` (fully opaque).
 
 ### Filters
 
-todo
+We can also choose which activities we're interested in visualizing
+dynamically through the `?filter={...}` parameter.
+
+Any properties available when the activity was added (either via webhook
+or bulk import) can be used in the filter expression, but the exact names
+will vary based on your data.
+
+For example, we may want to generate different tiles for cycling vs hiking,
+exclude commutes, which gear we used, a minimum elevation gain, etc.
+
+```json5
+# Basic numeric comparisons: <, <=, >, >=
+{"key": "elev_gain", ">": 1000}
+
+# Match/exclude multiple values
+{"key": "activity_gear", "any_of": ["gravel", "mtb"]}
+{"key": "activity_gear", "none_of": ["gravel", "mtb"]}
+
+# Substring matches (e.g. match "Gravel Ride" + "Ride")
+{"key": "activity_type", "matches": "Ride"}
+
+# Property key exists
+{"key", "max_hr", "has_key": true}
+```
 
 ## Activity Uploads
 
