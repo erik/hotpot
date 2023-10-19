@@ -8,6 +8,7 @@ More web endpoints
 Customization
   - Support AND/OR/NOT for property filters
   - Vary gradient stops based on zoom level
+  - "retina" tiles
 
 CLI
   - Render arbitrary LatLng bounds rather than tile
