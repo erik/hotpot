@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
-use fitparser::de::{from_reader_with_options, DecodeOption};
+use fitparser::de::{DecodeOption, from_reader_with_options};
 use fitparser::profile::MesgNum;
 use fitparser::Value;
 use flate2::read::GzDecoder;
@@ -12,9 +12,14 @@ use geo::EuclideanDistance;
 use geo_types::{LineString, MultiLineString, Point};
 use rusqlite::params;
 use time::OffsetDateTime;
+use std::sync::atomic::{AtomicU32, Ordering};
+use walkdir::WalkDir;
+use csv::StringRecord;
+use std::str::FromStr;
+use rayon::iter::{ParallelBridge, ParallelIterator};
 
 use crate::db;
-use crate::db::encode_line;
+use crate::db::{Database, encode_line};
 use crate::simplify::simplify_line;
 use crate::tile::{BBox, LngLat, Tile, WebMercator};
 
@@ -437,4 +442,137 @@ pub fn upsert(
     }
 
     Ok(activity_id)
+}
+
+pub struct PropertySource {
+    base_dir: PathBuf,
+    path_props: HashMap<PathBuf, HashMap<String, serde_json::Value>>,
+}
+
+impl Default for PropertySource {
+    fn default() -> Self {
+        Self {
+            base_dir: PathBuf::new(),
+            path_props: HashMap::new(),
+        }
+    }
+}
+
+impl PropertySource {
+    pub(crate) fn from_csv(csv_path: &Path) -> Result<Self> {
+        const JOIN_COL: &str = "filename";
+
+        let base_dir = csv_path.parent().unwrap_or(Path::new("/")).canonicalize()?;
+
+        let mut rdr = csv::Reader::from_path(csv_path)?;
+        let mut path_props = HashMap::new();
+
+        // Normalize header naming
+        let headers = StringRecord::from_iter(
+            rdr.headers()?
+                .iter()
+                .map(|hdr| hdr.to_lowercase().replace(' ', "_")),
+        );
+        rdr.set_headers(headers);
+
+        for row in rdr.deserialize() {
+            let mut row: HashMap<String, String> = row?;
+
+            // Only keep the non-empty keys
+            row.retain(|_k, v| !v.trim().is_empty());
+
+            // TODO: report error if this is missing
+            let Some(filename) = row.remove(JOIN_COL) else {
+                tracing::warn!(?row, "missing {JOIN_COL} column");
+                continue;
+            };
+
+            let json_props = row
+                .into_iter()
+                .map(|(k, v)| {
+                    let val = serde_json::Value::from_str(&v).unwrap_or(serde_json::Value::String(v));
+                    (k, val)
+                })
+                .collect();
+
+            path_props.insert(PathBuf::from(filename), json_props);
+        }
+
+        Ok(Self {
+            base_dir,
+            path_props,
+        })
+    }
+
+    /// Merge properties from the attribute source into the activity.
+    fn enrich(&self, path: &Path, activity: &mut RawActivity) {
+        let path = path.strip_prefix(&self.base_dir).ok();
+        let Some(props) = path.and_then(|p| self.path_props.get(p)) else {
+            // We'll get here if there are activities in the import directory which don't have
+            // a corresponding line in the metadata file.
+            return;
+        };
+
+        for (k, v) in props {
+            activity.properties.insert(k.clone(), v.clone());
+        }
+    }
+}
+
+pub fn import_path(p: &Path, db: &Database, prop_source: &PropertySource) -> Result<()> {
+    let conn = db.connection()?;
+
+    // Skip any files that are already in the database.
+    let known_files: HashSet<String> = conn
+        .prepare("SELECT file FROM activities")?
+        .query_map([], |row| row.get(0))?
+        .filter_map(|n| n.ok())
+        .collect();
+
+    tracing::info!(
+        path = ?p,
+        num_known = known_files.len(),
+        "starting activity import"
+    );
+
+    let num_imported = AtomicU32::new(0);
+    WalkDir::new(p)
+        .into_iter()
+        .par_bridge()
+        .filter_map(|dir| {
+            let dir = dir.ok()?;
+            let path = dir.path();
+
+            if !known_files.contains(path.to_str()?) {
+                Some(path.to_owned())
+            } else {
+                None
+            }
+        })
+        .filter_map(|path| {
+            let activity = read_file(&path)
+                .map_err(|err| tracing::error!(?path, ?err, "failed to read activity"))
+                .ok()??;
+
+            Some((path, activity))
+        })
+        .for_each_init(
+            || db.shared_pool(),
+            |pool, (path, mut activity)| {
+                tracing::debug!(?path, "importing activity");
+
+                // Merge with activity properties
+                prop_source.enrich(&path, &mut activity);
+
+                let mut conn = pool.get().expect("db connection pool timed out");
+                upsert(&mut conn, path.to_str().unwrap(), &activity, &db.config)
+                    .expect("insert activity");
+
+                num_imported.fetch_add(1, Ordering::Relaxed);
+            },
+        );
+
+    conn.execute_batch("VACUUM")?;
+    tracing::info!(?num_imported, "finished import");
+    Ok(())
 }

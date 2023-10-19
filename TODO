@@ -13,6 +13,8 @@ Customization
 CLI
   - Render arbitrary LatLng bounds rather than tile
   - Filter support
+  - `init` command (or similar) to create / configure empty DB
+    (maybe this is we set zoom levels etc.)
 
 Misc
   - "privacy zones" rather than start/end trim distance
