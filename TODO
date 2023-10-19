@@ -7,7 +7,6 @@ More web endpoints
 
 Customization
   - Support AND/OR/NOT for property filters
-  - Dynamic gradients + stops
   - Vary gradient stops based on zoom level
 
 CLI

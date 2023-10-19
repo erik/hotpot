@@ -25,10 +25,11 @@
     <div>
         <label for="color">Theme</label>
         <select key="color" name="color">
-            <option value="default" selected>Pinkish</option>
+            <option value="pinkish" selected>Pinkish</option>
             <option value="orange">Orange</option>
             <option value="blue-red">Blue/Red</option>
             <option value="red">Red</option>
+            <option value="">Custom</option>
         </select>
     </div>
 
@@ -53,6 +54,11 @@
     <div>
         <label for="filter">Filter</label>
         <input key="filter" name="filter" />
+    </div>
+
+    <div>
+        <label for="gradient">Gradient</label>
+        <input key="gradient" name="gradient" />
     </div>
 </div>
 
@@ -112,12 +118,13 @@
     });
 
     options = {
-        color: 'default',
+        color: null,
         before: null,
         after: null,
         size: '256',
         map: 'dark-matter-nolabels',
         filter: null,
+        gradient: null,
     };
 
     function updateMapStyle() {
@@ -137,6 +144,7 @@
             options.before && `before=${options.before}`,
             options.after && `after=${options.after}`,
             options.filter && `filter=${options.filter}`,
+            options.gradient && `gradient=${options.gradient}`,
         ].filter(Boolean).join('&');
 
         map

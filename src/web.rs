@@ -19,7 +19,7 @@ use tokio::runtime::Runtime;
 use tower_http::trace::{DefaultOnFailure, TraceLayer};
 
 use crate::db::{ActivityFilter, Database};
-use crate::raster::DEFAULT_GRADIENT;
+use crate::raster::LinearGradient;
 use crate::tile::Tile;
 use crate::web::strava::StravaAuth;
 use crate::{activity, raster};
@@ -131,6 +131,8 @@ async fn index() -> impl IntoResponse {
 struct RenderQueryParams {
     #[serde(default)]
     color: Option<String>,
+    #[serde(default)]
+    gradient: Option<LinearGradient>,
     #[serde(default, with = "crate::date::parse")]
     before: Option<Date>,
     #[serde(default, with = "crate::date::parse")]
@@ -150,16 +152,24 @@ async fn render_tile(
         return StatusCode::NOT_FOUND.into_response();
     }
 
-    // TODO: this should be supported by CLI as well
-    let color = match params.color.as_deref() {
-        Some("blue-red") => &raster::BLUE_RED,
-        Some("red") => &raster::RED,
-        Some("orange") => &raster::ORANGE,
-        _ => &DEFAULT_GRADIENT,
+    let gradient: &LinearGradient = match (&params.gradient, params.color.as_deref()) {
+        (Some(gradient), None) => gradient,
+        (Some(_), Some(_)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "cannot specify both gradient and color",
+            )
+                .into_response()
+        }
+        (None, None) => &raster::PINKISH,
+        (None, Some("pinkish")) => &raster::PINKISH,
+        (None, Some("blue-red")) => &raster::BLUE_RED,
+        (None, Some("red")) => &raster::RED,
+        (None, Some("orange")) => &raster::ORANGE,
+        (None, Some(_)) => return (StatusCode::BAD_REQUEST, "invalid color").into_response(),
     };
 
     let filter = params.filter.map(|s| serde_json::from_str(&s)).transpose();
-
     let filter = match filter {
         Ok(f) => f,
         Err(e) => {
@@ -170,7 +180,7 @@ async fn render_tile(
     let filter = ActivityFilter::new(params.before, params.after, filter);
     let tile = Tile::new(x, y, z);
 
-    match raster::render_tile(tile, color, 512, &filter, &db) {
+    match raster::render_tile(tile, gradient, 512, &filter, &db) {
         Ok(Some(image)) => {
             let mut bytes = Vec::new();
             let mut cursor = Cursor::new(&mut bytes);

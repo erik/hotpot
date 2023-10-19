@@ -9,7 +9,7 @@ use time::Date;
 use activity::PropertySource;
 
 use crate::db::{ActivityFilter, Database};
-use crate::raster::DEFAULT_GRADIENT;
+use crate::raster::PINKISH;
 use crate::tile::Tile;
 
 mod activity;
@@ -204,8 +204,8 @@ fn run() -> Result<()> {
 
             let filter = ActivityFilter::new(before, after, None);
 
-            let image = raster::render_tile(zxy, &DEFAULT_GRADIENT, width, &filter, &db)?
-                .unwrap_or_else(|| {
+            let image =
+                raster::render_tile(zxy, &PINKISH, width, &filter, &db)?.unwrap_or_else(|| {
                     // note: could also just use RgbaImage::default() here if we don't care about size.
                     RgbaImage::new(width, width)
                 });
