@@ -44,7 +44,7 @@ pub static ORANGE: Lazy<LinearGradient> = Lazy::new(|| {
 #[derive(Debug)]
 pub struct LinearGradient {
     empty_value: Rgba<u8>,
-    palette: [Rgba<u8>; 256],
+    palette: [Rgba<u8>; 100],
 }
 
 struct TileRaster {
@@ -134,19 +134,22 @@ fn lerp(a: Rgba<u8>, b: Rgba<u8>, t: f32) -> Rgba<u8> {
 }
 
 impl LinearGradient {
+    const NUM_STEPS: usize = 100;
+
     pub fn from_stops<P>(stops: &[(f32, P)]) -> Self
     where
         P: Copy + Into<Rgba<u8>>,
     {
-        let mut palette = [Rgba::from([0, 0, 0, 0]); 256];
+        let mut palette = [Rgba::from([0, 0, 0, 0]); Self::NUM_STEPS];
+        let palette_width = Self::NUM_STEPS as f32;
         let mut i = 0;
 
         for stop in stops.windows(2) {
             let (a, b) = (&stop[0], &stop[1]);
-            let width = (b.0 - a.0) * 256.0;
+            let width = (b.0 - a.0) * palette_width;
 
-            let start_idx = (a.0 * 256.0).round() as usize;
-            let end_idx = (b.0 * 256.0).ceil() as usize;
+            let start_idx = (a.0 * palette_width).round() as usize;
+            let end_idx = (b.0 * palette_width).ceil() as usize;
 
             while i < end_idx {
                 let t = (i - start_idx) as f32 / width;
@@ -175,7 +178,8 @@ impl LinearGradient {
             return self.empty_value;
         }
 
-        self.palette[val as usize]
+        let idx = (val as usize).clamp(0, Self::NUM_STEPS - 1);
+        self.palette[idx]
     }
 }
 
@@ -297,8 +301,10 @@ mod tests {
             .parse::<LinearGradient>()
             .unwrap();
         assert_eq!(gradient.palette[0], Rgba::from([0x00, 0x11, 0x22, 0xff]));
-        assert_eq!(gradient.palette[64], Rgba::from([0x77, 0x88, 0x99, 0xff]));
-        assert_eq!(gradient.palette[128], Rgba::from([0x33, 0x44, 0x55, 0xff]));
-        assert_eq!(gradient.palette[255], Rgba::from([0xff, 0xff, 0xff, 0x33]));
+        assert_eq!(gradient.palette[25], Rgba::from([0x77, 0x88, 0x99, 0xff]));
+        assert_eq!(gradient.palette[50], Rgba::from([0x33, 0x44, 0x55, 0xff]));
+        assert_eq!(gradient.palette[75], Rgba::from([0xff, 0xff, 0xff, 0x33]));
+        // Last value should be copied to end
+        assert_eq!(gradient.palette[99], Rgba::from([0xff, 0xff, 0xff, 0x33]));
     }
 }
