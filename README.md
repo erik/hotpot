@@ -82,6 +82,17 @@ formats: `RGB`, `RRGGBB`, `RRGGBBAA`.
 
 If alpha values are not given, they are assumed to be `0xff` (fully opaque).
 
+<details>
+  <summary>Example Gradients</summary>
+ 
+| Gradient | Rendered |
+| -------- | -------- |
+| `0:000;0.25:fff`| ![](https://user-images.githubusercontent.com/188935/277203430-269317c9-8539-4bc7-822c-fc199867d830.png) |
+| `0:f00;0.1:ff0;0.2:ffff22;0.3:ffffff`| ![](https://user-images.githubusercontent.com/188935/277203443-ef63926a-0316-4a9b-ba5e-2cfdf0281581.png) |
+| `0:322bb3;0.10:9894e5;0.15:fff` | ![](https://user-images.githubusercontent.com/188935/277203450-bd929ee0-db3d-4653-9fed-5b3982829091.png) |
+
+</details>
+
 ### Filters
 
 We can also choose which activities we're interested in visualizing
