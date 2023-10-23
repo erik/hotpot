@@ -119,15 +119,86 @@ directly over HTTP:
 
 ### `/upload`
 
-todo
+todo document
 
 ### Strava Webhook
 
-todo
+If you're already uploading activity data to Strava, you can use their activity
+webhook to import new activities automatically.
+
+To get started, follow the [Strava API
+documentation](https://developers.strava.com/) to create your own application.
+
+> **NOTE**
+>
+> Strava limits new APIs to only allow the owner of the API to authenticate.
+> You won't be able to share this with multiple people.
+
+Next, we can use oauth to authenticate our account and save the API tokens in
+the database.
+
+``` console
+export STRAVA_CLIENT_ID=... \
+       STRAVA_CLIENT_SECRET=...\
+       STRAVA_WEBHOOK_SECRET=...
+
+hotpot strava-auth
+
+# Grant permission to your app via OAuth
+open http://127.0.0.1:8080/strava/auth
+```
+
+Once you've authenticated successfully, you'll need to register the callback
+URL of your server with Strava's API. Follow the `curl` commands shown on the
+success page to complete setup.
 
 ## Deployment
 
-todo
+To simplify things, a basic `Dockerfile` is included. Mount a volume at
+`/data/` to persist the the sqlite database between runs.
+
+Since we're using sqlite as our data store, it's easy to first run the bulk
+import locally, then copy the database over to a remote host.
+
+### Fly Quick Start
+
+Hotpot should comfortably fit within Fly.io's free tier, and handles the
+scale-to-zero behavior gracefully. Follow their [setup
+instructions](https://fly.io/docs/hands-on/install-flyctl/) first.
+
+Steps below assume you've cloned this repo locally and already created a local
+database.
+
+``` console
+# Create the application
+fly launch --ha false
+
+# Create a persistent volume for the DB
+fly volumes create hotpot_db -a YOUR_APP_NAME --size 1
+
+# Attach the volume
+echo '
+[mounts]
+  source="hotpot_db"
+  destination="/data"
+' >> fly.toml
+
+# If you're using the Strava webhook
+fly secrets set \
+    STRAVA_CLIENT_ID=... \
+    STRAVA_CLIENT_SECRET=...\
+    STRAVA_WEBHOOK_SECRET=...
+
+# Deploy the app
+fly deploy
+
+# Copy local DB over to the app
+fly proxy 10022:22 &
+scp -P 10022 ./hotpot.sqlite3* root@localhost:/data/
+
+# Restart the app, and we're done.
+fly app restart
+```
 
 ## License
 
