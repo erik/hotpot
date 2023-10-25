@@ -1,32 +1,19 @@
 # hotpot
 
-A spicy little heatmap tile server.
-
 ![](https://user-images.githubusercontent.com/188935/273125894-7f76eabb-585b-405d-af16-a93df2d85cb4.png)
 
-## Overview
-
-Renders customizable activity heatmap images from GPS tracks extracted
-from GPX, TCX, and FIT files. There's also a built-in web server to
-serve up [XYZ tiles], and endpoints to add new data via HTTP POST or
-[Strava webhooks].
+Render customizable activity heatmap images from GPS tracks extracted from GPX,
+TCX, and FIT files. There's also a built-in web server to serve up [XYZ tiles],
+and endpoints to add new data via HTTP POST or [Strava webhooks].
 
 Designed to be self-hosted. It's lightweight and snappy enough to fit onto the
 free tier of pretty much anything that can run a Docker container. Even with
 100,000 km of activity data, [Fly.io]'s smallest instance can render tiles in
 ~1 ms.
 
-Tracks are efficiently stored in a local `sqlite3` database.
-
 [XYZ tiles]: https://en.wikipedia.org/wiki/Tiled_web_map
 [Strava webhooks]: https://developers.strava.com/docs/webhooks/
 [Fly.io]: https://fly.io/
-
-```console
-$ du -sh activities/ hotpot.sqlite3
-789M    activities/
- 47M    hotpot.sqlite3
-```
 
 ## Quick Start
 
@@ -84,7 +71,7 @@ If alpha values are not given, they are assumed to be `0xff` (fully opaque).
 
 <details>
   <summary>Example Gradients</summary>
- 
+
 | Gradient | Rendered |
 | -------- | -------- |
 | `0:000;0.25:fff`| ![](https://user-images.githubusercontent.com/188935/277203430-269317c9-8539-4bc7-822c-fc199867d830.png) |
@@ -148,7 +135,7 @@ documentation](https://developers.strava.com/) to create your own application.
 Next, we can use oauth to authenticate our account and save the API tokens in
 the database.
 
-``` console
+``` bash
 export STRAVA_CLIENT_ID=... \
        STRAVA_CLIENT_SECRET=...\
        STRAVA_WEBHOOK_SECRET=...
@@ -166,7 +153,7 @@ success page to complete setup.
 ## Deployment
 
 To simplify things, a basic `Dockerfile` is included. Mount a volume at
-`/data/` to persist the the sqlite database between runs.
+`/data/` to persist the sqlite database between runs.
 
 Since we're using sqlite as our data store, it's easy to first run the bulk
 import locally, then copy the database over to a remote host.
@@ -180,7 +167,7 @@ instructions](https://fly.io/docs/hands-on/install-flyctl/) first.
 Steps below assume you've cloned this repo locally and already created a local
 database.
 
-``` console
+``` bash
 # Create the application
 fly launch --ha false
 
