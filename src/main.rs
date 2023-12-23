@@ -23,12 +23,20 @@ mod tile;
 mod web;
 
 #[derive(Clone)]
-struct Ullr {
-    ul: tile::LngLat,
-    br: tile::LngLat,
+struct LngLatBounds {
+    sw: tile::LngLat,
+    ne: tile::LngLat,
 }
 
-impl Ullr {
+impl LngLatBounds {
+    fn new(sw: tile::LngLat, ne: tile::LngLat) -> Self {
+        if sw.0.x() >= ne.0.x() || sw.0.y() >= ne.0.y() {
+            panic!("invalid bounds");
+        }
+
+        Self { sw, ne }
+    }
+
     fn tile_viewport(
         &self,
         px_width: usize,
@@ -39,55 +47,33 @@ impl Ullr {
         let min_zoom = *zoom_range.start();
         let max_zoom = *zoom_range.end();
 
-        let ul_xy = self.ul.xy().expect("invalid coord");
-        let br_xy = self.br.xy().expect("invalid coord");
+        let sw_xy = self.sw.xy().expect("invalid coord");
+        let ne_xy = self.ne.xy().expect("invalid coord");
 
-        let ul = ul_xy.to_global_pixel(max_zoom as u8, tile_extent);
-        let br = br_xy.to_global_pixel(max_zoom as u8, tile_extent);
+        let sw_px = sw_xy.to_global_pixel(max_zoom as u8, tile_extent);
+        let ne_px = ne_xy.to_global_pixel(max_zoom as u8, tile_extent);
 
         let scale = f64::min(
-            (br.x() - ul.x()) as f64 / (px_width as f64),
-            (br.y() - ul.y()) as f64 / (px_height as f64),
+            (ne_px.x() - sw_px.x()) as f64 / (px_width as f64),
+            (sw_px.y() - ne_px.y()) as f64 / (px_height as f64),
         );
 
         let zoom = (max_zoom - scale.log2().floor() as usize).clamp(min_zoom, max_zoom) as u8;
-        let ul_tile = ul_xy.tile(zoom);
-        let br_tile = br_xy.tile(zoom);
-
-        println!(
-            "
-        tile_extent:  {:?}
-        min/max zoom: {:?} / {:?}
-        ul_xy         {:?} -> ul px {:?} -> ul tile {:?}
-        br_xy         {:?} -> br px {:?} -> br tile {:?}
-        scale         {:?}
-        scale_log     {:?}
-        ",
-            tile_extent,
-            min_zoom,
-            max_zoom,
-            ul_xy,
-            ul,
-            ul_tile,
-            br_xy,
-            br,
-            br_tile,
-            scale,
-            scale.log2()
-        );
+        let sw_tile = sw_xy.tile(zoom);
+        let ne_tile = ne_xy.tile(zoom);
 
         TileBounds {
             z: zoom,
-            xmin: ul_tile.x,
-            xmax: br_tile.x,
-            ymin: ul_tile.y,
-            ymax: br_tile.y,
+            xmin: sw_tile.x,
+            xmax: ne_tile.x,
+            ymin: ne_tile.y,
+            ymax: sw_tile.y,
         }
     }
 }
 
 // TODO: this should be TryFrom (or whatever clap's parser thing is)
-impl From<String> for Ullr {
+impl From<String> for LngLatBounds {
     fn from(value: String) -> Self {
         let parts: Vec<_> = value
             .split(',')
@@ -96,12 +82,12 @@ impl From<String> for Ullr {
 
         if parts.len() != 4 {
             // TODO: better error here
-            panic!("invalid ULLR")
+            panic!("invalid LngLatBounds")
         } else {
-            Ullr {
-                ul: tile::LngLat((parts[1], parts[0]).into()),
-                br: tile::LngLat((parts[3], parts[2]).into()),
-            }
+            LngLatBounds::new(
+                tile::LngLat((parts[0], parts[1]).into()),
+                tile::LngLat((parts[2], parts[3]).into()),
+            )
         }
     }
 }
@@ -162,13 +148,19 @@ enum Commands {
 
     /// Render an arbitrary region, defined by a bounding box
     Render {
-        // Coordinates: upper left, lower right (lat, lng, lat, lng)
+        /// Coordinates in order of "west,south,east,north"
+        ///
+        /// Use a tool like https://boundingbox.klokantech.com/ to generate.
         #[arg(long)]
-        ullr: Ullr,
+        bounds: LngLatBounds,
 
         /// Width of output image in pixels.
         #[arg(short, long, default_value = "1024")]
-        width: usize,
+        width: u32,
+
+        /// Height of output image in pixels.
+        #[arg(short = 'H', long, default_value = "1024")]
+        height: u32,
 
         /// Path to output image.
         #[arg(short, long, default_value = "tile.png")]
@@ -315,20 +307,33 @@ fn run() -> Result<()> {
         }
 
         Commands::Render {
-            ullr,
-            width,
+            bounds,
+            mut width,
+            mut height,
             output,
         } => {
             let db = Database::open(&opts.global.db_path)?;
-            let tiles = ullr.tile_viewport(width, 512, 0..=14);
-            let num_x = 1 + tiles.xmax - tiles.xmin;
-            let num_y = 1 + tiles.ymax - tiles.ymin;
-            println!("tiles: {:?}", tiles);
-            println!("Have to render {} subtiles...", num_x * num_y);
-            let filter = ActivityFilter::new(None, None, None);
+            let tiles = bounds.tile_viewport(width as usize, height as usize, 0..=16);
+            let num_x = tiles.xmax - tiles.xmin + 1;
+            let num_y = tiles.ymax - tiles.ymin + 1;
 
-            // TODO: Use the given width/height
-            let mut mosaic = RgbaImage::new(num_x * 256, num_y * 256);
+            let mosaic_width = num_x * 256;
+            let mosaic_height = num_y * 256;
+            if mosaic_width < width || mosaic_height < height {
+                println!(
+                    "[WARN] source data is not high resolution for requested image dimensions, clamping to {}x{}.",
+                    mosaic_width, mosaic_height
+                );
+
+                height = u32::min(height, mosaic_height);
+                width = u32::min(width, mosaic_width);
+            }
+
+            println!("Rendering {} subtiles...", num_x * num_y);
+
+            // TODO: support this
+            let filter = ActivityFilter::new(None, None, None);
+            let mut mosaic = RgbaImage::new(mosaic_width, mosaic_height);
 
             for row in 0..num_y {
                 for col in 0..num_x {
@@ -338,13 +343,6 @@ fn run() -> Result<()> {
                     if let Some(img) = img {
                         let orig_x = col * 256;
                         let orig_y = row * 256;
-                        println!(
-                            "write:
-                            row    {}\tcol {}
-                            orig_x {}\t    {}
-                        ",
-                            row, col, orig_x, orig_y,
-                        );
 
                         for x in 0..256 {
                             for y in 0..256 {
@@ -355,8 +353,17 @@ fn run() -> Result<()> {
                 }
             }
 
+            // The tile bounds will be aligned to the tile grid, so we need to trim
+            // the excess pixels from the edges of the image.
+            let off_x = (mosaic_width - width) / 2;
+            let off_y = (mosaic_height - height) / 2;
+
+            let crop = image::imageops::crop(&mut mosaic, off_x, off_y, width, height);
             let mut file = File::create(output)?;
-            mosaic.write_to(&mut file, image::ImageOutputFormat::Png)?;
+
+            // TODO: should be able to avoid `.to_image()` here?
+            crop.to_image()
+                .write_to(&mut file, image::ImageOutputFormat::Png)?;
         }
 
         Commands::Serve {
