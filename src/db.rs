@@ -243,7 +243,7 @@ enum FilterOp {
 }
 
 impl PropertyFilter {
-    pub fn try_parse<'a>(s: &'a str) -> Result<Self> {
+    pub fn try_parse(s: &str) -> Result<Self> {
         serde_json::from_str(s).map_err(Into::into)
     }
 }

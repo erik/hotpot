@@ -63,7 +63,7 @@ impl LngLatBounds {
         }
     }
 
-    fn try_from<'a>(value: &'a str) -> Result<Self, &'static str> {
+    fn try_from(value: &str) -> Result<Self, &'static str> {
         let parts: Vec<_> = value
             .split(',')
             .filter_map(|it| it.parse::<f64>().ok())
