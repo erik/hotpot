@@ -79,10 +79,10 @@ impl TileClipper {
                 let extent = self.tile_extent;
                 let line = self.last_line(&tile);
                 if line.0.is_empty() {
-                    line.0.push(a.to_pixel(&bbox, extent).into());
+                    line.0.push(a.to_tile_pixel(&bbox, extent).into());
                 }
 
-                line.0.push(b.to_pixel(&bbox, extent).into());
+                line.0.push(b.to_tile_pixel(&bbox, extent).into());
 
                 // If we've modified the end point, we've left the current tile.
                 if b != end {

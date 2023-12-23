@@ -172,7 +172,17 @@ impl WebMercator {
         Tile::new(x, y, zoom)
     }
 
-    pub fn to_pixel(self, bbox: &BBox, tile_width: u16) -> TilePixel {
+    pub fn to_global_pixel(self, zoom: u8, tile_extent: u32) -> Point<u32> {
+        let num_tiles = 1u32 << zoom;
+        let scale = (num_tiles * tile_extent) as f64 / EARTH_CIRCUMFERENCE;
+
+        Point::from((
+            (scale * (self.0.x() + ORIGIN_OFFSET)) as u32,
+            (scale * (ORIGIN_OFFSET - self.0.y())) as u32,
+        ))
+    }
+
+    pub fn to_tile_pixel(self, bbox: &BBox, tile_width: u16) -> TilePixel {
         let Coord { x, y } = self.0.into();
 
         let width = bbox.right - bbox.left;

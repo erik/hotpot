@@ -1,9 +1,11 @@
 use std::fs::File;
+use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use image::RgbaImage;
+use tile::TileBounds;
 use time::Date;
 
 use activity::PropertySource;
@@ -19,6 +21,90 @@ mod raster;
 mod simplify;
 mod tile;
 mod web;
+
+#[derive(Clone)]
+struct Ullr {
+    ul: tile::LngLat,
+    br: tile::LngLat,
+}
+
+impl Ullr {
+    fn tile_viewport(
+        &self,
+        px_width: usize,
+        px_height: usize,
+        zoom_range: RangeInclusive<usize>,
+    ) -> tile::TileBounds {
+        let tile_extent = 256;
+        let min_zoom = *zoom_range.start();
+        let max_zoom = *zoom_range.end();
+
+        let ul_xy = self.ul.xy().expect("invalid coord");
+        let br_xy = self.br.xy().expect("invalid coord");
+
+        let ul = ul_xy.to_global_pixel(max_zoom as u8, tile_extent);
+        let br = br_xy.to_global_pixel(max_zoom as u8, tile_extent);
+
+        let scale = f64::min(
+            (br.x() - ul.x()) as f64 / (px_width as f64),
+            (br.y() - ul.y()) as f64 / (px_height as f64),
+        );
+
+        let zoom = (max_zoom - scale.log2().floor() as usize).clamp(min_zoom, max_zoom) as u8;
+        let ul_tile = ul_xy.tile(zoom);
+        let br_tile = br_xy.tile(zoom);
+
+        println!(
+            "
+        tile_extent:  {:?}
+        min/max zoom: {:?} / {:?}
+        ul_xy         {:?} -> ul px {:?} -> ul tile {:?}
+        br_xy         {:?} -> br px {:?} -> br tile {:?}
+        scale         {:?}
+        scale_log     {:?}
+        ",
+            tile_extent,
+            min_zoom,
+            max_zoom,
+            ul_xy,
+            ul,
+            ul_tile,
+            br_xy,
+            br,
+            br_tile,
+            scale,
+            scale.log2()
+        );
+
+        TileBounds {
+            z: zoom,
+            xmin: ul_tile.x,
+            xmax: br_tile.x,
+            ymin: ul_tile.y,
+            ymax: br_tile.y,
+        }
+    }
+}
+
+// TODO: this should be TryFrom (or whatever clap's parser thing is)
+impl From<String> for Ullr {
+    fn from(value: String) -> Self {
+        let parts: Vec<_> = value
+            .split(',')
+            .filter_map(|it| it.parse::<f64>().ok())
+            .collect();
+
+        if parts.len() != 4 {
+            // TODO: better error here
+            panic!("invalid ULLR")
+        } else {
+            Ullr {
+                ul: tile::LngLat((parts[1], parts[0]).into()),
+                br: tile::LngLat((parts[3], parts[2]).into()),
+            }
+        }
+    }
+}
 
 #[derive(Subcommand)]
 enum Commands {
@@ -68,6 +154,21 @@ enum Commands {
         /// Width of output image in pixels.
         #[arg(short, long, default_value = "1024")]
         width: u32,
+
+        /// Path to output image.
+        #[arg(short, long, default_value = "tile.png")]
+        output: PathBuf,
+    },
+
+    /// Render an arbitrary region, defined by a bounding box
+    Render {
+        // Coordinates: upper left, lower right (lat, lng, lat, lng)
+        #[arg(long)]
+        ullr: Ullr,
+
+        /// Width of output image in pixels.
+        #[arg(short, long, default_value = "1024")]
+        width: usize,
 
         /// Path to output image.
         #[arg(short, long, default_value = "tile.png")]
@@ -211,6 +312,51 @@ fn run() -> Result<()> {
                 });
 
             image.write_to(&mut file, image::ImageOutputFormat::Png)?;
+        }
+
+        Commands::Render {
+            ullr,
+            width,
+            output,
+        } => {
+            let db = Database::open(&opts.global.db_path)?;
+            let tiles = ullr.tile_viewport(width, 512, 0..=14);
+            let num_x = 1 + tiles.xmax - tiles.xmin;
+            let num_y = 1 + tiles.ymax - tiles.ymin;
+            println!("tiles: {:?}", tiles);
+            println!("Have to render {} subtiles...", num_x * num_y);
+            let filter = ActivityFilter::new(None, None, None);
+
+            // TODO: Use the given width/height
+            let mut mosaic = RgbaImage::new(num_x * 256, num_y * 256);
+
+            for row in 0..num_y {
+                for col in 0..num_x {
+                    let tile = Tile::new(tiles.xmin + col, tiles.ymin + row, tiles.z);
+                    let img = raster::render_tile(tile, &PINKISH, 256, &filter, &db)?;
+
+                    if let Some(img) = img {
+                        let orig_x = col * 256;
+                        let orig_y = row * 256;
+                        println!(
+                            "write:
+                            row    {}\tcol {}
+                            orig_x {}\t    {}
+                        ",
+                            row, col, orig_x, orig_y,
+                        );
+
+                        for x in 0..256 {
+                            for y in 0..256 {
+                                mosaic.put_pixel(orig_x + x, orig_y + y, *img.get_pixel(x, y));
+                            }
+                        }
+                    }
+                }
+            }
+
+            let mut file = File::create(output)?;
+            mosaic.write_to(&mut file, image::ImageOutputFormat::Png)?;
         }
 
         Commands::Serve {
