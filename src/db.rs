@@ -242,6 +242,12 @@ enum FilterOp {
     Lte(f64),
 }
 
+impl PropertyFilter {
+    pub fn try_parse<'a>(s: &'a str) -> Result<Self> {
+        serde_json::from_str(s).map_err(Into::into)
+    }
+}
+
 #[derive(Default)]
 pub struct ActivityFilter {
     before: Option<OffsetDateTime>,
@@ -257,6 +263,7 @@ impl ActivityFilter {
             after: after.map(|date| date.midnight().assume_utc()),
         }
     }
+
     pub fn to_query<'a>(&'a self, params: &mut Vec<&'a dyn ToSql>) -> String {
         let mut clauses: Vec<Cow<'a, str>> = vec![];
 

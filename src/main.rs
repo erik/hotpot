@@ -10,7 +10,7 @@ use time::Date;
 
 use activity::PropertySource;
 
-use crate::db::{ActivityFilter, Database};
+use crate::db::{ActivityFilter, Database, PropertyFilter};
 use crate::raster::PINKISH;
 use crate::tile::Tile;
 
@@ -29,19 +29,11 @@ struct LngLatBounds {
 }
 
 impl LngLatBounds {
-    fn new(sw: tile::LngLat, ne: tile::LngLat) -> Self {
-        if sw.0.x() >= ne.0.x() || sw.0.y() >= ne.0.y() {
-            panic!("invalid bounds");
-        }
-
-        Self { sw, ne }
-    }
-
     fn tile_viewport(
         &self,
-        px_width: usize,
-        px_height: usize,
-        zoom_range: RangeInclusive<usize>,
+        px_width: u32,
+        px_height: u32,
+        zoom_range: RangeInclusive<u32>,
     ) -> tile::TileBounds {
         let tile_extent = 256;
         let min_zoom = *zoom_range.start();
@@ -53,12 +45,12 @@ impl LngLatBounds {
         let sw_px = sw_xy.to_global_pixel(max_zoom as u8, tile_extent);
         let ne_px = ne_xy.to_global_pixel(max_zoom as u8, tile_extent);
 
-        let scale = f64::min(
+        let scale = f64::max(
             (ne_px.x() - sw_px.x()) as f64 / (px_width as f64),
             (sw_px.y() - ne_px.y()) as f64 / (px_height as f64),
         );
 
-        let zoom = (max_zoom - scale.log2().floor() as usize).clamp(min_zoom, max_zoom) as u8;
+        let zoom = (max_zoom - scale.log2().floor() as u32).clamp(min_zoom, max_zoom) as u8;
         let sw_tile = sw_xy.tile(zoom);
         let ne_tile = ne_xy.tile(zoom);
 
@@ -70,26 +62,33 @@ impl LngLatBounds {
             ymax: sw_tile.y,
         }
     }
-}
 
-// TODO: this should be TryFrom (or whatever clap's parser thing is)
-impl From<String> for LngLatBounds {
-    fn from(value: String) -> Self {
+    fn try_from<'a>(value: &'a str) -> Result<Self, &'static str> {
         let parts: Vec<_> = value
             .split(',')
             .filter_map(|it| it.parse::<f64>().ok())
             .collect();
 
         if parts.len() != 4 {
-            // TODO: better error here
-            panic!("invalid LngLatBounds")
+            return Err("expected coordinates as 'west,south,east,north'");
+        }
+
+        let sw = tile::LngLat((parts[0], parts[1]).into());
+        let ne = tile::LngLat((parts[2], parts[3]).into());
+
+        if sw.0.x() >= ne.0.x() {
+            Err("invalid west/east bounds")
+        } else if sw.0.y() >= ne.0.y() {
+            Err("invalid south/north bounds")
         } else {
-            LngLatBounds::new(
-                tile::LngLat((parts[0], parts[1]).into()),
-                tile::LngLat((parts[2], parts[3]).into()),
-            )
+            Ok(LngLatBounds { sw, ne })
         }
     }
+}
+
+fn try_parse_date(value: &str) -> Result<Date, &'static str> {
+    Date::parse(value, &time::format_description::well_known::Iso8601::DATE)
+        .map_err(|_| "invalid date")
 }
 
 #[derive(Subcommand)]
@@ -126,17 +125,17 @@ enum Commands {
         zxy: Tile,
 
         /// Select activities before this date (YYYY-MM-DD).
-        #[arg(short, long)]
-        before: Option<String>,
+        #[arg(short, long, value_parser = try_parse_date)]
+        before: Option<Date>,
 
         /// Select activities after this date (YYYY-MM-DD).
-        #[arg(short, long)]
-        after: Option<String>,
+        #[arg(short, long, value_parser = try_parse_date)]
+        after: Option<Date>,
 
-        // TODO: not yet supported (need to write a from_str)
-        // /// Filter activities by arbitrary metadata properties
-        // #[arg(short, long)]
-        // filter: Option<PropertyFilter>,
+        /// Filter activities by arbitrary metadata properties
+        #[arg(short, long, value_parser = PropertyFilter::try_parse)]
+        filter: Option<PropertyFilter>,
+
         /// Width of output image in pixels.
         #[arg(short, long, default_value = "1024")]
         width: u32,
@@ -151,7 +150,7 @@ enum Commands {
         /// Coordinates in order of "west,south,east,north"
         ///
         /// Use a tool like https://boundingbox.klokantech.com/ to generate.
-        #[arg(long)]
+        #[arg( long, value_parser = LngLatBounds::try_from)]
         bounds: LngLatBounds,
 
         /// Width of output image in pixels.
@@ -161,6 +160,18 @@ enum Commands {
         /// Height of output image in pixels.
         #[arg(short = 'H', long, default_value = "1024")]
         height: u32,
+
+        /// Select activities before this date (YYYY-MM-DD).
+        #[arg(short, long, value_parser = try_parse_date)]
+        before: Option<Date>,
+
+        /// Select activities after this date (YYYY-MM-DD).
+        #[arg(short, long, value_parser = try_parse_date)]
+        after: Option<Date>,
+
+        /// Filter activities by arbitrary metadata properties
+        #[arg(short, long, value_parser = PropertyFilter::try_parse)]
+        filter: Option<PropertyFilter>,
 
         /// Path to output image.
         #[arg(short, long, default_value = "tile.png")]
@@ -277,26 +288,14 @@ fn run() -> Result<()> {
             zxy,
             width,
             output,
+            filter: props,
             before,
             after,
         } => {
             let db = Database::open(&opts.global.db_path)?;
-
-            // TODO: can we reuse the parser in web.rs?
-            let parse = |t: String| {
-                Date::parse(
-                    t.as_str(),
-                    &time::format_description::well_known::Iso8601::DATE,
-                )
-            };
-
-            let before = before.map(parse).transpose()?;
-            let after = after.map(parse).transpose()?;
-
             let mut file = File::create(output)?;
 
-            let filter = ActivityFilter::new(before, after, None);
-
+            let filter = ActivityFilter::new(before, after, props);
             let image =
                 raster::render_tile(zxy, &PINKISH, width, &filter, &db)?.unwrap_or_else(|| {
                     // note: could also just use RgbaImage::default() here if we don't care about size.
@@ -310,10 +309,13 @@ fn run() -> Result<()> {
             bounds,
             mut width,
             mut height,
+            before,
+            after,
+            filter: props,
             output,
         } => {
             let db = Database::open(&opts.global.db_path)?;
-            let tiles = bounds.tile_viewport(width as usize, height as usize, 0..=16);
+            let tiles = bounds.tile_viewport(width, height, 0..=16);
             let num_x = tiles.xmax - tiles.xmin + 1;
             let num_y = tiles.ymax - tiles.ymin + 1;
 
@@ -329,10 +331,13 @@ fn run() -> Result<()> {
                 width = u32::min(width, mosaic_width);
             }
 
-            println!("Rendering {} subtiles...", num_x * num_y);
+            println!(
+                "Rendering {} subtiles at zoom={}...",
+                num_x * num_y,
+                tiles.z
+            );
 
-            // TODO: support this
-            let filter = ActivityFilter::new(None, None, None);
+            let filter = ActivityFilter::new(before, after, props);
             let mut mosaic = RgbaImage::new(mosaic_width, mosaic_height);
 
             for row in 0..num_y {
