@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
@@ -62,9 +63,13 @@ impl LngLatBounds {
             ymax: sw_tile.y,
         }
     }
+}
 
-    fn try_from(value: &str) -> Result<Self, &'static str> {
-        let parts: Vec<_> = value
+impl FromStr for LngLatBounds {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let parts: Vec<_> = s
             .split(',')
             .filter_map(|it| it.parse::<f64>().ok())
             .collect();
@@ -86,6 +91,7 @@ impl LngLatBounds {
     }
 }
 
+// TODO: move to `date` module, use a `FromStr` impl
 fn try_parse_date(value: &str) -> Result<Date, &'static str> {
     Date::parse(value, &time::format_description::well_known::Iso8601::DATE)
         .map_err(|_| "invalid date")
@@ -133,7 +139,7 @@ enum Commands {
         after: Option<Date>,
 
         /// Filter activities by arbitrary metadata properties
-        #[arg(short, long, value_parser = PropertyFilter::try_parse)]
+        #[arg(short, long)]
         filter: Option<PropertyFilter>,
 
         /// Width of output image in pixels.
@@ -150,7 +156,7 @@ enum Commands {
         /// Coordinates in order of "west,south,east,north"
         ///
         /// Use a tool like https://boundingbox.klokantech.com/ to generate.
-        #[arg( long, value_parser = LngLatBounds::try_from)]
+        #[arg(long)]
         bounds: LngLatBounds,
 
         /// Width of output image in pixels.
@@ -170,7 +176,7 @@ enum Commands {
         after: Option<Date>,
 
         /// Filter activities by arbitrary metadata properties
-        #[arg(short, long, value_parser = PropertyFilter::try_parse)]
+        #[arg(short, long)]
         filter: Option<PropertyFilter>,
 
         /// Path to output image.

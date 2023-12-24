@@ -1,5 +1,6 @@
 use std::io::Cursor;
 use std::net::SocketAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,7 +19,7 @@ use time::Date;
 use tokio::runtime::Runtime;
 use tower_http::trace::{DefaultOnFailure, TraceLayer};
 
-use crate::db::{ActivityFilter, Database};
+use crate::db::{ActivityFilter, Database, PropertyFilter};
 use crate::raster::LinearGradient;
 use crate::tile::Tile;
 use crate::web::strava::StravaAuth;
@@ -152,6 +153,7 @@ async fn render_tile(
         return StatusCode::NOT_FOUND.into_response();
     }
 
+    // TODO: Clean up this mess
     let gradient: &LinearGradient = match (&params.gradient, params.color.as_deref()) {
         (Some(gradient), None) => gradient,
         (Some(_), Some(_)) => {
@@ -169,15 +171,21 @@ async fn render_tile(
         (None, Some(_)) => return (StatusCode::BAD_REQUEST, "invalid color").into_response(),
     };
 
-    let filter = params.filter.map(|s| serde_json::from_str(&s)).transpose();
-    let filter = match filter {
-        Ok(f) => f,
+    let props = params
+        .filter
+        .as_deref()
+        .map(PropertyFilter::from_str)
+        .transpose();
+
+    let props = match props {
+        Ok(props) => props,
         Err(e) => {
             tracing::error!("error parsing filter: {:?}", e);
             return (StatusCode::BAD_REQUEST, format!("err: {e:?}")).into_response();
         }
     };
-    let filter = ActivityFilter::new(params.before, params.after, filter);
+
+    let filter = ActivityFilter::new(params.before, params.after, props);
     let tile = Tile::new(x, y, z);
 
     match raster::render_tile(tile, gradient, 512, &filter, &db) {

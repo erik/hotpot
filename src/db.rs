@@ -1,6 +1,6 @@
-use std::borrow::Cow;
 use std::io::Cursor;
 use std::path::Path;
+use std::{borrow::Cow, str::FromStr};
 
 use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -242,8 +242,10 @@ enum FilterOp {
     Lte(f64),
 }
 
-impl PropertyFilter {
-    pub fn try_parse(s: &str) -> Result<Self> {
+impl FromStr for PropertyFilter {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
         serde_json::from_str(s).map_err(Into::into)
     }
 }
