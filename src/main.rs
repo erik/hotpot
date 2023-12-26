@@ -1,12 +1,10 @@
 use std::fs::File;
-use std::ops::RangeInclusive;
 use std::path::PathBuf;
-use std::str::FromStr;
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use image::RgbaImage;
-use tile::TileBounds;
+use tile::WebMercatorViewport;
 use time::Date;
 
 use activity::PropertySource;
@@ -22,74 +20,6 @@ mod raster;
 mod simplify;
 mod tile;
 mod web;
-
-#[derive(Clone)]
-struct LngLatBounds {
-    sw: tile::LngLat,
-    ne: tile::LngLat,
-}
-
-impl LngLatBounds {
-    fn tile_viewport(
-        &self,
-        px_width: u32,
-        px_height: u32,
-        zoom_range: RangeInclusive<u32>,
-    ) -> tile::TileBounds {
-        let tile_extent = 256;
-        let min_zoom = *zoom_range.start();
-        let max_zoom = *zoom_range.end();
-
-        let sw_xy = self.sw.xy().expect("invalid coord");
-        let ne_xy = self.ne.xy().expect("invalid coord");
-
-        let sw_px = sw_xy.to_global_pixel(max_zoom as u8, tile_extent);
-        let ne_px = ne_xy.to_global_pixel(max_zoom as u8, tile_extent);
-
-        let scale = f64::max(
-            (ne_px.x() - sw_px.x()) as f64 / (px_width as f64),
-            (sw_px.y() - ne_px.y()) as f64 / (px_height as f64),
-        );
-
-        let zoom = (max_zoom - scale.log2().floor() as u32).clamp(min_zoom, max_zoom) as u8;
-        let sw_tile = sw_xy.tile(zoom);
-        let ne_tile = ne_xy.tile(zoom);
-
-        TileBounds {
-            z: zoom,
-            xmin: sw_tile.x,
-            xmax: ne_tile.x,
-            ymin: ne_tile.y,
-            ymax: sw_tile.y,
-        }
-    }
-}
-
-impl FromStr for LngLatBounds {
-    type Err = &'static str;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        let parts: Vec<_> = s
-            .split(',')
-            .filter_map(|it| it.parse::<f64>().ok())
-            .collect();
-
-        if parts.len() != 4 {
-            return Err("expected coordinates as 'west,south,east,north'");
-        }
-
-        let sw = tile::LngLat((parts[0], parts[1]).into());
-        let ne = tile::LngLat((parts[2], parts[3]).into());
-
-        if sw.0.x() >= ne.0.x() {
-            Err("invalid west/east bounds")
-        } else if sw.0.y() >= ne.0.y() {
-            Err("invalid south/north bounds")
-        } else {
-            Ok(LngLatBounds { sw, ne })
-        }
-    }
-}
 
 // TODO: move to `date` module, use a `FromStr` impl
 fn try_parse_date(value: &str) -> Result<Date, &'static str> {
@@ -125,6 +55,7 @@ enum Commands {
         join: Option<PathBuf>,
     },
 
+    // TODO: color/gradient
     /// Render a single XYZ tile as a PNG.
     Tile {
         /// Tile to render, in "z/x/y" format.
@@ -151,13 +82,14 @@ enum Commands {
         output: PathBuf,
     },
 
+    // TODO: color/gradient
     /// Render an arbitrary region, defined by a bounding box
     Render {
         /// Coordinates in order of "west,south,east,north"
         ///
         /// Use a tool like https://boundingbox.klokantech.com/ to generate.
-        #[arg(long)]
-        bounds: LngLatBounds,
+        #[arg(long = "bounds")]
+        viewport: WebMercatorViewport,
 
         /// Width of output image in pixels.
         #[arg(short, long, default_value = "1024")]
@@ -176,8 +108,10 @@ enum Commands {
         after: Option<Date>,
 
         /// Filter activities by arbitrary metadata properties
-        #[arg(short, long)]
-        filter: Option<PropertyFilter>,
+        ///
+        /// {"key": "elev_gain", ">": 1000}
+        #[arg(short = 'f', long = "filter")]
+        props: Option<PropertyFilter>,
 
         /// Path to output image.
         #[arg(short, long, default_value = "tile.png")]
@@ -312,69 +246,20 @@ fn run() -> Result<()> {
         }
 
         Commands::Render {
-            bounds,
-            mut width,
-            mut height,
+            viewport,
+            width,
+            height,
             before,
             after,
-            filter: props,
+            props,
             output,
         } => {
             let db = Database::open(&opts.global.db_path)?;
-            let tiles = bounds.tile_viewport(width, height, 0..=16);
-            let num_x = tiles.xmax - tiles.xmin + 1;
-            let num_y = tiles.ymax - tiles.ymin + 1;
-
-            let mosaic_width = num_x * 256;
-            let mosaic_height = num_y * 256;
-            if mosaic_width < width || mosaic_height < height {
-                println!(
-                    "[WARN] source data is not high resolution for requested image dimensions, clamping to {}x{}.",
-                    mosaic_width, mosaic_height
-                );
-
-                height = u32::min(height, mosaic_height);
-                width = u32::min(width, mosaic_width);
-            }
-
-            println!(
-                "Rendering {} subtiles at zoom={}...",
-                num_x * num_y,
-                tiles.z
-            );
-
             let filter = ActivityFilter::new(before, after, props);
-            let mut mosaic = RgbaImage::new(mosaic_width, mosaic_height);
-
-            for row in 0..num_y {
-                for col in 0..num_x {
-                    let tile = Tile::new(tiles.xmin + col, tiles.ymin + row, tiles.z);
-                    let img = raster::render_tile(tile, &PINKISH, 256, &filter, &db)?;
-
-                    if let Some(img) = img {
-                        let orig_x = col * 256;
-                        let orig_y = row * 256;
-
-                        for x in 0..256 {
-                            for y in 0..256 {
-                                mosaic.put_pixel(orig_x + x, orig_y + y, *img.get_pixel(x, y));
-                            }
-                        }
-                    }
-                }
-            }
-
-            // The tile bounds will be aligned to the tile grid, so we need to trim
-            // the excess pixels from the edges of the image.
-            let off_x = (mosaic_width - width) / 2;
-            let off_y = (mosaic_height - height) / 2;
-
-            let crop = image::imageops::crop(&mut mosaic, off_x, off_y, width, height);
             let mut file = File::create(output)?;
 
-            // TODO: should be able to avoid `.to_image()` here?
-            crop.to_image()
-                .write_to(&mut file, image::ImageOutputFormat::Png)?;
+            let image = raster::render_view(viewport, &PINKISH, width, height, &filter, &db)?;
+            image.write_to(&mut file, image::ImageOutputFormat::Png)?;
         }
 
         Commands::Serve {

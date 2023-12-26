@@ -1,7 +1,8 @@
-use std::f64::consts::PI;
 use std::ops::Range;
 use std::str::FromStr;
+use std::{f64::consts::PI, ops::RangeInclusive};
 
+use anyhow::{anyhow, Result};
 use derive_more::{From, Into};
 use geo_types::{Coord, Point};
 
@@ -42,6 +43,42 @@ impl TileBounds {
             ymax: (tile.y + 1) << zoom_steps,
         }
     }
+
+    pub fn from_viewport(
+        viewport: &WebMercatorViewport,
+        viewport_width: u32,
+        viewport_height: u32,
+        zoom_range: RangeInclusive<u32>,
+    ) -> Self {
+        let tile_size = 256;
+
+        let min_zoom = *zoom_range.start();
+        let max_zoom = *zoom_range.end();
+
+        let sw_px = viewport.sw.to_global_pixel(max_zoom as u8, tile_size);
+        let ne_px = viewport.ne.to_global_pixel(max_zoom as u8, tile_size);
+
+        // TODO: min forces the dimensions to be accurate, max will
+        //   allow the image bounds to be respected - which is better?
+        let scale = f64::max(
+            (ne_px.x() - sw_px.x()) as f64 / (viewport_width as f64),
+            (sw_px.y() - ne_px.y()) as f64 / (viewport_height as f64),
+        );
+
+        // Find the smallest zoom level which will cover our viewport at full
+        // resolution.
+        let zoom = (max_zoom - scale.log2().floor() as u32).clamp(min_zoom, max_zoom) as u8;
+        let sw_tile = viewport.sw.tile(zoom);
+        let ne_tile = viewport.ne.tile(zoom);
+
+        TileBounds {
+            z: zoom,
+            xmin: sw_tile.x,
+            xmax: ne_tile.x,
+            ymin: ne_tile.y,
+            ymax: sw_tile.y,
+        }
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Debug, From, Into)]
@@ -52,6 +89,43 @@ pub struct WebMercator(pub Point<f64>);
 
 #[derive(Copy, Clone, PartialEq, Debug, From, Into)]
 pub struct TilePixel(pub Coord<u16>);
+
+#[derive(Debug, Clone)]
+pub struct WebMercatorViewport {
+    sw: WebMercator,
+    ne: WebMercator,
+}
+
+impl FromStr for WebMercatorViewport {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let parts: Vec<_> = s
+            .split(',')
+            .filter_map(|it| it.parse::<f64>().ok())
+            .collect();
+
+        if parts.len() != 4 {
+            return Err(anyhow!("expected coordinates as 'west,south,east,north'"));
+        }
+
+        let sw = LngLat((parts[0], parts[1]).into())
+            .xy()
+            .ok_or_else(|| anyhow!("south/western coord out of WebMercator bounds"))?;
+
+        let ne = LngLat((parts[2], parts[3]).into())
+            .xy()
+            .ok_or_else(|| anyhow!("north/eastern coord out of WebMercator bounds"))?;
+
+        if sw.0.x() >= ne.0.x() {
+            Err(anyhow!("east/west appear to be swapped"))
+        } else if sw.0.y() >= ne.0.y() {
+            Err(anyhow!("north/south appear to be swapped"))
+        } else {
+            Ok(WebMercatorViewport { sw, ne })
+        }
+    }
+}
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub struct BBox {
@@ -162,6 +236,7 @@ impl BBox {
 }
 
 impl WebMercator {
+    /// Return the tile coordinate for this point at the given zoom level.
     pub fn tile(&self, zoom: u8) -> Tile {
         let num_tiles = (1u32 << zoom) as f64;
         let scale = num_tiles / EARTH_CIRCUMFERENCE;

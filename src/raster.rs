@@ -1,3 +1,4 @@
+use std::ops::RangeInclusive;
 use std::str::FromStr;
 
 use anyhow::{anyhow, Result};
@@ -9,6 +10,7 @@ use serde::{Deserialize, Deserializer};
 
 use crate::db::{decode_line, ActivityFilter, Database};
 use crate::tile::{Tile, TileBounds};
+use crate::WebMercatorViewport;
 
 pub static PINKISH: Lazy<LinearGradient> = Lazy::new(|| {
     LinearGradient::from_stops(&[
@@ -230,6 +232,82 @@ impl<'de> Deserialize<'de> for LinearGradient {
         let s = String::deserialize(deserializer)?;
         LinearGradient::from_str(&s).map_err(|_| serde::de::Error::custom("invalid gradient"))
     }
+}
+
+pub fn render_view(
+    viewport: WebMercatorViewport,
+    gradient: &LinearGradient,
+    width: u32,
+    height: u32,
+    filter: &ActivityFilter,
+    db: &Database,
+) -> Result<RgbaImage> {
+    let tile_size = 256;
+    let zoom_range = RangeInclusive::new(
+        *db.config.zoom_levels.iter().min().unwrap() as u32,
+        *db.config.zoom_levels.iter().max().unwrap() as u32,
+    );
+
+    let tile_bounds = TileBounds::from_viewport(&viewport, width, height, zoom_range);
+
+    let num_x = tile_bounds.xmax - tile_bounds.xmin + 1;
+    let num_y = tile_bounds.ymax - tile_bounds.ymin + 1;
+
+    let (src_w, src_h) = (num_x * tile_size, num_y * tile_size);
+    let (img_w, img_h) = (u32::min(width, src_w), u32::min(height, src_h));
+
+    if img_w < width || img_h < height {
+        println!(
+            "[WARN] source data is not high resolution for requested image dimensions, clamping to {}x{}.",
+            img_w, img_h
+        );
+    }
+
+    println!(
+        "Rendering {} subtiles at zoom={}...",
+        num_x * num_y,
+        tile_bounds.z
+    );
+
+    let mut mosaic = RgbaImage::new(img_w, img_h);
+
+    // The tile bounds will be aligned to the tile grid, so we need to trim
+    // the excess pixels from the edges of the image.
+    let margin_x = (src_w - img_w) / 2;
+    let margin_y = (src_h - img_h) / 2;
+
+    for row in 0..num_y {
+        for col in 0..num_x {
+            // Position of the tile in the mosaic
+            let tile_origin_y = row * tile_size;
+            let tile_origin_x = col * tile_size;
+
+            let tile = Tile::new(
+                tile_bounds.xmin + col,
+                tile_bounds.ymin + row,
+                tile_bounds.z,
+            );
+
+            let sub_img = render_tile(tile, gradient, tile_size, filter, db)?;
+            if let Some(img) = sub_img {
+                for (x, y, pixel) in img.enumerate_pixels() {
+                    let x = tile_origin_x + x;
+                    let y = tile_origin_y + y;
+
+                    // Ignore pixels which fall into the margins
+                    if x >= margin_x
+                        && x < margin_x + img_w
+                        && y >= margin_y
+                        && y < margin_y + img_h
+                    {
+                        mosaic.put_pixel(x - margin_x, y - margin_y, *pixel);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(mosaic)
 }
 
 pub fn render_tile(
