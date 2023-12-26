@@ -6,7 +6,7 @@ Render customizable activity heatmap images from GPS tracks extracted from GPX,
 TCX, and FIT files. There's also a built-in web server to serve up [XYZ tiles],
 and endpoints to add new data via HTTP POST or [Strava webhooks].
 
-Designed to be self-hosted. It's lightweight and snappy enough to fit onto the
+Designed to run locally or be self-hosted. It's lightweight and snappy enough to fit onto the
 free tier of pretty much anything that can run a Docker container. Even with
 100,000 km of activity data, [Fly.io]'s smallest instance can render tiles in
 ~1 ms.
@@ -40,7 +40,19 @@ hotpot import \
 After the initial import, you'll have a `sqlite3` database, and can start
 creating heatmaps.
 
-Now run the tile server:
+The `render` command can create images of from a bounding box of coordinates. To
+generate the argument for the `--bounds` parameter conveniently, use a tool
+[like this](https://boundingbox.klokantech.com/).
+
+```
+hotpot render \
+    --bounds='-120.7196,32.2459,-116.9234,35.1454' \
+    --width 2000 \
+    --height 2000 \
+    --output heatmap.png
+```
+
+Alternatively, we can run a tile server with:
 
 ```
 hotpot serve
