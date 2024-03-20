@@ -4,6 +4,7 @@ More web endpoints
   - Vector tiles
   - Activity as GeoJSON
   - Known property keys? For a UI dropdown
+  - Drag and drop activities to import
 
 Customization
   - Support AND/OR/NOT for property filters
