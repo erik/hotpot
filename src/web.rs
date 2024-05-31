@@ -14,7 +14,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Router, Server, TypedHeader};
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use time::Date;
 use tokio::runtime::Runtime;
 use tower_http::trace::{DefaultOnFailure, TraceLayer};
@@ -143,9 +143,40 @@ struct RenderQueryParams {
     filter: Option<String>,
 }
 
+/// Handle the `y` part of an `/z/x/y` or `/z/x/y@2x` URL
+struct TileYParam {
+    y: u32,
+    tile_size: u32,
+}
+
+impl<'de> Deserialize<'de> for TileYParam {
+    fn deserialize<D>(deserializer: D) -> Result<TileYParam, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let param = String::deserialize(deserializer)?;
+        let (y_str, size) = param.split_once('@').unwrap_or((&param, "1x"));
+
+        let y = u32::from_str(y_str).map_err(serde::de::Error::custom)?;
+        let tile_size = match size {
+            "small" => 256,
+            "1x" => 512,
+            "2x" => 1024,
+            _ => {
+                return Err(serde::de::Error::custom(format!(
+                    "invalid tile size: {}",
+                    size
+                )))
+            }
+        };
+
+        return Ok(TileYParam { tile_size, y });
+    }
+}
+
 async fn render_tile(
     State(AppState { db, config, .. }): State<AppState>,
-    Path((z, x, y)): Path<(u8, u32, u32)>,
+    Path((z, x, y_param)): Path<(u8, u32, TileYParam)>,
     Query(params): Query<RenderQueryParams>,
 ) -> impl IntoResponse {
     // Fail fast when tile is higher zoom level than we store data for.
@@ -186,9 +217,9 @@ async fn render_tile(
     };
 
     let filter = ActivityFilter::new(params.before, params.after, props);
-    let tile = Tile::new(x, y, z);
+    let tile = Tile::new(x, y_param.y, z);
 
-    match raster::render_tile(tile, gradient, 512, &filter, &db) {
+    match raster::render_tile(tile, gradient, y_param.tile_size, &filter, &db) {
         Ok(Some(image)) => {
             let mut bytes = Vec::new();
             let mut cursor = Cursor::new(&mut bytes);

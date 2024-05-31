@@ -8,8 +8,7 @@ More web endpoints
 
 Customization
   - Support AND/OR/NOT for property filters
-  - Vary gradient stops based on zoom level
-  - "retina" tiles
+  - Vary gradient stops based on zoom level / max number of points in tile
 
 CLI
   - `init` command (or similar) to create / configure empty DB

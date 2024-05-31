@@ -121,7 +121,7 @@
         color: null,
         before: null,
         after: null,
-        size: '256',
+        size: '512',
         map: 'dark-matter-nolabels',
         filter: null,
         gradient: null,
@@ -150,7 +150,7 @@
         map
             .addSource('hotpot', {
                 type: 'raster',
-                tiles: ['/tile/{z}/{x}/{y}?' + qs],
+                tiles: ['/tile/{z}/{x}/{y}{ratio}?' + qs],
                 tileSize: +options.size,
                 minZoom: 0,
                 maxZoom: 16,
