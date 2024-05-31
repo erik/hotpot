@@ -53,6 +53,11 @@ pub struct Database {
 
 impl Database {
     pub fn new(path: &Path) -> Result<Self> {
+        // Check for version which introduced `->>` syntax (released 2022)
+        if rusqlite::version_number() < 3038000 {
+            tracing::warn!("sqlite3 version < 3.38.0, property filtering will not be available");
+        }
+
         let manager = SqliteConnectionManager::file(path);
         let pool = r2d2::Pool::new(manager)?;
         let mut conn = pool.get()?;

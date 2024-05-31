@@ -1,4 +1,4 @@
-FROM rust:1-slim-buster as builder
+FROM rust:1-slim-bookworm as builder
 
 WORKDIR /build
 
@@ -16,7 +16,7 @@ COPY src ./src
 
 RUN cargo build --release
 
-FROM debian:buster-slim
+FROM debian:bookworm-slim
 
 # Debian slim images don't have certs available.
 RUN apt-get update && apt-get install -y \
