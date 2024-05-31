@@ -3,7 +3,10 @@
 
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
     <title>Heatmap Viewer</title>
+
     <script src="https://unpkg.com/maplibre-gl/dist/maplibre-gl.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl/dist/maplibre-gl.css"/>
 </head>
@@ -11,55 +14,60 @@
 <body>
 <div id="map" style="width: 100vw; height: 100vh;"></div>
 <div id="map-overlay">
-    <h1>Settings</h1>
-    <div>
-        <label for="after">After</label>
-        <input key="after" type="date" name="after" id="after" value=""/>
-    </div>
+    <details open>
+        <summary>
+            <b>Settings</b>
+        </summary>
 
-    <div>
-        <label for="before">Before</label>
-        <input key="before" type="date" name="before" id="before" value=""/>
-    </div>
+        <div>
+            <label for="after">After</label>
+            <input key="after" type="date" name="after" id="after" value="" />
+        </div>
 
-    <div>
-        <label for="color">Theme</label>
-        <select key="color" name="color">
-            <option value="pinkish" selected>Pinkish</option>
-            <option value="orange">Orange</option>
-            <option value="blue-red">Blue/Red</option>
-            <option value="red">Red</option>
-            <option value="">Custom</option>
-        </select>
-    </div>
+        <div>
+            <label for="before">Before</label>
+            <input key="before" type="date" name="before" id="before" value="" />
+        </div>
 
-    <div>
-        <label for="size">Size</label>
-        <select key="size" name="size">
-            <option value="256" selected>256</option>
-            <option value="512">512</option>
-        </select>
-    </div>
+        <div>
+            <label for="color">Theme</label>
+            <select key="color" name="color">
+                <option value="pinkish" selected>Pinkish</option>
+                <option value="orange">Orange</option>
+                <option value="blue-red">Blue/Red</option>
+                <option value="red">Red</option>
+                <option value="">Custom</option>
+            </select>
+        </div>
 
-    <div>
-        <label for="map">Map</label>
-        <select key="map" name="map">
-            <option value="dark-matter-nolabels" selected>Dark (no labels)</option>
-            <option value="positron-nolabels">Light (no labels)</option>
-            <option value="dark-matter">Dark</option>
-            <option value="positron">Light</option>
-        </select>
-    </div>
+        <div>
+            <label for="size">Tile Size</label>
+            <select key="size" name="size">
+                <option value="256">256</option>
+                <option value="512" selected>512</option>
+            </select>
+        </div>
 
-    <div>
-        <label for="filter">Filter</label>
-        <input key="filter" name="filter" />
-    </div>
+        <div>
+            <label for="map">Base Map</label>
+            <select key="map" name="map">
+                <option value="dark-matter-nolabels" selected>Dark (no labels)</option>
+                <option value="positron-nolabels">Light (no labels)</option>
+                <option value="dark-matter">Dark</option>
+                <option value="positron">Light</option>
+            </select>
+        </div>
 
-    <div>
-        <label for="gradient">Gradient</label>
-        <input key="gradient" name="gradient" />
-    </div>
+        <div>
+            <label for="filter">Filter</label>
+            <input key="filter" name="filter" />
+        </div>
+
+        <div>
+            <label for="gradient">Gradient</label>
+            <input key="gradient" name="gradient" />
+        </div>
+    </details>
 </div>
 
 <style>
@@ -97,8 +105,8 @@
         width: 25ch;
     }
 
-    #map-overlay > div + div {
-        margin: 0.5em 0;
+    #map-overlay > details > div {
+        padding: 0.5em;
     }
 </style>
 
