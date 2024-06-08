@@ -14,6 +14,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Router, Server, TypedHeader};
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+use reqwest::header::CONTENT_TYPE;
+use rust_embed::Embed;
 use serde::{Deserialize, Deserializer};
 use time::Date;
 use tokio::runtime::Runtime;
@@ -32,6 +34,10 @@ pub struct Config {
     pub cors: bool,
     pub upload_token: Option<String>,
 }
+
+#[derive(Embed)]
+#[folder = "src/web/"]
+struct StaticAsset;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -69,6 +75,7 @@ impl RouteConfig {
         if self.tiles {
             router = router
                 .route("/", get(index))
+                .route("/static/*path", get(static_file))
                 .route("/tile/:z/:x/:y", get(render_tile));
         }
 
@@ -124,8 +131,25 @@ async fn run_async(
 }
 
 async fn index() -> impl IntoResponse {
-    let index = include_str!("./web/index.html");
-    axum::response::Html(index)
+    let index_html = StaticAsset::get("index.html").expect("missing file");
+    axum::response::Html(index_html.data)
+}
+
+async fn static_file(uri: Uri) -> impl IntoResponse {
+    let path = uri.path().trim_start_matches('/');
+
+    match StaticAsset::get(path) {
+        Some(content) => {
+            let mime = match path.split_once('.') {
+                Some((_, "js")) => "text/javascript",
+                Some((_, "css")) => "text/plain",
+                _ => "application/octet-stream",
+            };
+            ([(CONTENT_TYPE, mime)], content.data).into_response()
+        }
+
+        None => (StatusCode::NOT_FOUND, "404 Not Found").into_response(),
+    }
 }
 
 #[derive(Debug, Deserialize)]
