@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use axum::body::HttpBody;
-use axum::extract::{Multipart, Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::headers::authorization::Bearer;
 use axum::http::{header, Method, Request, StatusCode, Uri};
 use axum::middleware::Next;
@@ -88,11 +88,15 @@ impl RouteConfig {
         }
 
         if self.upload {
-            router = router.route("/upload", post(upload_activity));
-
             if config.upload_token.is_none() {
-                tracing::warn!("HOTPOT_UPLOAD_TOKEN not set, uploads will be disabled");
+                tracing::warn!(
+                    "HOTPOT_UPLOAD_TOKEN not set, unauthenticated uploads will be allowed"
+                );
             }
+
+            router = router
+                .route("/upload", post(upload_activity))
+                .layer(DefaultBodyLimit::max(15 * 1024 * 1024));
         }
 
         let strava = if self.strava_webhook || self.strava_auth {
@@ -274,17 +278,28 @@ async fn render_tile(
     }
 }
 
+fn is_authenticated(
+    config: Config,
+    auth_header: Option<TypedHeader<axum::headers::Authorization<Bearer>>>,
+) -> bool {
+    match (config.upload_token, auth_header) {
+        (Some(expected), Some(actual)) => actual.0.token() == expected.as_str(),
+        (Some(_), None) => false,
+        (None, _) => true,
+    }
+}
+
 async fn upload_activity(
     State(AppState { db, config, .. }): State<AppState>,
-    TypedHeader(auth): TypedHeader<axum::headers::Authorization<Bearer>>,
+    auth_header: Option<TypedHeader<axum::headers::Authorization<Bearer>>>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
-    if Some(auth.token()) != config.upload_token.as_deref() {
+    if !is_authenticated(config, auth_header) {
         return (StatusCode::UNAUTHORIZED, "bad token");
     }
 
-    while let Some(field) = multipart.next_field().await.unwrap() {
-        if Some("file") != field.name() {
+    while let Some(field) = multipart.next_field().await.expect("to get form field") {
+        if field.name() != Some("file") {
             continue;
         }
 
@@ -294,24 +309,34 @@ async fn upload_activity(
         };
 
         let Some((media_type, comp)) = activity::get_file_type(&file_name) else {
-            return (StatusCode::BAD_REQUEST, "unsupported file type");
+            return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "unrecognized file type");
         };
 
-        tracing::info!("uploading {}", file_name);
+        tracing::info!(
+            "uploading file: {} (type: {:?}, compression: {:?})",
+            file_name,
+            media_type,
+            comp
+        );
 
         let bytes = field.bytes().await.unwrap();
         let reader = Cursor::new(bytes);
+        let Ok(Some(activity)) = activity::read(reader, media_type, comp) else {
+            return (StatusCode::UNPROCESSABLE_ENTITY, "couldn't read file");
+        };
 
-        let activity = activity::read(reader, media_type, comp).unwrap();
-        if let Some(activity) = activity {
-            let mut conn = db.connection().unwrap();
-            let id = format!("upload:{}", file_name);
+        let activity_id = format!("upload:{}", file_name);
 
-            activity::upsert(&mut conn, &id, &activity, &db.config).unwrap();
+        if let Err(err) = db
+            .connection()
+            .and_then(|mut conn| activity::upsert(&mut conn, &activity_id, &activity, &db.config))
+        {
+            tracing::error!("failed to insert activity: {:?}", err);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "something went wrong");
         }
     }
 
-    (StatusCode::OK, "added!")
+    (StatusCode::OK, "activity added")
 }
 
 struct RequestData {

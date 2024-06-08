@@ -205,12 +205,14 @@ impl RawActivity {
     }
 }
 
+#[derive(Debug)]
 pub enum MediaType {
     Gpx,
     Fit,
     Tcx,
 }
 
+#[derive(Debug)]
 pub enum Compression {
     None,
     Gzip,

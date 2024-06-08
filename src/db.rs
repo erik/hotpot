@@ -1,6 +1,7 @@
+use std::borrow::Cow;
 use std::io::Cursor;
 use std::path::Path;
-use std::{borrow::Cow, str::FromStr};
+use std::str::FromStr;
 
 use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -199,12 +200,9 @@ pub fn decode_line(bytes: &[u8]) -> Result<Vec<Coord<u32>>> {
     let mut coords = Vec::with_capacity(bytes.len() / 4);
     let mut reader = Cursor::new(bytes);
     while reader.position() < bytes.len() as u64 {
-        let x = reader.read_u16::<LittleEndian>()?;
-        let y = reader.read_u16::<LittleEndian>()?;
-        coords.push(Coord {
-            x: x as u32,
-            y: y as u32,
-        });
+        let x = reader.read_u16::<LittleEndian>()? as u32;
+        let y = reader.read_u16::<LittleEndian>()? as u32;
+        coords.push(Coord { x, y });
     }
     Ok(coords)
 }
