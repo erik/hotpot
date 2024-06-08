@@ -58,21 +58,21 @@ impl Database {
             tracing::warn!("sqlite3 version < 3.38.0, property filtering will not be available");
         }
 
-        let manager = SqliteConnectionManager::file(path);
+        let manager = SqliteConnectionManager::file(path).with_init(|conn| {
+            conn.pragma_update(None, "journal_mode", "WAL")?;
+            conn.pragma_update(None, "synchronous", "OFF")?;
+            Ok(())
+        });
+
         let pool = r2d2::Pool::new(manager)?;
         let mut conn = pool.get()?;
 
-        let pragmas = [("journal_mode", "WAL"), ("synchronous", "OFF")];
-        for (k, v) in &pragmas {
-            conn.pragma_update(None, k, v)?;
-        }
-
         apply_schema(&mut conn)?;
 
-        let cfg = Config::load(&mut conn)?;
-        cfg.save(&mut conn)?;
+        let config = Config::load(&mut conn)?;
+        config.save(&mut conn)?;
 
-        Ok(Database { pool, config: cfg })
+        Ok(Database { pool, config })
     }
 
     /// Open an existing database, fail if it doesn't exist
@@ -97,13 +97,7 @@ impl Database {
     }
 
     pub fn connection(&self) -> Result<r2d2::PooledConnection<SqliteConnectionManager>> {
-        self.pool.get().map_err(Into::into)
-    }
-
-    /// Get a connection which cannot mutate the database.
-    pub fn ro_connection(&self) -> Result<r2d2::PooledConnection<SqliteConnectionManager>> {
         let conn = self.pool.get()?;
-        conn.pragma_update(None, "query_only", "true")?;
         Ok(conn)
     }
 

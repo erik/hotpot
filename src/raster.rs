@@ -327,8 +327,8 @@ pub fn render_tile(
 
     let mut have_activity = false;
 
-    let conn = db.ro_connection()?;
-    let (mut stmt, params) = prepare_query_activities(&conn, filter, &bounds)?;
+    let conn = db.connection()?;
+    let (mut stmt, params) = prepare_activities_query(&conn, filter, &bounds)?;
     let mut rows = stmt.query(params.as_slice())?;
     while let Some(row) = rows.next()? {
         let source_tile = Tile::new(row.get_unwrap(0), row.get_unwrap(1), row.get_unwrap(2));
@@ -346,7 +346,7 @@ pub fn render_tile(
     Ok(Some(raster.apply_gradient(gradient)))
 }
 
-fn prepare_query_activities<'a>(
+fn prepare_activities_query<'a>(
     conn: &'a rusqlite::Connection,
     filter: &'a ActivityFilter,
     bounds: &'a TileBounds,
