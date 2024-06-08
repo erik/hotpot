@@ -2,178 +2,385 @@
 <html lang="en">
 
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
     <title>Heatmap Viewer</title>
 
-    <script src="https://unpkg.com/maplibre-gl/dist/maplibre-gl.js"></script>
-    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl/dist/maplibre-gl.css"/>
+    <script src="https://unpkg.com/maplibre-gl@4.3.2/dist/maplibre-gl.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.3.2/dist/maplibre-gl.css" />
+
+    <script src="/static/main.js"></script>
 </head>
 
 <body>
-<div id="map" style="width: 100vw; height: 100vh;"></div>
-<div id="map-overlay">
-    <details open>
-        <summary>
-            <b>Settings</b>
-        </summary>
-
-        <div>
-            <label for="after">After</label>
-            <input key="after" type="date" name="after" id="after" value="" />
-        </div>
-
-        <div>
-            <label for="before">Before</label>
-            <input key="before" type="date" name="before" id="before" value="" />
-        </div>
-
-        <div>
-            <label for="color">Theme</label>
-            <select key="color" name="color">
-                <option value="pinkish" selected>Pinkish</option>
-                <option value="orange">Orange</option>
-                <option value="blue-red">Blue/Red</option>
-                <option value="red">Red</option>
-                <option value="">Custom</option>
-            </select>
-        </div>
-
-        <div>
-            <label for="size">Tile Size</label>
-            <select key="size" name="size">
-                <option value="256">256</option>
-                <option value="512" selected>512</option>
-            </select>
-        </div>
-
-        <div>
-            <label for="map">Base Map</label>
-            <select key="map" name="map">
-                <option value="dark-matter-nolabels" selected>Dark (no labels)</option>
-                <option value="positron-nolabels">Light (no labels)</option>
-                <option value="dark-matter">Dark</option>
-                <option value="positron">Light</option>
-            </select>
-        </div>
-
-        <div>
-            <label for="filter">Filter</label>
-            <input key="filter" name="filter" />
-        </div>
-
-        <div>
-            <label for="gradient">Gradient</label>
-            <input key="gradient" name="gradient" />
-        </div>
-    </details>
-</div>
-
-<style>
-    body {
-        margin: 0;
-        padding: 0;
-        font-family: system-ui, sans-serif;
-        box-sizing: border-box;
-    }
-
-    h1 {
-        font-size: 1.2em;
-    }
-
-    label {
-        display: inline-block;
-        width: 40%;
-    }
-
-    select, input {
-        width: 50%;
-        font-family: system-ui, sans-serif;
-    }
-
-    #map-overlay {
-        position: absolute;
-        top: 0;
-        left: 0;
-        padding: 0.5em 1em;
-        margin: 1em;
-        background-color: rgba(0, 0, 0, 0.75);
-        color: white;
-        border-radius: 2.5%;
-        border: 1px solid white;
-        width: 25ch;
-    }
-
-    #map-overlay > details > div {
-        padding: 0.5em;
-    }
-</style>
-
-<script>
-    document.querySelectorAll('#map-overlay [key]').forEach(function (el) {
-        el.addEventListener('change', function (e) {
-            options[e.target.getAttribute('key')] = e.target.value;
-            updateMapStyle();
-        });
-    });
-
-    map = new maplibregl.Map({
-        container: 'map',
-        style: 'https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json',
-        center: [0, 0],
-        hash: true,
-    });
-
-    options = {
-        color: null,
-        before: null,
-        after: null,
-        size: '512',
-        map: 'dark-matter-nolabels',
-        filter: null,
-        gradient: null,
-    };
-
-    function updateMapStyle() {
-        console.log('update style')
-        map.setStyle('https://basemaps.cartocdn.com/gl/' + options.map + '-gl-style/style.json');
-        map.once('styledata', () => updateSource());
-    }
-
-    function updateSource() {
-        if (typeof map.getSource('hotpot') !== 'undefined') {
-            map.removeLayer('hotpot');
-            map.removeSource('hotpot');
+    <style>
+        html {
+            box-sizing: border-box;
         }
 
-        let qs = [
-            options.color && `color=${options.color}`,
-            options.before && `before=${options.before}`,
-            options.after && `after=${options.after}`,
-            options.filter && `filter=${options.filter}`,
-            options.gradient && `gradient=${options.gradient}`,
-        ].filter(Boolean).join('&');
+        *,
+        *:before,
+        *:after {
+            box-sizing: inherit;
+            border: 0 solid #e5e7eb;
+        }
 
-        map
-            .addSource('hotpot', {
-                type: 'raster',
-                tiles: ['/tile/{z}/{x}/{y}{ratio}?' + qs],
-                tileSize: +options.size,
-                minZoom: 0,
-                maxZoom: 16,
-            })
-            .addLayer({
-                id: 'hotpot',
-                type: 'raster',
-                source: 'hotpot',
-                minZoom: 0,
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: system-ui, sans-serif;
+        }
+
+        #map {
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #map-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            padding: 0.5em 1em;
+            margin: 1em;
+            background-color: rgba(0, 0, 0, 0.75);
+            color: white;
+            border-radius: 2.5%;
+            border: 1px solid white;
+            width: 25ch;
+
+            summary {
+                cursor: pointer;
+                user-select: none;
+            }
+
+            label {
+                display: inline-block;
+                width: 40%;
+            }
+
+            select,
+            input {
+                width: 50%;
+                font-family: system-ui, sans-serif;
+            }
+        }
+
+        #map-overlay>details>div {
+            padding: 0.5em;
+        }
+
+        .drop-area {
+
+            .__target {
+                height: 10ch;
+                border-width: 1px;
+                border-radius: 1em;
+                margin: 1em 0;
+                transition: background-color 300ms;
+
+                &.--highlight {
+                    background-color: lightgrey;
+                }
+
+                label {
+                    text-align: center;
+                    height: 100%;
+                    width: 100%;
+                    color: gray;
+                    cursor: copy;
+                    display: flex;
+                    flex-direction: column;
+                    align-content: center;
+                    justify-content: center;
+                    position: relative;
+                }
+
+                .__progress {
+                    width: 0px;
+                    height: 100%;
+                    background-color: rgba(0, 0, 0, 0.15);
+                    transition: opacity 1s;
+                    position: absolute;
+                    top: 0;
+                    left: 0;
+                    border-radius: 1em;
+                }
+            }
+
+            .__results {
+                color: gray;
+                font-size: small;
+                height: 100px;
+                overflow-y: scroll;
+                display: none;
+
+                .__row {
+                    display: grid;
+
+                    &.--success {
+                        grid-template-columns: 1fr;
+
+                        .__file::before {
+                            content: "✓ ";
+                        }
+                    }
+
+                    &.--error {
+                        grid-template-columns: 30% 1fr;
+                        grid-gap: 1em;
+                        background-color: rgb(255, 0, 0, 0.2);
+
+                        .__file::before {
+                            content: "❌ ";
+                        }
+                    }
+
+                    .__file {
+                        white-space: nowrap;
+                        text-overflow: ellipsis;
+                        overflow: hidden;
+                    }
+                }
+            }
+        }
+    </style>
+
+    <template id="template-modal">
+        <style>
+            html {
+                box-sizing: border-box;
+            }
+
+            *,
+            *:before,
+            *:after {
+                box-sizing: inherit;
+                border: 0 solid #d4d6da;
+            }
+
+            .modal {
+                width: 100vw;
+                height: 100vh;
+                background-color: rgba(0, 0, 0, 0.75);
+                z-index: 999;
+                position: fixed;
+                top: 0;
+                left: 0;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+            }
+
+            .modal__content {
+                background-color: white;
+                margin: 0 auto;
+                width: 45ch;
+                border-radius: 0.5em;
+                display: flex;
+                flex-direction: column;
+                padding: 1em 2em;
+            }
+
+            .modal__header {
+                text-align: center;
+            }
+
+            .modal__body {
+                flex-grow: 1;
+            }
+
+            .modal__footer {
+                display: flex;
+                flex-direction: row-reverse;
+                margin-top: 1em;
+            }
+
+            .modal__footer_button {
+                background-color: transparent;
+                padding: 0.5em;
+                border-radius: 0.25em;
+                border-width: 1px;
+                cursor: pointer;
+            }
+
+            .modal__footer_button:hover {
+                background-color: rgba(179, 179, 179, 0.15);
+            }
+        </style>
+
+        <dialog class="modal" open>
+            <div class="modal__content">
+                <div class="modal__header">
+                    <div name="header">
+                        <slot name="header"></slot>
+                    </div>
+                </div>
+                <div class="modal__body">
+                    <div name="body">
+                        <slot name="body"></slot>
+                    </div>
+                </div>
+                <div class="modal__footer">
+                    <form method="dialog">
+                        <button class="modal__footer_button">Close</button>
+                    </form>
+                </div>
+            </div>
+        </dialog>
+    </template>
+
+    <div id="map"></div>
+    <div id="map-overlay">
+        <details>
+            <summary>
+                <b>Settings</b>
+            </summary>
+
+            <div>
+                <label for="after">After</label>
+                <input key="after" type="date" name="after" id="after" value="" />
+            </div>
+
+            <div>
+                <label for="before">Before</label>
+                <input key="before" type="date" name="before" id="before" value="" />
+            </div>
+
+            <div>
+                <label for="color">Theme</label>
+                <select key="color" name="color">
+                    <option value="pinkish" selected>Pinkish</option>
+                    <option value="orange">Orange</option>
+                    <option value="blue-red">Blue/Red</option>
+                    <option value="red">Red</option>
+                    <option value="">Custom</option>
+                </select>
+            </div>
+
+            <div>
+                <label for="size">Tile Size</label>
+                <select key="size" name="size">
+                    <option value="256">256</option>
+                    <option value="512" selected>512</option>
+                </select>
+            </div>
+
+            <div>
+                <label for="map">Base Map</label>
+                <select key="map" name="map">
+                    <option value="dark-matter-nolabels" selected>
+                        Dark (no labels)
+                    </option>
+                    <option value="positron-nolabels">Light (no labels)</option>
+                    <option value="dark-matter">Dark</option>
+                    <option value="positron">Light</option>
+                </select>
+            </div>
+
+            <div>
+                <label for="filter">Filter</label>
+                <input key="filter" name="filter" />
+            </div>
+
+            <div>
+                <label for="gradient">Gradient</label>
+                <input key="gradient" name="gradient" />
+            </div>
+        </details>
+    </div>
+
+    <script>
+        document.querySelectorAll("#map-overlay [key]").forEach(function (el) {
+            el.addEventListener("change", function (e) {
+                options[e.target.getAttribute("key")] = e.target.value;
+                updateMapStyle();
             });
-    }
+        });
 
-    map.on('load', updateSource);
-    map.addControl(new maplibregl.NavigationControl());
-</script>
+        map = new maplibregl.Map({
+            container: "map",
+            style:
+                "https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json",
+            center: [0, 0],
+            hash: true,
+        });
+
+        class UploadButton {
+            onAdd(map) {
+                const div = document.createElement("div");
+                div.className = "maplibregl-ctrl maplibregl-ctrl-group";
+                div.innerHTML = `
+                    <button>
+                        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M62.75 18H49.5H31C26.5817 18 23 21.5817 23 26V74C23 78.4183 26.5817 82 31 82H68C72.4183 82 76 78.4183 76 74V50C76 50 76 50 76 50C76 50 76 40.2484 76 34" stroke="black" stroke-width="4"/>
+                            <path d="M62.5 18L76 34" stroke="black" stroke-width="4" stroke-linecap="round"/>
+                            <path d="M62 18V27.5V28C62 31.3137 64.6863 34 68 34V34H72.0625H76" stroke="black" stroke-width="4" stroke-linecap="round"/>
+                            <path d="M48 62C48 63.1046 48.8954 64 50 64C51.1046 64 52 63.1046 52 62H48ZM51.4142 36.5858C50.6332 35.8047 49.3668 35.8047 48.5858 36.5858L35.8579 49.3137C35.0768 50.0948 35.0768 51.3611 35.8579 52.1421C36.6389 52.9232 37.9052 52.9232 38.6863 52.1421L50 40.8284L61.3137 52.1421C62.0948 52.9232 63.3611 52.9232 64.1421 52.1421C64.9232 51.3611 64.9232 50.0948 64.1421 49.3137L51.4142 36.5858ZM52 62L52 38H48L48 62H52Z" fill="black"/>
+                        </svg>
+                    </button>`;
+                div.addEventListener("contextmenu", (e) => ev.preventDefault());
+                div.addEventListener("click", () => createUploadModal());
+
+                return div;
+            }
+        }
+
+        let options = {
+            color: null,
+            before: null,
+            after: null,
+            size: "512",
+            map: "dark-matter-nolabels",
+            filter: null,
+            gradient: null,
+        };
+
+        function updateMapStyle() {
+            map.setStyle(
+                "https://basemaps.cartocdn.com/gl/" +
+                options.map +
+                "-gl-style/style.json"
+            );
+            map.once("styledata", () => updateSource());
+        }
+
+        function updateSource() {
+            if (typeof map.getSource("hotpot") !== "undefined") {
+                map.removeLayer("hotpot");
+                map.removeSource("hotpot");
+            }
+
+            let qs = [
+                options.color && `color=${options.color}`,
+                options.before && `before=${options.before}`,
+                options.after && `after=${options.after}`,
+                options.filter && `filter=${options.filter}`,
+                options.gradient && `gradient=${options.gradient}`,
+            ]
+                .filter(Boolean)
+                .join("&");
+
+            map
+                .addSource("hotpot", {
+                    type: "raster",
+                    tiles: ["/tile/{z}/{x}/{y}{ratio}?" + qs],
+                    tileSize: +options.size,
+                    minZoom: 0,
+                    maxZoom: 16,
+                })
+                .addLayer({
+                    id: "hotpot",
+                    type: "raster",
+                    source: "hotpot",
+                    minZoom: 0,
+                });
+        }
+
+        map.on("load", updateSource);
+        map.addControl(new maplibregl.NavigationControl());
+        map.addControl(new UploadButton(), "top-right");
+    </script>
 </body>
 
 </html>

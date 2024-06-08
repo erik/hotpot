@@ -4,11 +4,12 @@ More web endpoints
   - Vector tiles
   - Activity as GeoJSON
   - Known property keys? For a UI dropdown
-  - Drag and drop activities to import
+  - Export PNG of selected region
 
 Customization
   - Support AND/OR/NOT for property filters
   - Vary gradient stops based on zoom level / max number of points in tile
+  - Filter parser (instead of JSON-based AST)
 
 CLI
   - `init` command (or similar) to create / configure empty DB
