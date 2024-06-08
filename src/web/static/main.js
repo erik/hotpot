@@ -1,3 +1,41 @@
+// Schedule microtask (wait until all synchrounous work is done)
+const deferOnce = (obj, fn) => {
+  obj.$$defer =
+    obj.$$defer ||
+    Promise.resolve()
+      .then(() => fn())
+      .finally(() => delete obj.$$defer);
+};
+
+const livewire = (props) => {
+  const live = Object.entries(props).filter(([k, _fn]) => k.startsWith("$"));
+  const state = { ...props };
+  const watchers = [];
+
+  const derive = () => live.forEach(([key, fn]) => (state[key] = fn(state)));
+
+  // Populate initial live values
+  derive();
+
+  return new Proxy(state, {
+    set(target, _key, _value) {
+      Reflect.set(...arguments);
+      derive();
+
+      // TODO: maybe debounce?
+      deferOnce(this, () => watchers.forEach((fn) => fn(target)));
+      return true;
+    },
+
+    get(_target, key, proxy) {
+      if (key === "watch") {
+        return (fn) => watchers.push(fn) && proxy;
+      }
+      return Reflect.get(...arguments);
+    },
+  });
+};
+
 function _createElement(tag, attrs, children) {
   attrs = attrs || {};
   let el = document.createElement(tag);
@@ -113,7 +151,6 @@ function createUploadModal() {
 class FileUploader {
   constructor(hooks) {
     this.queue = [];
-    this.task = null;
     this.token = window.localStorage.getItem("api-token");
     this.onProgress = hooks.onProgress || (() => {});
     this.onComplete = hooks.onComplete || (() => {});
@@ -131,10 +168,7 @@ class FileUploader {
 
   enqueue(file) {
     this.queue.push(file);
-
-    // Wait for all synchronous work (queueing the remaining files) to finish
-    // before consuming the queue.
-    this.task = this.task || Promise.resolve().then(() => this._consumeQueue());
+    deferOnce(this, () => this._consumeQueue());
   }
 
   async _consumeQueue() {
@@ -154,7 +188,6 @@ class FileUploader {
     }
 
     this.onComplete();
-    this.task = null;
   }
 
   static STATUS_TO_ERROR_MESSAGE = {
@@ -228,3 +261,29 @@ customElements.define(
     }
   }
 );
+
+class UploadButton {
+  onAdd(_map) {
+    const { div, button } = createElement;
+
+    // Too lazy to make a createElementNS implementation
+    const btn = button({});
+    btn.innerHTML = `
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M62.75 18H49.5H31C26.5817 18 23 21.5817 23 26V74C23 78.4183 26.5817 82 31 82H68C72.4183 82 76 78.4183 76 74V50C76 50 76 50 76 50C76 50 76 40.2484 76 34" stroke="black" stroke-width="8"/>
+            <path d="M62.5 18L76 34" stroke="black" stroke-width="8" stroke-linecap="round"/>
+            <path d="M62 18V27.5V28C62 31.3137 64.6863 34 68 34V34H72.0625H76" stroke="black" stroke-width="8" stroke-linecap="round"/>
+            <path d="M48 62C48 63.1046 48.8954 64 50 64C51.1046 64 52 63.1046 52 62H48ZM51.4142 36.5858C50.6332 35.8047 49.3668 35.8047 48.5858 36.5858L35.8579 49.3137C35.0768 50.0948 35.0768 51.3611 35.8579 52.1421C36.6389 52.9232 37.9052 52.9232 38.6863 52.1421L50 40.8284L61.3137 52.1421C62.0948 52.9232 63.3611 52.9232 64.1421 52.1421C64.9232 51.3611 64.9232 50.0948 64.1421 49.3137L51.4142 36.5858ZM52 62L52 38H48L48 62H52Z" fill="black"/>
+        </svg>
+    `;
+
+    return div(
+      {
+        class: "maplibregl-ctrl maplibregl-ctrl-group",
+        contextmenu: (ev) => ev.preventDefault(),
+        click: () => createUploadModal(),
+      },
+      btn
+    );
+  }
+}

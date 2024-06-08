@@ -71,7 +71,6 @@
         }
 
         .drop-area {
-
             .__target {
                 height: 10ch;
                 border-width: 1px;
@@ -254,7 +253,6 @@
                     <option value="orange">Orange</option>
                     <option value="blue-red">Blue/Red</option>
                     <option value="red">Red</option>
-                    <option value="">Custom</option>
                 </select>
             </div>
 
@@ -291,42 +289,14 @@
     </div>
 
     <script>
-        document.querySelectorAll("#map-overlay [key]").forEach(function (el) {
-            el.addEventListener("change", function (e) {
-                options[e.target.getAttribute("key")] = e.target.value;
-                updateMapStyle();
-            });
-        });
-
-        map = new maplibregl.Map({
+        const map = new maplibregl.Map({
             container: "map",
-            style:
-                "https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json",
+            style: "https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json",
             center: [0, 0],
             hash: true,
         });
 
-        class UploadButton {
-            onAdd(map) {
-                const div = document.createElement("div");
-                div.className = "maplibregl-ctrl maplibregl-ctrl-group";
-                div.innerHTML = `
-                    <button>
-                        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M62.75 18H49.5H31C26.5817 18 23 21.5817 23 26V74C23 78.4183 26.5817 82 31 82H68C72.4183 82 76 78.4183 76 74V50C76 50 76 50 76 50C76 50 76 40.2484 76 34" stroke="black" stroke-width="4"/>
-                            <path d="M62.5 18L76 34" stroke="black" stroke-width="4" stroke-linecap="round"/>
-                            <path d="M62 18V27.5V28C62 31.3137 64.6863 34 68 34V34H72.0625H76" stroke="black" stroke-width="4" stroke-linecap="round"/>
-                            <path d="M48 62C48 63.1046 48.8954 64 50 64C51.1046 64 52 63.1046 52 62H48ZM51.4142 36.5858C50.6332 35.8047 49.3668 35.8047 48.5858 36.5858L35.8579 49.3137C35.0768 50.0948 35.0768 51.3611 35.8579 52.1421C36.6389 52.9232 37.9052 52.9232 38.6863 52.1421L50 40.8284L61.3137 52.1421C62.0948 52.9232 63.3611 52.9232 64.1421 52.1421C64.9232 51.3611 64.9232 50.0948 64.1421 49.3137L51.4142 36.5858ZM52 62L52 38H48L48 62H52Z" fill="black"/>
-                        </svg>
-                    </button>`;
-                div.addEventListener("contextmenu", (e) => ev.preventDefault());
-                div.addEventListener("click", () => createUploadModal());
-
-                return div;
-            }
-        }
-
-        let options = {
+        const options = livewire({
             color: null,
             before: null,
             after: null,
@@ -334,16 +304,34 @@
             map: "dark-matter-nolabels",
             filter: null,
             gradient: null,
-        };
 
-        function updateMapStyle() {
-            map.setStyle(
-                "https://basemaps.cartocdn.com/gl/" +
-                options.map +
-                "-gl-style/style.json"
-            );
+            // Prioritize custom gradient if available
+            $color: ({ color, gradient }) => (!!gradient?.trim() ? null : color),
+            $styleUrl: ({ map }) => `https://basemaps.cartocdn.com/gl/${map}-gl-style/style.json`,
+            $tileUrl: ({ before, after, filter, gradient, $color }) => {
+                let qs = [
+                    before && `before=${before}`,
+                    after && `after=${after}`,
+                    filter && `filter=${filter}`,
+                    gradient && `gradient=${gradient}`,
+                    $color && `color=${$color}`,
+                ]
+                    .filter((it) => !!it)
+                    .join("&");
+
+                return "/tile/{z}/{x}/{y}{ratio}?" + qs;
+            },
+        }).watch(({ $styleUrl }) => {
+            map.setStyle($styleUrl);
             map.once("styledata", () => updateSource());
-        }
+        });
+
+        document.querySelectorAll("#map-overlay [key]").forEach((el) => {
+            const key = el.getAttribute("key");
+            el.addEventListener("change", (ev) => {
+                options[key] = ev.target.value;
+            });
+        });
 
         function updateSource() {
             if (typeof map.getSource("hotpot") !== "undefined") {
@@ -351,20 +339,10 @@
                 map.removeSource("hotpot");
             }
 
-            let qs = [
-                options.color && `color=${options.color}`,
-                options.before && `before=${options.before}`,
-                options.after && `after=${options.after}`,
-                options.filter && `filter=${options.filter}`,
-                options.gradient && `gradient=${options.gradient}`,
-            ]
-                .filter(Boolean)
-                .join("&");
-
             map
                 .addSource("hotpot", {
                     type: "raster",
-                    tiles: ["/tile/{z}/{x}/{y}{ratio}?" + qs],
+                    tiles: [options.$tileUrl],
                     tileSize: +options.size,
                     minZoom: 0,
                     maxZoom: 16,
@@ -377,7 +355,7 @@
                 });
         }
 
-        map.on("load", updateSource);
+        map.on("load", () => updateSource());
         map.addControl(new maplibregl.NavigationControl());
         map.addControl(new UploadButton(), "top-right");
     </script>
