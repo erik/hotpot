@@ -267,7 +267,9 @@ class UploadButton {
     const { div, button } = createElement;
 
     // Too lazy to make a createElementNS implementation
-    const btn = button({});
+    const btn = button({
+      title: "Add activity files",
+    });
     btn.innerHTML = `
         <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M62.75 18H49.5H31C26.5817 18 23 21.5817 23 26V74C23 78.4183 26.5817 82 31 82H68C72.4183 82 76 78.4183 76 74V50C76 50 76 50 76 50C76 50 76 40.2484 76 34" stroke="black" stroke-width="8"/>
