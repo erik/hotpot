@@ -65,6 +65,7 @@
 
             textarea {
                 resize: vertical;
+                font-size: small;
             }
         }
 
@@ -284,8 +285,8 @@
 
                     <div class="__setting">
                         <label for="filter">Property Filter</label>
-                        <input key="filter" name="filter"
-                            placeholder="{&quot;key&quot;:&quot;elevation&quot;:&quot;&gt;&quot;1000}" />
+                        <textarea key="filter" name="filter"
+                            placeholder="{&quot;elevation&quot;: {&quot;&gt;&quot;: 1000, &quot;&lt;&quot;: 3000 }}"></textarea>
                     </div>
                 </fieldset>
 

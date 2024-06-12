@@ -104,18 +104,23 @@ For example, we may want to generate different tiles for cycling vs hiking,
 exclude commutes, which gear we used, a minimum elevation gain, etc.
 
 ```json5
-# Basic numeric comparisons: <, <=, >, >=
-{"key": "elev_gain", ">": 1000}
+{
+  # Basic numeric comparisons: <, <=, >, >=
+  "elevation_gain": { ">": 1000 },
 
-# Match/exclude multiple values
-{"key": "activity_gear", "any_of": ["gravel", "mtb"]}
-{"key": "activity_gear", "none_of": ["gravel", "mtb"]}
+  # Match/exclude multiple values
+  "bike": { "any_of": ["gravel", "mtb"] },
+  "activity_type": { "none_of": ["Run"] },
 
-# Substring matches (e.g. match "Gravel Ride" + "Ride")
-{"key": "activity_type", "matches": "Ride"}
+  # Substring match (e.g. match "morning commute" + "commute #9")
+  "title": { "matches": "commute" },
 
-# Property key exists
-{"key", "max_hr", "has_key": true}
+  # Property key exists
+  "max_hr": { "exists": true },
+
+  # Multiple expressions can be applied (evaluated as an AND)
+  "distance": { ">": 100, "<": 200 }
+}
 ```
 
 ## Activity Uploads

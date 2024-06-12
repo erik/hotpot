@@ -1,7 +1,7 @@
-use std::borrow::Cow;
 use std::io::Cursor;
 use std::path::Path;
 use std::str::FromStr;
+use std::{borrow::Cow, collections::HashMap};
 
 use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -209,34 +209,92 @@ pub fn decode_line(bytes: &[u8]) -> Result<Vec<Coord<u32>>> {
 
 #[derive(Clone, Deserialize, Debug)]
 #[serde(rename_all = "snake_case")]
-pub struct PropertyFilter {
-    key: String,
+pub struct PropertyFilter(HashMap<String, PropExpr>);
 
-    #[serde(flatten)]
-    op: FilterOp,
+impl PropertyFilter {
+    fn to_query<'a>(&'a self, clauses: &mut Vec<Cow<'a, str>>, params: &mut Vec<&'a dyn ToSql>) {
+        for (key, expr) in self.0.iter() {
+            expr.as_sql(key, clauses, params);
+        }
+    }
+}
+
+impl PropExpr {
+    fn as_sql<'a>(
+        &'a self,
+        key: &'a String,
+        clauses: &mut Vec<Cow<'_, str>>,
+        params: &mut Vec<&'a dyn ToSql>,
+    ) {
+        macro_rules! filter_list {
+            ($e:ident,$cmp:expr) => {
+                if let Some(ref values) = self.$e {
+                    params.push(key);
+                    params.extend(values.iter().map(|v| v as &dyn ToSql));
+
+                    let placeholders = values.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                    clauses.push(["(", $cmp, "(", &placeholders, "))"].join(" ").into());
+                }
+            };
+        }
+
+        macro_rules! filter {
+            ($field:ident, $expected:expr, $sql:expr) => {
+                if let Some($expected) = self.$field {
+                    params.push(key);
+                    clauses.push($sql.into());
+                }
+            };
+            ($field:ident, $sql:expr) => {
+                if let Some(ref val) = self.$field {
+                    params.push(key);
+                    params.push(val);
+                    clauses.push($sql.into());
+                }
+            };
+        }
+
+        filter_list!(any_of, "properties ->> ? IN");
+        filter_list!(none_of, "properties ->> ? NOT IN");
+
+        filter!(eq, "(properties ->> ? = ?)");
+        filter!(neq, "(properties ->> ? != ?)");
+        filter!(gt, "(properties ->> ? > ?)");
+        filter!(gte, "(properties ->> ? >= ?)");
+        filter!(lt, "(properties ->> ? < ?)");
+        filter!(lte, "(properties ->> ? <= ?)");
+        filter!(matches, "(instr(properties ->> ?, ?) > 0)");
+
+        filter!(exists, true, "(properties ->> ? IS NOT NULL)");
+        filter!(exists, false, "(properties ->> ? IS NULL)");
+    }
 }
 
 #[derive(Clone, Deserialize, Debug)]
 #[serde(rename_all = "snake_case")]
-enum FilterOp {
-    AnyOf(Vec<String>),
-    NoneOf(Vec<String>),
-    Matches(String),
-    HasKey(bool),
+pub struct PropExpr {
+    any_of: Option<Vec<String>>,
+    none_of: Option<Vec<String>>,
+    matches: Option<String>,
+    exists: Option<bool>,
 
-    // TODO: these should all take Value rather than string
     #[serde(rename = "=")]
-    Eq(String),
+    eq: Option<String>,
+
     #[serde(rename = "!=")]
-    Neq(String),
+    neq: Option<String>,
+
     #[serde(rename = ">")]
-    Gt(f64),
+    gt: Option<f64>,
+
     #[serde(rename = ">=")]
-    Gte(f64),
+    gte: Option<f64>,
+
     #[serde(rename = "<")]
-    Lt(f64),
+    lt: Option<f64>,
+
     #[serde(rename = "<=")]
-    Lte(f64),
+    lte: Option<f64>,
 }
 
 impl FromStr for PropertyFilter {
@@ -264,7 +322,7 @@ impl ActivityFilter {
     }
 
     pub fn to_query<'a>(&'a self, params: &mut Vec<&'a dyn ToSql>) -> String {
-        let mut clauses: Vec<Cow<'a, str>> = vec![];
+        let mut clauses: Vec<Cow<'a, str>> = vec!["true".into()];
 
         if let Some(ref before) = self.before {
             clauses.push("start_time < ?".into());
@@ -276,57 +334,8 @@ impl ActivityFilter {
             params.push(after);
         }
 
-        // TODO: this could seriously use a cleanup.
-        if let Some(PropertyFilter { ref key, ref op }) = self.props {
-            let in_expr =
-                |params: &mut Vec<&'a dyn ToSql>, values: &'a Vec<String>, negate: bool| {
-                    params.push(key);
-                    params.extend(values.iter().map(|v| v as &dyn ToSql));
-
-                    let placeholders = values.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-                    let op = if negate { "NOT IN" } else { "IN" };
-                    format!("properties ->> ? {op} ({placeholders})")
-                };
-
-            let cmp_expr = |params: &mut Vec<&'a dyn ToSql>, op: &str, rhs: &'a dyn ToSql| {
-                params.push(key);
-                params.push(rhs);
-                format!("properties ->> ? {op} ?")
-            };
-
-            let num_cmp_expr = |params: &mut Vec<&'a dyn ToSql>, op: &str, rhs: &'a dyn ToSql| {
-                params.push(key);
-                params.push(rhs);
-                format!("CAST(properties ->> ? AS FLOAT) {op} ?")
-            };
-
-            let clause = match op {
-                FilterOp::AnyOf(values) => in_expr(params, values, false),
-                FilterOp::NoneOf(values) => in_expr(params, values, true),
-                FilterOp::Matches(value) => {
-                    params.push(key);
-                    params.push(value);
-                    // note: could also use `properties->>? LIKE '%?%'`
-                    "instr(properties ->> ?, ?) > 0".into()
-                }
-                FilterOp::HasKey(non_null) => {
-                    params.push(key);
-                    let op = if *non_null { "IS NOT NULL" } else { "IS NULL" };
-                    format!("properties ->> ? {op}")
-                }
-                FilterOp::Eq(val) => cmp_expr(params, "=", val),
-                FilterOp::Neq(val) => cmp_expr(params, "!=", val),
-                FilterOp::Gt(val) => num_cmp_expr(params, ">", val),
-                FilterOp::Gte(val) => num_cmp_expr(params, ">=", val),
-                FilterOp::Lt(val) => num_cmp_expr(params, "<", val),
-                FilterOp::Lte(val) => num_cmp_expr(params, "<=", val),
-            };
-
-            clauses.push(clause.into());
-        }
-
-        if clauses.is_empty() {
-            return String::from("true");
+        if let Some(ref props) = self.props {
+            props.to_query(&mut clauses, params);
         }
 
         clauses.join(" AND ")
