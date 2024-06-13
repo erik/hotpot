@@ -29,13 +29,31 @@ If importing activities from a [Strava data export], use
 activities usually not stored in the GPX (title, which bike you used, the
 weather, ...)
 
+[Strava data export]: https://support.strava.com/hc/en-us/articles/216918437-Exporting-your-Data-and-Bulk-Export
+
 ```
 hotpot import \
     strava_export/activities/ \
     --join strava_export/activities.csv
 ```
 
-[Strava data export]: https://support.strava.com/hc/en-us/articles/216918437-Exporting-your-Data-and-Bulk-Export
+Another option is to drag and drop files into the browser UI, which can be
+enabled by running the server with `--upload`.
+
+```
+# If your server is accessible to the internet, make sure to set this
+# environment variable. Without it, anonymous uploads are enabled!
+export HOTPOT_UPLOAD_TOKEN=xyz...
+
+hotpot serve --upload
+
+# Open the browser and open the file upload dialog by clicking the "Add activity
+# files" button
+open http://localhost:8080
+```
+
+This method will be slower than on the command line as it can't parallelize as
+well. Activity metadata is also not supported.
 
 After the initial import, you'll have a `sqlite3` database, and can start
 creating heatmaps.
@@ -71,23 +89,26 @@ data into colored pixels, which can be set via the `?color={...}` query
 parameter. A list of these is available in the map view.
 
 In addition to the presets, custom gradients can also be used via the
-`?gradient={...}` parameter.
+`?gradient={...}` parameter. With this, we specify a sequence of threshold
+values (how many times a particular pixel was visited) along with an associated
+color. Values falling between the thresholds will be smoothly interpolated to a
+reasonable color.
 
-For example, to smoothly transition from red (least activity) to white
-(most), we could use `0:f00;1:fff`. Pixels with no activity will be left
-transparent. Color codes are interpreted as hex RGB values in the following
-formats: `RGB`, `RRGGBB`, `RRGGBBAA`.
+For example, if we want to display pure red when we've visited a pixel once, and
+white when we've visited 255 times (or more), we'd use `1:FF0000;255:FFFFFF`.
 
-If alpha values are not given, they are assumed to be `0xff` (fully opaque).
+Color codes are interpreted as hex RGBA values in `RGB`, `RRGGBB` or `RRGGBBAA`
+formats. If alpha values are not given, they are assumed to be `FF` (fully
+opaque).
 
 <details>
   <summary>Example Gradients</summary>
 
-| Gradient | Rendered |
-| -------- | -------- |
-| `0:000;0.25:fff`| ![](https://user-images.githubusercontent.com/188935/277203430-269317c9-8539-4bc7-822c-fc199867d830.png) |
-| `0:f00;0.1:ff0;0.2:ffff22;0.3:ffffff`| ![](https://user-images.githubusercontent.com/188935/277203443-ef63926a-0316-4a9b-ba5e-2cfdf0281581.png) |
-| `0:322bb3;0.10:9894e5;0.15:fff` | ![](https://user-images.githubusercontent.com/188935/277203450-bd929ee0-db3d-4653-9fed-5b3982829091.png) |
+| Gradient                          | Rendered                                                                                                 |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `1:000;10:fff`                    | ![](https://user-images.githubusercontent.com/188935/277203430-269317c9-8539-4bc7-822c-fc199867d830.png) |
+| `1:f00;5:ff0;10:ffff22;20:ffffff` | ![](https://user-images.githubusercontent.com/188935/277203443-ef63926a-0316-4a9b-ba5e-2cfdf0281581.png) |
+| `1:322bb3;10:9894e5;20:fff`       | ![](https://user-images.githubusercontent.com/188935/277203450-bd929ee0-db3d-4653-9fed-5b3982829091.png) |
 
 </details>
 
@@ -151,7 +172,7 @@ documentation](https://developers.strava.com/) to create your own application.
 Next, we can use oauth to authenticate our account and save the API tokens in
 the database.
 
-``` bash
+```bash
 export STRAVA_CLIENT_ID=... \
        STRAVA_CLIENT_SECRET=...\
        STRAVA_WEBHOOK_SECRET=...
@@ -183,7 +204,7 @@ instructions](https://fly.io/docs/hands-on/install-flyctl/) first.
 Steps below assume you've cloned this repo locally and already created a local
 database.
 
-``` bash
+```bash
 # Create the application
 fly launch --ha false
 
@@ -227,4 +248,3 @@ PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with
 this program. If not, see <https://www.gnu.org/licenses/>.
-
