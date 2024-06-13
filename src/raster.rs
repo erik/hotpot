@@ -14,40 +14,34 @@ use crate::WebMercatorViewport;
 
 pub static PINKISH: Lazy<LinearGradient> = Lazy::new(|| {
     LinearGradient::from_stops(&[
-        (0.0, [0xff, 0xb1, 0xff, 0x7f]),
-        (0.05, [0xff, 0xb1, 0xff, 0xff]),
-        (0.25, [0xff, 0xff, 0xff, 0xff]),
+        (1, [0xff, 0xb1, 0xff, 0x7f]),
+        (10, [0xff, 0xb1, 0xff, 0xff]),
+        (50, [0xff, 0xff, 0xff, 0xff]),
     ])
 });
 
 pub static BLUE_RED: Lazy<LinearGradient> = Lazy::new(|| {
     LinearGradient::from_stops(&[
-        (0.0, [0x3f, 0x5e, 0xfb, 0xff]),
-        (0.05, [0xfc, 0x46, 0x6b, 0xff]),
-        (0.25, [0xff, 0xff, 0xff, 0xff]),
+        (1, [0x3f, 0x5e, 0xfb, 0xff]),
+        (10, [0xfc, 0x46, 0x6b, 0xff]),
+        (50, [0xff, 0xff, 0xff, 0xff]),
     ])
 });
 
 pub static RED: Lazy<LinearGradient> = Lazy::new(|| {
     LinearGradient::from_stops(&[
-        (0.0, [0xb2, 0x0a, 0x2c, 0xff]),
-        (0.05, [0xff, 0xfb, 0xd5, 0xff]),
-        (0.25, [0xff, 0xff, 0xff, 0xff]),
+        (1, [0xb2, 0x0a, 0x2c, 0xff]),
+        (10, [0xff, 0xfb, 0xd5, 0xff]),
+        (50, [0xff, 0xff, 0xff, 0xff]),
     ])
 });
 
 pub static ORANGE: Lazy<LinearGradient> = Lazy::new(|| {
     LinearGradient::from_stops(&[
-        (0.0, [0xfc, 0x4a, 0x1a, 0xff]),
-        (0.25, [0xf7, 0xb7, 0x33, 0xff]),
+        (1, [0xfc, 0x4a, 0x1a, 0xff]),
+        (10, [0xf7, 0xb7, 0x33, 0xff]),
     ])
 });
-
-#[derive(Debug)]
-pub struct LinearGradient {
-    empty_value: Rgba<u8>,
-    palette: [Rgba<u8>; 100],
-}
 
 struct TileRaster {
     bounds: TileBounds,
@@ -135,73 +129,76 @@ fn lerp(a: Rgba<u8>, b: Rgba<u8>, t: f32) -> Rgba<u8> {
     ])
 }
 
-impl LinearGradient {
-    const NUM_STEPS: usize = 100;
+#[derive(Debug)]
+pub struct LinearGradient([Rgba<u8>; 256]);
 
-    pub fn from_stops<P>(stops: &[(f32, P)]) -> Self
+impl LinearGradient {
+    pub fn from_stops<P>(stops: &[(u8, P)]) -> Self
     where
         P: Copy + Into<Rgba<u8>>,
     {
-        let mut palette = [Rgba::from([0, 0, 0, 0]); Self::NUM_STEPS];
-        let palette_width = Self::NUM_STEPS as f32;
-        let mut i = 0;
+        let mut palette = [Rgba::from([0, 0, 0, 0]); 256];
 
-        for stop in stops.windows(2) {
-            let (a, b) = (&stop[0], &stop[1]);
-            let width = (b.0 - a.0) * palette_width;
+        for window in stops.windows(2) {
+            let (start_idx, start_color) = window[0];
+            let (end_idx, end_color) = window[1];
 
-            let start_idx = (a.0 * palette_width).round() as usize;
-            let end_idx = (b.0 * palette_width).ceil() as usize;
-
-            while i < end_idx {
-                let t = (i - start_idx) as f32 / width;
-                palette[i] = lerp(a.1.into(), b.1.into(), t);
-
-                i += 1;
+            for i in start_idx..=end_idx {
+                palette[i as usize] = lerp(
+                    start_color.into(),
+                    end_color.into(),
+                    (i - start_idx) as f32 / (end_idx - start_idx) as f32,
+                );
             }
         }
 
         // Copy the last color to the end of the palette
-        if let Some((_, last)) = stops.last() {
-            while i < palette.len() {
-                palette[i] = (*last).into();
-                i += 1;
+        if let Some(&(last_idx, color)) = stops.last() {
+            for i in (last_idx as usize)..palette.len() {
+                palette[i] = color.into();
             }
         }
 
-        LinearGradient {
-            palette,
-            empty_value: Rgba::from([0, 0, 0, 0]),
-        }
+        LinearGradient(palette)
     }
 
     pub fn sample(&self, val: u8) -> Rgba<u8> {
-        if val == 0 {
-            return self.empty_value;
-        }
-
-        let idx = (val as usize).clamp(0, Self::NUM_STEPS - 1);
-        self.palette[idx]
+        self.0[val as usize]
     }
 }
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct LinearGradientParseError;
 
+/*
+TODO: support varying stops per-zoom level. Possible format:
+
+   {
+       "palette": ["789", "334455", "ffffff33"],
+       "stops": [
+           [0,  [75, 175, 250]],
+           [10, [25, 50, 75]],
+           [15, [5, 10, 15]]
+       ]
+   }
+*/
 impl FromStr for LinearGradient {
     type Err = LinearGradientParseError;
 
-    /// Parse a string containing a list of stop points and colors, separated by a `;`.
+    /// Parse a string containing a list of stop points and colors, separated by
+    /// a `;`.
     ///
     /// Colors may be written as `RGB`, `RRGGBB`, or `RRGGBBAA`
     ///
-    /// For example: `0:001122;0.25:789;0.5:334455;0.75:ffffff33`
+    /// For example: `0:001122;25:789;50:334455;75:ffffff33`
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let stops: Vec<(f32, Rgba<u8>)> = s
+        let stops: Vec<(u8, Rgba<u8>)> = s
             .split(';')
             .map(|part| {
-                let (pos, color) = part.split_once(':').ok_or(LinearGradientParseError)?;
-                let pos = pos.parse::<f32>().map_err(|_| LinearGradientParseError)?;
+                let (threshold, color) = part.split_once(':').ok_or(LinearGradientParseError)?;
+                let threshold = threshold
+                    .parse::<u8>()
+                    .map_err(|_| LinearGradientParseError)?;
                 let color = {
                     let rgba = match color.len() {
                         3 => {
@@ -216,7 +213,7 @@ impl FromStr for LinearGradient {
                     u32::from_str_radix(&rgba, 16).map_err(|_| LinearGradientParseError)?
                 };
 
-                Ok((pos, Rgba::from(color.to_be_bytes())))
+                Ok((threshold, Rgba::from(color.to_be_bytes())))
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -375,14 +372,14 @@ mod tests {
 
     #[test]
     fn test_linear_gradient_parse() {
-        let gradient = "0:001122;0.25:789;0.5:334455;0.75:ffffff33"
+        let gradient = "1:001122;10:789;100:334455;200:ffffff33"
             .parse::<LinearGradient>()
             .unwrap();
-        assert_eq!(gradient.palette[0], Rgba::from([0x00, 0x11, 0x22, 0xff]));
-        assert_eq!(gradient.palette[25], Rgba::from([0x77, 0x88, 0x99, 0xff]));
-        assert_eq!(gradient.palette[50], Rgba::from([0x33, 0x44, 0x55, 0xff]));
-        assert_eq!(gradient.palette[75], Rgba::from([0xff, 0xff, 0xff, 0x33]));
+        assert_eq!(gradient.0[0], Rgba::from([0x00, 0x00, 0x00, 0x00]));
+        assert_eq!(gradient.0[1], Rgba::from([0x00, 0x11, 0x22, 0xff]));
+        assert_eq!(gradient.0[10], Rgba::from([0x77, 0x88, 0x99, 0xff]));
+        assert_eq!(gradient.0[100], Rgba::from([0x33, 0x44, 0x55, 0xff]));
         // Last value should be copied to end
-        assert_eq!(gradient.palette[99], Rgba::from([0xff, 0xff, 0xff, 0x33]));
+        assert_eq!(gradient.0[255], Rgba::from([0xff, 0xff, 0xff, 0x33]));
     }
 }
