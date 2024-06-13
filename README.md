@@ -126,21 +126,21 @@ exclude commutes, which gear we used, a minimum elevation gain, etc.
 
 ```json5
 {
-  # Basic numeric comparisons: <, <=, >, >=
-  "elevation_gain": { ">": 1000 },
+  // Basic numeric comparisons: <, <=, >, >=
+  elevation_gain: { ">": 1000 },
 
-  # Match/exclude multiple values
-  "bike": { "any_of": ["gravel", "mtb"] },
-  "activity_type": { "none_of": ["Run"] },
+  // Match/exclude multiple values
+  bike: { any_of: ["gravel", "mtb"] },
+  activity_type: { none_of: ["Run"] },
 
-  # Substring match (e.g. match "morning commute" + "commute #9")
-  "title": { "matches": "commute" },
+  // Substring match (e.g. match "morning commute" + "commute #9")
+  title: { matches: "commute" },
 
-  # Property key exists
-  "max_hr": { "exists": true },
+  // Property key exists
+  max_hr: { exists: true },
 
-  # Multiple expressions can be applied (evaluated as an AND)
-  "distance": { ">": 100, "<": 200 }
+  // Multiple expressions can be applied (evaluated as an AND)
+  distance: { ">": 100, "<": 200 },
 }
 ```
 
