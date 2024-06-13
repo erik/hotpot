@@ -166,9 +166,8 @@ struct RenderQueryParams {
     before: Option<Date>,
     #[serde(default, with = "crate::date::parse")]
     after: Option<Date>,
-    // TODO: support multiple filters which get AND'd together
-    // TODO: parse as a `PropertyFilter` directly using custom `with` annotation
-    filter: Option<String>,
+    #[serde(default)]
+    filter: Option<PropertyFilter>,
 }
 
 /// Handle the `y` part of an `/z/x/y` or `/z/x/y@2x` URL
@@ -230,21 +229,7 @@ async fn render_tile(
         (None, Some(_)) => return (StatusCode::BAD_REQUEST, "invalid color").into_response(),
     };
 
-    let props = params
-        .filter
-        .as_deref()
-        .map(PropertyFilter::from_str)
-        .transpose();
-
-    let props = match props {
-        Ok(props) => props,
-        Err(e) => {
-            tracing::error!("error parsing filter: {:?}", e);
-            return (StatusCode::BAD_REQUEST, format!("err: {e:?}")).into_response();
-        }
-    };
-
-    let filter = ActivityFilter::new(params.before, params.after, props);
+    let filter = ActivityFilter::new(params.before, params.after, params.filter);
     let tile = Tile::new(x, y_param.y, z);
 
     match raster::render_tile(tile, gradient, y_param.tile_size, &filter, &db) {

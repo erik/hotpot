@@ -1,14 +1,15 @@
+use std::borrow::Cow;
+use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
 use std::str::FromStr;
-use std::{borrow::Cow, collections::HashMap};
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use geo_types::Coord;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, ToSql};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use time::{Date, OffsetDateTime};
 
 const SCHEMA: &str = "\
@@ -207,8 +208,7 @@ pub fn decode_line(bytes: &[u8]) -> Result<Vec<Coord<u32>>> {
     Ok(coords)
 }
 
-#[derive(Clone, Deserialize, Debug)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Default)]
 pub struct PropertyFilter(HashMap<String, PropExpr>);
 
 impl PropertyFilter {
@@ -301,7 +301,20 @@ impl FromStr for PropertyFilter {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self> {
-        serde_json::from_str(s).map_err(Into::into)
+        let obj = serde_json::from_str(s)?;
+        Ok(PropertyFilter(obj))
+    }
+}
+
+impl<'de> Deserialize<'de> for PropertyFilter {
+    fn deserialize<D>(deserializer: D) -> Result<PropertyFilter, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        PropertyFilter::from_str(&s).map_err(|err| {
+            serde::de::Error::custom(format!("invalid filter expression: {:?}", err))
+        })
     }
 }
 
