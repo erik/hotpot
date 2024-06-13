@@ -152,9 +152,22 @@ directly over HTTP:
 1. `POST /upload`: Manually upload a single GPX, TCX, or FIT file
 2. Strava webhook: Subscribe to new activity uploads automatically
 
-### `/upload`
+### `POST /upload`
 
-todo document
+To enable HTTP uploads, run the server with `--upload`. Any files that can be
+imported on the command line can be `POST`ed to the server via the `/upload`
+endpoint using `multipart/form-data` encoding.
+
+```
+curl -X POST \
+  http://hotpot.example.com/upload \
+  --header 'Authorization: Bearer MY_TOKEN_HERE' \
+  --form file=@activity.gpx
+```
+
+Note that the `Authorization` header is only required when the environment
+variable `HOTPOT_UPLOAD_TOKEN` is set at server startup. When left unset,
+unauthenticated uploads are enabled.
 
 ### Strava Webhook
 
