@@ -299,7 +299,7 @@ async fn render_tile(
             )
                 .into_response()
         }
-        (None, None) => &raster::PINKISH,
+        (None, None) => &raster::ORANGE,
         (None, Some("pinkish")) => &raster::PINKISH,
         (None, Some("blue-red")) => &raster::BLUE_RED,
         (None, Some("red")) => &raster::RED,
