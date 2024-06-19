@@ -131,9 +131,17 @@ async fn run_async(addr: SocketAddr, db: Database, config: Config) -> Result<()>
     Ok(())
 }
 
-async fn index() -> impl IntoResponse {
-    let index_html = StaticAsset::get("index.html").expect("missing file");
-    axum::response::Html(index_html.data)
+async fn index(State(AppState { config, .. }): State<AppState>) -> impl IntoResponse {
+    let index_file = StaticAsset::get("index.html").expect("missing file");
+    let html = std::str::from_utf8(&index_file.data).expect("valid utf8");
+
+    // Dynamically inject config
+    let html = html.replace(
+        "// $INJECT$",
+        format!("globalThis.UPLOADS_ENABLED = {};", config.routes.upload).as_str(),
+    );
+
+    axum::response::Html(html)
 }
 
 async fn static_file(uri: Uri) -> impl IntoResponse {

@@ -11,6 +11,10 @@
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.3.2/dist/maplibre-gl.css" />
 
     <script src="/static/main.js"></script>
+
+    <script>
+        // $INJECT$
+    </script>
 </head>
 
 <body>
@@ -497,8 +501,7 @@
         map.on("load", () => updateMapTileSource());
         map.addControl(new maplibregl.NavigationControl());
 
-        // TODO: Should only add this when upload are enabled
-        map.addControl(new UploadButton(), "top-right");
+        globalThis.UPLOADS_ENABLED && map.addControl(new UploadButton(), "top-right");
 
         // TODO: pretty hacky...
         fetch("/api/activity-properties")
