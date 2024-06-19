@@ -3,8 +3,8 @@ TODO
 More web endpoints
   - Vector tiles
   - Activity as GeoJSON
-  - Known property keys? For a UI dropdown
   - Export PNG of selected region
+  - UI for fitler + gradient creation
 
 Customization
   - Support AND/OR/NOT for property filters

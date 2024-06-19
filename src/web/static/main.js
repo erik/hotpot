@@ -7,6 +7,14 @@ const deferOnce = (obj, fn) => {
       .finally(() => delete obj.$$defer);
 };
 
+const debounce = (fn, timeoutMs = 500) => {
+  let id;
+  return () => {
+    if (id) window.clearTimeout(id);
+    id = window.setTimeout(() => fn(), timeoutMs);
+  };
+};
+
 const livewire = (props) => {
   const live = Object.entries(props).filter(([k, _fn]) => k.startsWith("$"));
   const state = { ...props };
@@ -27,9 +35,32 @@ const livewire = (props) => {
       return true;
     },
 
-    get(_target, key, proxy) {
+    get(target, key, proxy) {
       if (key === "watch") {
-        return (fn) => watchers.push(fn) && proxy;
+        return (...args) => {
+          let fn = args[0];
+
+          // Only watch for changes in specific properties
+          if (args.length === 2) {
+            const [watchedKeys, wrappedFn] = args;
+
+            fn = (obj) => {
+              const cur = JSON.stringify(
+                Object.entries(obj).filter(([k, _]) => watchedKeys.includes(k))
+              );
+
+              if (cur === wrappedFn.$$cache) return;
+              wrappedFn.$$cache = cur;
+              wrappedFn(obj);
+            };
+          }
+
+          // invoke the function once with current state
+          deferOnce(fn, () => fn(target));
+          watchers.push(fn);
+
+          return proxy;
+        };
       }
       return Reflect.get(...arguments);
     },
@@ -66,6 +97,15 @@ const createElement = new Proxy(_createElement, {
   get: (_target, prop, receiver) => (attrs, children) =>
     receiver(prop, attrs, children),
 });
+
+// {a: "foo", b: null, c: " "} => "a=foo&c=%20"
+function encodeQueryString(obj) {
+  return Object.entries(obj)
+    .filter(([_k, v]) => v != null && v !== "")
+    .map((kv) => kv.map(encodeURIComponent))
+    .map(([k, v]) => `${k}=${v}`)
+    .join("&");
+}
 
 function createUploadModal() {
   const {
@@ -288,4 +328,64 @@ class UploadButton {
       btn
     );
   }
+}
+
+function createPropertyModal(props) {
+  const {
+    "modal-dialog": modal,
+    div,
+    table,
+    tr,
+    th,
+    td,
+    thead,
+    tbody,
+    style,
+  } = createElement;
+
+  // TODO: maybe display property type
+  const rows = props.map(({ key, activity_count }) => {
+    return tr({}, [td({}, key), td({}, activity_count)]);
+  });
+
+  const node = modal({}, [
+    style(
+      {},
+      `
+      .property-table {
+        width: 100%;
+        font-size: small;
+        text-align: left;
+
+        thead {
+          background-color: #777;
+          color: white;
+          th {
+            padding: 4px;
+          }
+        }
+
+        tbody {
+          td:nth-child(1) {
+            font-family: monospace;
+          }
+        }
+
+        tr:nth-child(even) {
+          background-color: #fafafa;
+        }
+      }
+    `
+    ),
+    div({ slot: "header" }, "Properties"),
+    div({ slot: "body" }, [
+      // TODO: Add docs abotu how filters work etc.
+      table({ class: "property-table" }, [
+        thead({}, [th({}, "Property"), th({}, "Count")]),
+        tbody({}, rows),
+      ]),
+    ]),
+  ]);
+
+  document.body.appendChild(node);
 }

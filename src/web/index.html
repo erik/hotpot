@@ -94,12 +94,17 @@
                     width: 100%;
                     margin: 1em 0;
                     transition: visibility 300ms, opacity 300ms;
+
+                    .--clickable {
+                        cursor: pointer;
+
+                        &:hover {
+                            text-decoration: underline;
+                        }
+                    }
+
                 }
             }
-        }
-
-        #map-overlay>details>div {
-            padding: 0.5em;
         }
 
         .drop-area {
@@ -175,6 +180,14 @@
                 }
             }
         }
+
+        #warning__container div {
+            padding: 0.5em;
+            font-size: small;
+            border: 1px solid red;
+            border-radius: 0.25em;
+            background-color: #ff05054d;
+        }
     </style>
 
     <template id="template-modal">
@@ -220,6 +233,8 @@
 
             .modal__body {
                 flex-grow: 1;
+                overflow-y: auto;
+                max-height: 50vh;
             }
 
             .modal__footer {
@@ -274,19 +289,24 @@
                     <legend>Activities</legend>
 
                     <div class="__setting">
-                        <label for="filter">Start Date</label>
+                        <label for="after">Start Date</label>
                         <input key="after" type="date" name="after" id="after" />
                     </div>
 
                     <div class="__setting">
-                        <label for="filter">End Date</label>
+                        <label for="before">End Date</label>
                         <input key="before" type="date" name="before" id="before" />
                     </div>
 
                     <div class="__setting">
-                        <label for="filter">Property Filter</label>
-                        <textarea key="filter" name="filter"
-                            placeholder="{&quot;elevation&quot;: {&quot;&gt;&quot;: 1000, &quot;&lt;&quot;: 3000 }}"></textarea>
+                        <label id="settings__filter" class="--clickable" for="filter">Property Filter</label>
+                        <textarea x-debounce key="filter" name="filter"
+                            placeholder='{"elevation": {"&gt;": 1000, "&lt;": 3000 }}'></textarea>
+                    </div>
+
+                    <div class="__setting">
+                        <label for="activities">Activities Shown</label>
+                        <label id="activity_count">• • •</label>
                     </div>
                 </fieldset>
 
@@ -296,18 +316,17 @@
                     <div class="__setting">
                         <label for="color">Theme</label>
                         <select key="color" name="color">
-                            <option value="pinkish" selected>Pinkish</option>
-                            <option value="orange">Orange</option>
+                            <option value="orange" selected>Orange</option>
+                            <option value="pinkish">Pinkish</option>
                             <option value="blue-red">Blue/Red</option>
                             <option value="red">Red</option>
                             <option value="custom">Custom</option>
                         </select>
-
                     </div>
 
-                    <div id="settings__gradient" class="__setting" style="visibility:hidden; opacity: 0;">
+                    <div id="settings__gradient" class="__setting" style="visibility: hidden; opacity: 0">
                         <label for="gradient">Gradient</label>
-                        <input key="gradient" name="gradient" placeholder="1:400;10:fff" />
+                        <input key="gradient" name="gradient" x-debounce placeholder="1:400;10:fff" />
                     </div>
                 </fieldset>
 
@@ -323,7 +342,8 @@
                             <option value="positron-nolabels">Light (no labels)</option>
                             <option value="dark-matter">Dark</option>
                             <option value="positron">Light</option>
-                            <option value="none">None</option>
+                            <option value="none-black">Solid Black</option>
+                            <option value="none-white">Solid White</option>
                         </select>
                     </div>
 
@@ -336,16 +356,50 @@
                     </div>
                 </fieldset>
             </form>
+
+            <div id="warning__container"></div>
         </details>
     </div>
 
     <script>
+        const mapStyleBlack = {
+            version: 8,
+            sources: {},
+            layers: [
+                {
+                    id: "background",
+                    type: "background",
+                    paint: { "background-color": "black" },
+                },
+            ],
+        };
+
+        const mapStyleWhite = {
+            version: 8,
+            sources: {},
+            layers: [
+                {
+                    id: "background",
+                    type: "background",
+                    paint: { "background-color": "white" },
+                },
+            ],
+        };
+
         const map = new maplibregl.Map({
             container: "map",
-            style: "https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json",
+            style:
+                "https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json",
             center: [0, 0],
             hash: true,
         });
+
+        const nodes = {
+            gradient: document.getElementById("settings__gradient"),
+            filter: document.getElementById("settings__filter"),
+            warnings: document.getElementById("warning__container"),
+            activityCount: document.getElementById("activity_count"),
+        };
 
         const options = livewire({
             color: null,
@@ -356,51 +410,70 @@
             filter: null,
             gradient: null,
 
-            $color: ({ color }) => (color === 'custom' ? null : color),
-            $gradient: ({ color, gradient }) => (color === 'custom' ? gradient : null),
+            $color: ({ color }) => (color === "custom" ? null : color),
+            $gradient: ({ color, gradient }) =>
+                color === "custom" ? gradient : null,
 
             $styleUrl: ({ map }) => {
-                if (map === 'none') {
-                    return { version: 8, sources: {}, layers: [] }
+                switch (map) {
+                    case 'none-black':
+                        return mapStyleBlack
+                    case 'none-white':
+                        return mapStyleWhite;
+                    default:
+                        return `https://basemaps.cartocdn.com/gl/${map}-gl-style/style.json`;
                 }
-
-                return `https://basemaps.cartocdn.com/gl/${map}-gl-style/style.json`
             },
-            $tileUrl: ({ before, after, filter, $gradient, $color }) => {
-                let qs = [
-                    before && `before=${before}`,
-                    after && `after=${after}`,
-                    filter && `filter=${filter}`,
-                    $gradient && `gradient=${$gradient}`,
-                    $color && `color=${$color}`,
-                ]
-                    .filter((it) => !!it)
-                    .join("&");
+            $queryString: ({ before, after, filter, $gradient, $color }) =>
+                encodeQueryString({
+                    before,
+                    after,
+                    filter,
+                    gradient: $gradient,
+                    color: $color,
+                }),
+            $tileUrl: ({ $queryString }) => "/tile/{z}/{x}/{y}{ratio}?" + $queryString,
+        })
+            .watch(({ color }) => {
+                if (color === "custom") {
+                    nodes.gradient.style.visibility = "visible";
+                    nodes.gradient.style.opacity = "1";
+                } else {
+                    nodes.gradient.style.visibility = "hidden";
+                    nodes.gradient.style.opacity = "0";
+                }
+            })
+            .watch(["$styleUrl", "$tileUrl", "size"], ({ $styleUrl }) => {
+                map.setStyle($styleUrl);
+                map.once("styledata", () => updateMapTileSource());
+            })
+            .watch(["$queryString"], async ({ $queryString }) => {
+                const { div } = createElement;
+                const { count, warnings } = await fetch("/api/activity-count?" + $queryString)
+                    .then(async (res) => [res.status, await res.text()])
+                    .catch(err => [500, err.toString()])
+                    .then(([status, text]) => status === 200
+                        ? { count: text, warnings: null }
+                        : { count: null, warnings: text })
 
-                return "/tile/{z}/{x}/{y}{ratio}?" + qs;
-            },
-        }).watch(({ color }) => {
-            const gradient = document.getElementById('settings__gradient');
-            if (color === 'custom') {
-                gradient.style.visibility = 'visible';
-                gradient.style.opacity = '1';
-            } else {
-                gradient.style.visibility = 'hidden';
-                gradient.style.opacity = '0';
-            }
-        }).watch(({ $styleUrl }) => {
-            map.setStyle($styleUrl);
-            map.once("styledata", () => updateSource());
-        });
+                if (count != null) nodes.activityCount.innerText = count;
 
+                (warnings != null)
+                    ? nodes.warnings.replaceChildren(div({}, warnings))
+                    : nodes.warnings.replaceChildren();
+            });
+
+        // Wire up form to reactive data stuff
         document.querySelectorAll("#map-overlay [key]").forEach((el) => {
             const key = el.getAttribute("key");
-            el.addEventListener("change", (ev) => {
-                options[key] = ev.target.value;
-            });
+            const handler = (ev) => (options[key] = el.value);
+            el.addEventListener(
+                "input",
+                el.hasAttribute("x-debounce") ? debounce(handler) : handler
+            );
         });
 
-        function updateSource() {
+        function updateMapTileSource() {
             if (typeof map.getSource("hotpot") !== "undefined") {
                 map.removeLayer("hotpot");
                 map.removeSource("hotpot");
@@ -411,20 +484,30 @@
                     type: "raster",
                     tiles: [options.$tileUrl],
                     tileSize: +options.size,
-                    minZoom: 0,
-                    maxZoom: 16,
+                    minzoom: 0,
+                    maxzoom: 16,
                 })
                 .addLayer({
                     id: "hotpot",
                     type: "raster",
                     source: "hotpot",
-                    minZoom: 0,
                 });
         }
 
-        map.on("load", () => updateSource());
+        map.on("load", () => updateMapTileSource());
         map.addControl(new maplibregl.NavigationControl());
+
+        // TODO: Should only add this when upload are enabled
         map.addControl(new UploadButton(), "top-right");
+
+        // TODO: pretty hacky...
+        fetch("/api/activity-properties")
+            .then((it) => it.json())
+            .then((config) => {
+                nodes.filter.addEventListener('click', () => {
+                    createPropertyModal(config.properties);
+                });
+            });
     </script>
 </body>
 
