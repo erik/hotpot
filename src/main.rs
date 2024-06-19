@@ -280,10 +280,11 @@ fn run() -> Result<()> {
 
             let config = web::Config {
                 cors,
+                routes,
                 upload_token: std::env::var("HOTPOT_UPLOAD_TOKEN").ok(),
             };
 
-            web::run_blocking(addr, db, config, routes)?;
+            web::run_blocking(addr, db, config)?;
         }
 
         Commands::StravaAuth { host, port } => {
@@ -297,6 +298,7 @@ fn run() -> Result<()> {
             };
 
             let config = web::Config {
+                routes,
                 cors: false,
                 upload_token: None,
             };
@@ -307,7 +309,7 @@ fn run() -> Result<()> {
                 \n==============================",
                 addr
             );
-            web::run_blocking(addr, db, config, routes)?;
+            web::run_blocking(addr, db, config)?;
         }
     };
 

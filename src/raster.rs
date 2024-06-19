@@ -154,8 +154,8 @@ impl LinearGradient {
 
         // Copy the last color to the end of the palette
         if let Some(&(last_idx, color)) = stops.last() {
-            for i in (last_idx as usize)..palette.len() {
-                palette[i] = color.into();
+            for p in palette.iter_mut().skip(last_idx as usize) {
+                *p = color.into();
             }
         }
 

@@ -16,7 +16,7 @@ use axum::{Router, Server, TypedHeader};
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use reqwest::header::CONTENT_TYPE;
 use rust_embed::Embed;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use time::Date;
 use tokio::runtime::Runtime;
 use tower_http::trace::{DefaultOnFailure, TraceLayer};
@@ -33,6 +33,15 @@ mod strava;
 pub struct Config {
     pub cors: bool,
     pub upload_token: Option<String>,
+    pub routes: RouteConfig,
+}
+
+#[derive(Clone)]
+pub struct RouteConfig {
+    pub tiles: bool,
+    pub strava_webhook: bool,
+    pub strava_auth: bool,
+    pub upload: bool,
 }
 
 #[derive(Embed)]
@@ -46,49 +55,42 @@ pub struct AppState {
     config: Config,
 }
 
-pub fn run_blocking(
-    addr: SocketAddr,
-    db: Database,
-    config: Config,
-    routes: RouteConfig,
-) -> Result<()> {
+pub fn run_blocking(addr: SocketAddr, db: Database, config: Config) -> Result<()> {
     let rt = Runtime::new()?;
-    let fut = run_async(addr, db, config, routes);
+    let fut = run_async(addr, db, config);
     rt.block_on(fut)?;
     Ok(())
 }
 
-pub struct RouteConfig {
-    pub tiles: bool,
-    pub strava_webhook: bool,
-    pub strava_auth: bool,
-    pub upload: bool,
-}
-
-impl RouteConfig {
-    fn build<S>(&self, db: Database, config: Config) -> Result<Router<S>> {
+impl Config {
+    fn build_router<S>(&self, db: Database) -> Result<Router<S>> {
         let trace = TraceLayer::new_for_http()
             .on_response(trace_request)
             .on_failure(DefaultOnFailure::new());
 
         let mut router = Router::new();
-        if self.tiles {
+        if self.routes.tiles {
             router = router
                 .route("/", get(index))
                 .route("/static/*path", get(static_file))
-                .route("/tile/:z/:x/:y", get(render_tile));
+                .route("/tile/:z/:x/:y", get(render_tile))
+                .route("/api/activity-properties", get(get_activity_properties))
+                .route("/api/activity-count", get(get_activity_count));
         }
 
-        if self.strava_webhook {
+        let mut use_strava_auth = false;
+        if self.routes.strava_webhook {
             router = router.nest("/strava", strava::webhook_routes());
+            use_strava_auth = true;
         }
 
-        if self.strava_auth {
+        if self.routes.strava_auth {
             router = router.nest("/strava", strava::auth_routes());
+            use_strava_auth = true;
         }
 
-        if self.upload {
-            if config.upload_token.is_none() {
+        if self.routes.upload {
+            if self.upload_token.is_none() {
                 tracing::warn!(
                     "HOTPOT_UPLOAD_TOKEN not set, unauthenticated uploads will be allowed"
                 );
@@ -99,10 +101,10 @@ impl RouteConfig {
                 .layer(DefaultBodyLimit::max(15 * 1024 * 1024));
         }
 
-        let strava = if self.strava_webhook || self.strava_auth {
+        // TODO: possibly better better as an Option
+        let strava = if use_strava_auth {
             StravaAuth::from_env()?
         } else {
-            // TODO: possibly better better as an Option
             StravaAuth::unset()
         };
 
@@ -110,7 +112,7 @@ impl RouteConfig {
             .layer(axum::middleware::from_fn(store_request_data))
             .layer(trace)
             .with_state(AppState {
-                config,
+                config: self.clone(),
                 strava,
                 db: Arc::new(db),
             });
@@ -119,14 +121,9 @@ impl RouteConfig {
     }
 }
 
-async fn run_async(
-    addr: SocketAddr,
-    db: Database,
-    config: Config,
-    routes: RouteConfig,
-) -> Result<()> {
+async fn run_async(addr: SocketAddr, db: Database, config: Config) -> Result<()> {
     tracing::info!("starting server on http://{}", addr);
-    let router = routes.build(db, config)?;
+    let router = config.build_router(db)?;
     Server::bind(&addr)
         .serve(router.into_make_service())
         .await?;
@@ -197,8 +194,81 @@ impl<'de> Deserialize<'de> for TileYParam {
             }
         };
 
-        return Ok(TileYParam { tile_size, y });
+        Ok(TileYParam { tile_size, y })
     }
+}
+
+#[derive(Debug, Serialize)]
+struct ActivityProperty {
+    key: String,
+    types: Vec<String>,
+    activity_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct PropertiesResponse {
+    properties: Vec<ActivityProperty>,
+}
+
+async fn get_activity_properties(State(AppState { db, .. }): State<AppState>) -> impl IntoResponse {
+    // TODO: clean up all the `unwrap` happening here.
+    let conn = db.connection().unwrap();
+    let mut stmt = conn
+        .prepare(
+            "\
+            SELECT
+                key,
+                group_concat(type) as types,
+                sum(count) as num_activities
+            FROM (
+                SELECT
+                    prop.key,
+                    (CASE
+                        WHEN json_valid(prop.value) THEN json_type(prop.value)
+                        ELSE 'string'
+                    END) as type,
+                    count(*) as count
+                FROM (
+                    SELECT props.*
+                    FROM activities, json_each(properties) props
+                ) prop
+                GROUP BY 1, 2
+            )
+            GROUP BY 1
+            ORDER BY 1;
+        ",
+        )
+        .unwrap();
+    let mut rows = stmt.query([]).unwrap();
+
+    let mut properties = vec![];
+    while let Some(row) = rows.next().unwrap() {
+        properties.push(ActivityProperty {
+            key: row.get_unwrap(0),
+            types: row
+                .get_unwrap::<_, String>(1)
+                .split(',')
+                .map(String::from)
+                .collect(),
+            activity_count: row.get_unwrap(2),
+        });
+    }
+
+    let res = PropertiesResponse { properties };
+
+    // TODO: don't reinvent the wheel here.
+    let as_str = serde_json::to_string_pretty(&res).unwrap();
+    (StatusCode::OK, as_str).into_response()
+}
+
+async fn get_activity_count(
+    State(AppState { db, .. }): State<AppState>,
+    Query(params): Query<RenderQueryParams>,
+) -> impl IntoResponse {
+    let filter = ActivityFilter::new(params.before, params.after, params.filter);
+    let num_activities = filter.count(&db).unwrap();
+
+    (StatusCode::OK, num_activities.to_string()).into_response()
 }
 
 async fn render_tile(

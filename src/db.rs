@@ -227,13 +227,13 @@ impl PropExpr {
         params: &mut Vec<&'a dyn ToSql>,
     ) {
         macro_rules! filter_list {
-            ($e:ident,$cmp:expr) => {
+            ($e:ident, $cmp:expr) => {
                 if let Some(ref values) = self.$e {
                     params.push(key);
                     params.extend(values.iter().map(|v| v as &dyn ToSql));
 
-                    let placeholders = values.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-                    clauses.push(["(", $cmp, "(", &placeholders, "))"].join(" ").into());
+                    let placeholders = vec!["?"; values.len()].join(",");
+                    clauses.push(format!("({} ({}))", $cmp, placeholders).into());
                 }
             };
         }
@@ -278,6 +278,7 @@ pub struct PropExpr {
     matches: Option<String>,
     exists: Option<bool>,
 
+    // TODO: support non-string type here as well
     #[serde(rename = "=")]
     eq: Option<String>,
 
@@ -352,5 +353,24 @@ impl ActivityFilter {
         }
 
         clauses.join(" AND ")
+    }
+
+    // TODO: wrong place for this function
+    pub fn count(&self, db: &Database) -> Result<usize, anyhow::Error> {
+        let mut params = vec![];
+        let filter = self.to_query(&mut params);
+
+        let conn = db.connection()?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT count(*) FROM activities WHERE {};",
+            filter
+        ))?;
+
+        let mut rows = stmt.query(&params[..])?;
+        let Some(count) = rows.next()? else {
+            return Err(anyhow!("bad query result"));
+        };
+
+        Ok(count.get_unwrap(0))
     }
 }
