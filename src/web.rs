@@ -209,7 +209,6 @@ impl<'de> Deserialize<'de> for TileYParam {
 #[derive(Debug, Serialize)]
 struct ActivityProperty {
     key: String,
-    types: Vec<String>,
     activity_count: usize,
 }
 
@@ -226,21 +225,16 @@ async fn get_activity_properties(State(AppState { db, .. }): State<AppState>) ->
             "\
             SELECT
                 key,
-                group_concat(type) as types,
                 sum(count) as num_activities
             FROM (
                 SELECT
                     prop.key,
-                    (CASE
-                        WHEN json_valid(prop.value) THEN json_type(prop.value)
-                        ELSE 'string'
-                    END) as type,
                     count(*) as count
                 FROM (
                     SELECT props.*
                     FROM activities, json_each(properties) props
                 ) prop
-                GROUP BY 1, 2
+                GROUP BY 1
             )
             GROUP BY 1
             ORDER BY 1;
@@ -253,20 +247,11 @@ async fn get_activity_properties(State(AppState { db, .. }): State<AppState>) ->
     while let Some(row) = rows.next().unwrap() {
         properties.push(ActivityProperty {
             key: row.get_unwrap(0),
-            types: row
-                .get_unwrap::<_, String>(1)
-                .split(',')
-                .map(String::from)
-                .collect(),
-            activity_count: row.get_unwrap(2),
+            activity_count: row.get_unwrap(1),
         });
     }
 
-    let res = PropertiesResponse { properties };
-
-    // TODO: don't reinvent the wheel here.
-    let as_str = serde_json::to_string_pretty(&res).unwrap();
-    (StatusCode::OK, as_str).into_response()
+    axum::response::Json(PropertiesResponse { properties })
 }
 
 async fn get_activity_count(
