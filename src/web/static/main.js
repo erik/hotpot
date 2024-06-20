@@ -331,21 +331,16 @@ class UploadButton {
 }
 
 function createPropertyModal(props) {
-  const {
-    "modal-dialog": modal,
-    div,
-    table,
-    tr,
-    th,
-    td,
-    thead,
-    tbody,
-    style,
-  } = createElement;
+  const { "modal-dialog": modal, div, style } = createElement;
+
+  const fmt = new Intl.NumberFormat();
 
   // TODO: maybe display property type
   const rows = props.map(({ key, activity_count }) => {
-    return tr({}, [td({}, key), td({}, activity_count)]);
+    return div({ class: "__row" }, [
+      div({ class: "__prop", title: key }, key),
+      div({ class: "__count" }, fmt.format(activity_count)),
+    ]);
   });
 
   const node = modal({}, [
@@ -355,34 +350,43 @@ function createPropertyModal(props) {
       .property-table {
         width: 100%;
         font-size: small;
-        text-align: left;
 
-        thead {
-          background-color: #777;
-          color: white;
-          th {
-            padding: 4px;
+        .__row {
+          display: grid;
+          justify-content: space-between;
+          grid-template-columns: 1fr 25%;
+
+          &:nth-child(even) {
+            background-color: #fafafa;
           }
-        }
 
-        tbody {
-          td:nth-child(1) {
+          .__prop {
             font-family: monospace;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            overflow: hidden;
+          }
+
+          .__count {
+            text-align: right;
           }
         }
 
-        tr:nth-child(even) {
-          background-color: #fafafa;
+        .__header {
+          font-weight: bold;
         }
       }
     `
     ),
-    div({ slot: "header" }, "Properties"),
+    div({ slot: "header" }, "Filterable Properties"),
     div({ slot: "body" }, [
-      // TODO: Add docs abotu how filters work etc.
-      table({ class: "property-table" }, [
-        thead({}, [th({}, "Property"), th({}, "Count")]),
-        tbody({}, rows),
+      // TODO: Add docs about how filters work etc.
+      div({ class: "property-table" }, [
+        div({ class: "__header __row" }, [
+          div({}, "Key"),
+          div({}, "Num Activities"),
+        ]),
+        div({ class: "__body" }, rows),
       ]),
     ]),
   ]);

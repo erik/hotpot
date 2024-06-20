@@ -9,11 +9,6 @@ More web endpoints
 Customization
   - Support AND/OR/NOT for property filters
   - Vary gradient stops based on zoom level / max number of points in tile
-  - Filter parser (instead of JSON-based AST)
-
-CLI
-  - `init` command (or similar) to create / configure empty DB
-    (maybe this is where we set zoom levels etc.)
 
 Misc
   - "privacy zones" rather than start/end trim distance
