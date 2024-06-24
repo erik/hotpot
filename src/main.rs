@@ -17,6 +17,7 @@ mod activity;
 mod date;
 mod db;
 mod raster;
+mod strava;
 mod tile;
 mod web;
 

@@ -23,11 +23,10 @@ use tower_http::trace::{DefaultOnFailure, TraceLayer};
 
 use crate::db::{ActivityFilter, Database, PropertyFilter};
 use crate::raster::LinearGradient;
+use crate::strava;
+use crate::strava::StravaAuth;
 use crate::tile::Tile;
-use crate::web::strava::StravaAuth;
 use crate::{activity, raster};
-
-mod strava;
 
 #[derive(Clone)]
 pub struct Config {
@@ -50,9 +49,9 @@ struct StaticAsset;
 
 #[derive(Clone)]
 pub struct AppState {
-    db: Arc<Database>,
-    strava: StravaAuth,
-    config: Config,
+    pub db: Arc<Database>,
+    pub strava: Option<StravaAuth>,
+    pub config: Config,
 }
 
 pub fn run_blocking(addr: SocketAddr, db: Database, config: Config) -> Result<()> {
@@ -102,9 +101,9 @@ impl Config {
 
         // TODO: possibly better better as an Option
         let strava = if use_strava_auth {
-            StravaAuth::from_env()?
+            Some(StravaAuth::from_env()?)
         } else {
-            StravaAuth::unset()
+            None
         };
 
         let router = router

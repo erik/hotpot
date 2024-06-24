@@ -133,7 +133,7 @@ pub struct StravaAuth {
 impl StravaAuth {
     pub fn from_env() -> Result<StravaAuth> {
         let get_env =
-            |k| std::env::var(k).map_err(|_| anyhow!("environment variable not set: {k}"));
+            |k| std::env::var(k).map_err(|_| anyhow!("environment variable not set: {}", k));
 
         let client_id = get_env("STRAVA_CLIENT_ID")?.parse()?;
         let client_secret = get_env("STRAVA_CLIENT_SECRET")?;
@@ -145,29 +145,11 @@ impl StravaAuth {
             webhook_secret,
         })
     }
-
-    pub fn unset() -> StravaAuth {
-        Self {
-            client_id: 0,
-            client_secret: String::from("UNSET"),
-            webhook_secret: String::from("UNSET"),
-        }
-    }
 }
 
 struct StravaClient<'a> {
     auth: &'a StravaAuth,
     db: &'a Database,
-}
-
-async fn unwrap_response<T: DeserializeOwned>(res: Response) -> Result<T> {
-    if !res.status().is_success() {
-        let status = res.status();
-        let body = res.text().await?;
-        return Err(anyhow!("HTTP request failed with status {status}: {body}"));
-    }
-
-    Ok(res.json().await?)
 }
 
 impl<'a> StravaClient<'a> {
@@ -276,6 +258,16 @@ impl<'a> StravaClient<'a> {
     }
 }
 
+async fn unwrap_response<T: DeserializeOwned>(res: Response) -> Result<T> {
+    if !res.status().is_success() {
+        let status = res.status();
+        let body = res.text().await?;
+        return Err(anyhow!("HTTP request failed with status {status}: {body}"));
+    }
+
+    Ok(res.json().await?)
+}
+
 pub fn webhook_routes() -> Router<AppState> {
     Router::new()
         .route("/webhook", get(confirm_webhook))
@@ -288,15 +280,11 @@ pub fn auth_routes() -> Router<AppState> {
         .route("/auth/exchange_token", get(exchange_token))
 }
 
-#[derive(Deserialize)]
-struct ExchangeTokenQuery {
-    code: String,
-}
-
 async fn auth_redirect(
     TypedHeader(host): TypedHeader<headers::Host>,
     State(AppState { strava, .. }): State<AppState>,
 ) -> impl IntoResponse {
+    let strava = strava.expect("strava auth creds missing");
     let url = format!(
         "https://www.strava.com/oauth/authorize\
 ?client_id={}\
@@ -310,10 +298,17 @@ async fn auth_redirect(
     Redirect::to(&url)
 }
 
+#[derive(Deserialize)]
+struct ExchangeTokenQuery {
+    code: String,
+}
+
 async fn exchange_token(
     State(AppState { db, strava, .. }): State<AppState>,
     Query(params): Query<ExchangeTokenQuery>,
 ) -> impl IntoResponse {
+    let strava = strava.expect("strava auth creds missing");
+
     let client = StravaClient {
         auth: &strava,
         db: &db,
@@ -371,6 +366,7 @@ async fn confirm_webhook(
     State(AppState { strava, .. }): State<AppState>,
     Query(params): Query<ConfirmWebhookQuery>,
 ) -> impl IntoResponse {
+    let strava = strava.expect("strava auth creds missing");
     if params.mode != "subscribe" {
         return (StatusCode::BAD_REQUEST, "invalid mode").into_response();
     }
@@ -403,6 +399,7 @@ async fn receive_webhook(
     State(AppState { db, strava, .. }): State<AppState>,
     Json(body): Json<WebhookBody>,
 ) -> impl IntoResponse {
+    let strava = strava.expect("strava auth creds missing");
     if body.object_type != "activity" {
         return (StatusCode::OK, "nothing to do");
     }
