@@ -119,7 +119,6 @@ impl ClippedTiles {
 
 #[derive(Clone)]
 pub struct RawActivity {
-    // TODO: should we treat this specially or just part of metadata?
     pub title: Option<String>,
 
     pub start_time: Option<OffsetDateTime>,
@@ -131,7 +130,6 @@ impl RawActivity {
     /// How far apart two points can be before we consider them to be
     /// a separate line segment.
     ///
-    /// TODO: move to db config?
     const MAX_POINT_DISTANCE: f64 = 5000.0;
 
     pub fn clip_to_tiles(
@@ -306,7 +304,6 @@ fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
         title: None,
         start_time: start_time.map(|ts| OffsetDateTime::from_unix_timestamp(ts).unwrap()),
         tracks: MultiLineString::from(line),
-        // TODO: populate metadata
         properties: HashMap::new(),
     }))
 }
@@ -325,7 +322,6 @@ fn parse_gpx<R: Read>(reader: &mut R) -> Result<Option<RawActivity>> {
         start_time,
         title: track.name.clone(),
         tracks: track.multilinestring(),
-        // TODO: metadata - already have a serde-friendly value in gpx.metadata
         properties: HashMap::new(),
     }))
 }
@@ -377,7 +373,6 @@ fn parse_tcx<R: Read>(reader: &mut BufReader<R>) -> Result<Option<RawActivity>> 
         start_time,
         tracks,
         title: None,
-        // TODO: populate metadata
         properties: HashMap::new(),
     }))
 }

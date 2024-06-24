@@ -422,7 +422,7 @@ async fn receive_webhook(
     let polyline = polyline::decode_polyline(&activity.map.polyline, 5).expect("valid polyline");
     let properties = activity.properties();
 
-    activity::upsert(
+    if let Err(e) = activity::upsert(
         &mut db.connection().unwrap(),
         &format!("strava:{}", activity.id),
         &RawActivity {
@@ -432,8 +432,10 @@ async fn receive_webhook(
             properties,
         },
         &db.config,
-    )
-    .unwrap();
+    ) {
+        tracing::error!("error writing activity: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, "error writing activity");
+    }
 
     (StatusCode::OK, "added!")
 }

@@ -58,8 +58,6 @@ impl TileBounds {
         let sw_px = viewport.sw.to_global_pixel(max_zoom as u8, tile_size);
         let ne_px = viewport.ne.to_global_pixel(max_zoom as u8, tile_size);
 
-        // TODO: min forces the dimensions to be accurate, max will
-        //   allow the image bounds to be respected - which is better?
         let scale = f64::max(
             (ne_px.x() - sw_px.x()) as f64 / (viewport_width as f64),
             (sw_px.y() - ne_px.y()) as f64 / (viewport_height as f64),

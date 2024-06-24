@@ -6,7 +6,9 @@ use std::str::FromStr;
 
 use anyhow::{anyhow, Result};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use geo::{CoordNum, LineString};
 use geo_types::Coord;
+use num_traits::AsPrimitive;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, ToSql};
 use serde::{Deserialize, Deserializer};
@@ -188,17 +190,20 @@ impl Default for Config {
     }
 }
 
-pub fn encode_line(data: &[Coord<u16>]) -> Result<Vec<u8>> {
-    let mut w = Vec::with_capacity(data.len() * 2);
-    for pt in data {
-        w.write_u16::<LittleEndian>(pt.x)?;
-        w.write_u16::<LittleEndian>(pt.y)?;
+pub fn encode_line<T>(line: &LineString<T>) -> Result<Vec<u8>>
+where
+    T: CoordNum + AsPrimitive<u16>,
+{
+    let mut w = Vec::with_capacity(line.0.len() * 2);
+    for pt in line.coords() {
+        w.write_u16::<LittleEndian>(pt.x.as_())?;
+        w.write_u16::<LittleEndian>(pt.y.as_())?;
     }
     Ok(w)
 }
 
 pub fn decode_line(bytes: &[u8]) -> Result<Vec<Coord<u32>>> {
-    let mut coords = Vec::with_capacity(bytes.len() / 4);
+    let mut coords = Vec::with_capacity(bytes.len() / (2 * 2));
     let mut reader = Cursor::new(bytes);
     while reader.position() < bytes.len() as u64 {
         let x = reader.read_u16::<LittleEndian>()? as u32;

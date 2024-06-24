@@ -30,7 +30,6 @@ const livewire = (props) => {
       Reflect.set(...arguments);
       derive();
 
-      // TODO: maybe debounce?
       deferOnce(this, () => watchers.forEach((fn) => fn(target)));
       return true;
     },
