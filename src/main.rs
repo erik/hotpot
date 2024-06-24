@@ -10,14 +10,13 @@ use time::Date;
 use activity::PropertySource;
 
 use crate::db::{ActivityFilter, Database, PropertyFilter};
-use crate::raster::PINKISH;
+use crate::raster::{LinearGradient, PINKISH};
 use crate::tile::Tile;
 
 mod activity;
 mod date;
 mod db;
 mod raster;
-mod simplify;
 mod tile;
 mod web;
 

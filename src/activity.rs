@@ -9,7 +9,7 @@ use fitparser::de::{from_reader_with_options, DecodeOption};
 use fitparser::profile::MesgNum;
 use fitparser::Value;
 use flate2::read::GzDecoder;
-use geo::EuclideanDistance;
+use geo::{EuclideanDistance, MapCoords, Simplify};
 use geo_types::{LineString, MultiLineString, Point};
 use rayon::iter::{ParallelBridge, ParallelIterator};
 use rusqlite::params;
@@ -20,10 +20,8 @@ use walkdir::WalkDir;
 
 use crate::db;
 use crate::db::{encode_line, Database};
-use crate::simplify::simplify_line;
 use crate::tile::{BBox, LngLat, Tile, WebMercator};
 
-// TODO: not happy with the ergonomics of this.
 struct TileClipper {
     zoom: u8,
     tile_extent: u16,
@@ -439,7 +437,12 @@ pub fn upsert(
 
     let tiles = activity.clip_to_tiles(config);
     for (tile, line) in tiles.iter() {
-        let coords = encode_line(&simplify_line(&line.0, 4.0))?;
+        // Have to type-dance a bit because geo::Simplify requires f64
+        let simplified_line = line
+            .map_coords(|c| (c.x as f64, c.y as f64).into())
+            .simplify(&4.0);
+
+        let coords = encode_line(&simplified_line)?;
         insert_tile.insert(params![activity_id, tile.z, tile.x, tile.y, coords])?;
     }
 

@@ -1,3 +1,5 @@
+use std::error::Error;
+use std::fmt::Display;
 use std::ops::RangeInclusive;
 use std::str::FromStr;
 
@@ -129,7 +131,7 @@ fn lerp(a: Rgba<u8>, b: Rgba<u8>, t: f32) -> Rgba<u8> {
     ])
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct LinearGradient([Rgba<u8>; 256]);
 
 impl LinearGradient {
