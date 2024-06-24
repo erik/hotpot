@@ -251,6 +251,9 @@ class FileUploader {
         },
       });
     } catch (err) {
+      // NOTE: Can be triggered by backend returning an error before consuming
+      // the entire request body (as in the case of invalid file type)
+      // https://github.com/hyperium/hyper/issues/2384
       console.error("Network error", err);
       return { success: false, message: err.toString() };
     }
