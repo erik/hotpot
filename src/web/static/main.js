@@ -123,6 +123,7 @@ function createUploadModal() {
   const uploader = new FileUploader({
     onProgress({ fileName, success, message, progress }) {
       resultContainer.style.display = "block";
+      progressBar.style.opacity = 1;
       progressBar.style.width = `${progress}%`;
       resultContainer.prepend(
         div({ class: `__row ${success ? "--success" : "--error"}` }, [
