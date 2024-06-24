@@ -13,7 +13,9 @@
     <script src="/static/main.js"></script>
 
     <script>
-        // $INJECT$
+      // globalThis.UPLOADS_ENABLED = {};
+      // globalThis.ACTIVITY_PROPERTIES = {};
+      // $INJECT$
     </script>
 </head>
 
@@ -106,7 +108,6 @@
                             text-decoration: underline;
                         }
                     }
-
                 }
             }
         }
@@ -185,7 +186,7 @@
             }
         }
 
-        #warning__container div {
+        #warnings div {
             padding: 0.5em;
             font-size: small;
             border: 1px solid red;
@@ -361,7 +362,7 @@
                 </fieldset>
             </form>
 
-            <div id="warning__container"></div>
+            <div id="warnings"></div>
         </details>
     </div>
 
@@ -401,7 +402,7 @@
         const nodes = {
             gradient: document.getElementById("settings__gradient"),
             filter: document.getElementById("settings__filter"),
-            warnings: document.getElementById("warning__container"),
+            warnings: document.getElementById("warnings"),
             activityCount: document.getElementById("activity_count"),
         };
 
@@ -420,9 +421,9 @@
 
             $styleUrl: ({ map }) => {
                 switch (map) {
-                    case 'none-black':
-                        return mapStyleBlack
-                    case 'none-white':
+                    case "none-black":
+                        return mapStyleBlack;
+                    case "none-white":
                         return mapStyleWhite;
                     default:
                         return `https://basemaps.cartocdn.com/gl/${map}-gl-style/style.json`;
@@ -436,7 +437,8 @@
                     gradient: $gradient,
                     color: $color,
                 }),
-            $tileUrl: ({ $queryString }) => "/tile/{z}/{x}/{y}{ratio}?" + $queryString,
+            $tileUrl: ({ $queryString }) =>
+                "/tile/{z}/{x}/{y}{ratio}?" + $queryString,
         })
             .watch(({ color }) => {
                 if (color === "custom") {
@@ -453,16 +455,20 @@
             })
             .watch(["$queryString"], async ({ $queryString }) => {
                 const { div } = createElement;
-                const { count, warnings } = await fetch("/api/activity-count?" + $queryString)
+                const { count, warnings } = await fetch(
+                    "/api/activity-count?" + $queryString
+                )
                     .then(async (res) => [res.status, await res.text()])
-                    .catch(err => [500, err.toString()])
-                    .then(([status, text]) => status === 200
-                        ? { count: text, warnings: null }
-                        : { count: null, warnings: text })
+                    .catch((err) => [500, err.toString()])
+                    .then(([status, text]) =>
+                        status === 200
+                            ? { count: text, warnings: null }
+                            : { count: null, warnings: text }
+                    );
 
                 if (count != null) nodes.activityCount.innerText = count;
 
-                (warnings != null)
+                warnings != null
                     ? nodes.warnings.replaceChildren(div({}, warnings))
                     : nodes.warnings.replaceChildren();
             });
@@ -501,16 +507,12 @@
         map.on("load", () => updateMapTileSource());
         map.addControl(new maplibregl.NavigationControl());
 
-        globalThis.UPLOADS_ENABLED && map.addControl(new UploadButton(), "top-right");
+        globalThis.UPLOADS_ENABLED &&
+            map.addControl(new UploadButton(), "top-right");
 
-        // TODO: pretty hacky...
-        fetch("/api/activity-properties")
-            .then((it) => it.json())
-            .then((config) => {
-                nodes.filter.addEventListener('click', () => {
-                    createPropertyModal(config.properties);
-                });
-            });
+        nodes.filter.addEventListener("click", () => {
+            createPropertyModal(globalThis.ACTIVITY_PROPERTIES);
+        });
     </script>
 </body>
 

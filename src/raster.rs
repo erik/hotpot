@@ -127,7 +127,7 @@ fn lerp(a: Rgba<u8>, b: Rgba<u8>, t: f32) -> Rgba<u8> {
         (a[0] as f32 * (1.0 - t) + b[0] as f32 * t) as u8,
         (a[1] as f32 * (1.0 - t) + b[1] as f32 * t) as u8,
         (a[2] as f32 * (1.0 - t) + b[2] as f32 * t) as u8,
-        0xff,
+        (a[3] as f32 * (1.0 - t) + b[3] as f32 * t) as u8,
     ])
 }
 

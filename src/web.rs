@@ -74,7 +74,6 @@ impl Config {
                 .route("/", get(index))
                 .route("/static/*path", get(static_file))
                 .route("/tile/:z/:x/:y", get(render_tile))
-                .route("/api/activity-properties", get(get_activity_properties))
                 .route("/api/activity-count", get(get_activity_count));
         }
 
@@ -131,14 +130,28 @@ async fn run_async(addr: SocketAddr, db: Database, config: Config) -> Result<()>
     Ok(())
 }
 
-async fn index(State(AppState { config, .. }): State<AppState>) -> impl IntoResponse {
+async fn index(State(AppState { config, db, .. }): State<AppState>) -> impl IntoResponse {
     let index_file = StaticAsset::get("index.html").expect("missing file");
     let html = std::str::from_utf8(&index_file.data).expect("valid utf8");
+    let properties = load_activity_properties(&db)
+        .await
+        .and_then(|props| Ok(serde_json::to_string(&props)?))
+        .unwrap_or_else(|err| {
+            tracing::error!("failed to generate activity properties: {:?}", err);
+            "{}".to_string()
+        });
 
     // Dynamically inject config
     let html = html.replace(
         "// $INJECT$",
-        format!("globalThis.UPLOADS_ENABLED = {};", config.routes.upload).as_str(),
+        format!(
+            "\
+            globalThis.UPLOADS_ENABLED = {};
+            globalThis.ACTIVITY_PROPERTIES = {};
+        ",
+            config.routes.upload, properties,
+        )
+        .as_str(),
     );
 
     axum::response::Html(html)
@@ -213,16 +226,13 @@ struct ActivityProperty {
 }
 
 #[derive(Debug, Serialize)]
-struct PropertiesResponse {
-    properties: Vec<ActivityProperty>,
-}
+struct ActivityProperties(Vec<ActivityProperty>);
 
-async fn get_activity_properties(State(AppState { db, .. }): State<AppState>) -> impl IntoResponse {
-    // TODO: clean up all the `unwrap` happening here.
-    let conn = db.connection().unwrap();
-    let mut stmt = conn
-        .prepare(
-            "\
+// TODO: shouldn't live here
+async fn load_activity_properties(db: &Database) -> Result<ActivityProperties> {
+    let conn = db.connection()?;
+    let mut stmt = conn.prepare(
+        "\
             SELECT
                 key,
                 sum(count) as num_activities
@@ -239,19 +249,18 @@ async fn get_activity_properties(State(AppState { db, .. }): State<AppState>) ->
             GROUP BY 1
             ORDER BY 1;
         ",
-        )
-        .unwrap();
-    let mut rows = stmt.query([]).unwrap();
+    )?;
+    let mut rows = stmt.query([])?;
 
     let mut properties = vec![];
-    while let Some(row) = rows.next().unwrap() {
+    while let Some(row) = rows.next()? {
         properties.push(ActivityProperty {
             key: row.get_unwrap(0),
             activity_count: row.get_unwrap(1),
         });
     }
 
-    axum::response::Json(PropertiesResponse { properties })
+    Ok(ActivityProperties(properties))
 }
 
 async fn get_activity_count(

@@ -45,7 +45,7 @@ const livewire = (props) => {
 
             fn = (obj) => {
               const cur = JSON.stringify(
-                Object.entries(obj).filter(([k, _]) => watchedKeys.includes(k))
+                Object.entries(obj).filter(([k, _]) => watchedKeys.includes(k)),
               );
 
               if (cur === wrappedFn.$$cache) return;
@@ -84,7 +84,7 @@ function _createElement(tag, attrs, children) {
     .flat(Infinity)
     .filter((it) => it != null)
     .map((it) =>
-      it instanceof Node ? it : document.createTextNode(it.toString())
+      it instanceof Node ? it : document.createTextNode(it.toString()),
     );
 
   el.append(...nodes);
@@ -128,7 +128,7 @@ function createUploadModal() {
         div({ class: `__row ${success ? "--success" : "--error"}` }, [
           div({ class: "__file", title: fileName }, fileName),
           message,
-        ])
+        ]),
       );
     },
 
@@ -176,7 +176,7 @@ function createUploadModal() {
 
   // lots of redundant event logic
   ["drop", "submit", "dragenter", "dragover", "dragleave"].forEach((type) =>
-    uploadForm.addEventListener(type, dragHandler)
+    uploadForm.addEventListener(type, dragHandler),
   );
 
   const node = modal({}, [
@@ -281,7 +281,7 @@ customElements.define(
       super()
         .attachShadow({ mode: "open" })
         .appendChild(
-          document.getElementById("template-modal").content.cloneNode(true)
+          document.getElementById("template-modal").content.cloneNode(true),
         );
     }
 
@@ -298,7 +298,7 @@ customElements.define(
 
       dialog.addEventListener("close", () => this.remove());
     }
-  }
+  },
 );
 
 class UploadButton {
@@ -324,7 +324,7 @@ class UploadButton {
         contextmenu: (ev) => ev.preventDefault(),
         click: () => createUploadModal(),
       },
-      btn
+      btn,
     );
   }
 }
@@ -375,7 +375,7 @@ function createPropertyModal(props) {
           font-weight: bold;
         }
       }
-    `
+    `,
     ),
     div({ slot: "header" }, "Filterable Properties"),
     div({ slot: "body" }, [
