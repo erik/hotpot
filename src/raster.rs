@@ -169,6 +169,12 @@ impl LinearGradient {
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct LinearGradientParseError;
+impl Display for LinearGradientParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("invalid linear gradient"))
+    }
+}
+impl Error for LinearGradientParseError {}
 
 /*
 TODO: support varying stops per-zoom level. Possible format:

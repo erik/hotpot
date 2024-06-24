@@ -55,7 +55,6 @@ enum Commands {
         join: Option<PathBuf>,
     },
 
-    // TODO: color/gradient
     /// Render a single XYZ tile as a PNG.
     Tile {
         /// Tile to render, in "z/x/y" format.
@@ -73,6 +72,15 @@ enum Commands {
         #[arg(short, long)]
         filter: Option<PropertyFilter>,
 
+        /// Custom color gradient to use for heatmap.
+        ///
+        /// Represented as a string of threshold values and colors, separated
+        /// by `;`. Colors may be written as `RGB`, `RRGGBB`, or `RRGGBBAA`
+        ///
+        /// For example: `0:001122;25:789;50:334455;75:ffffff33`
+        #[arg(short, long)]
+        gradient: Option<LinearGradient>,
+
         /// Width of output image in pixels.
         #[arg(short, long, default_value = "1024")]
         width: u32,
@@ -82,7 +90,6 @@ enum Commands {
         output: PathBuf,
     },
 
-    // TODO: color/gradient
     /// Render an arbitrary region, defined by a bounding box
     Render {
         /// Coordinates in order of "west,south,east,north"
@@ -111,7 +118,16 @@ enum Commands {
         ///
         /// {"key": "elev_gain", ">": 1000}
         #[arg(short = 'f', long = "filter")]
-        props: Option<PropertyFilter>,
+        filter: Option<PropertyFilter>,
+
+        /// Custom color gradient to use for heatmap.
+        ///
+        /// Represented as a string of threshold values and colors, separated
+        /// by `;`. Colors may be written as `RGB`, `RRGGBB`, or `RRGGBBAA`
+        ///
+        /// For example: `0:001122;25:789;50:334455;75:ffffff33`
+        #[arg(short, long)]
+        gradient: Option<LinearGradient>,
 
         /// Path to output image.
         #[arg(short, long, default_value = "tile.png")]
@@ -228,16 +244,18 @@ fn run() -> Result<()> {
             zxy,
             width,
             output,
-            filter: props,
+            filter,
             before,
             after,
+            gradient,
         } => {
             let db = Database::open(&opts.global.db_path)?;
             let mut file = File::create(output)?;
 
-            let filter = ActivityFilter::new(before, after, props);
+            let filter = ActivityFilter::new(before, after, filter);
+            let gradient = gradient.unwrap_or_else(|| PINKISH.clone());
             let image =
-                raster::render_tile(zxy, &PINKISH, width, &filter, &db)?.unwrap_or_else(|| {
+                raster::render_tile(zxy, &gradient, width, &filter, &db)?.unwrap_or_else(|| {
                     // note: could also just use RgbaImage::default() here if we don't care about size.
                     RgbaImage::new(width, width)
                 });
@@ -251,14 +269,16 @@ fn run() -> Result<()> {
             height,
             before,
             after,
-            props,
+            filter,
+            gradient,
             output,
         } => {
             let db = Database::open(&opts.global.db_path)?;
-            let filter = ActivityFilter::new(before, after, props);
+            let filter = ActivityFilter::new(before, after, filter);
+            let gradient = gradient.unwrap_or_else(|| PINKISH.clone());
             let mut file = File::create(output)?;
 
-            let image = raster::render_view(viewport, &PINKISH, width, height, &filter, &db)?;
+            let image = raster::render_view(viewport, &gradient, width, height, &filter, &db)?;
             image.write_to(&mut file, image::ImageOutputFormat::Png)?;
         }
 
