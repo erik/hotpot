@@ -25,7 +25,7 @@ use crate::db::{ActivityFilter, Database, PropertyFilter};
 use crate::raster::LinearGradient;
 use crate::strava;
 use crate::strava::StravaAuth;
-use crate::tile::Tile;
+use crate::tile::{Tile, WebMercatorViewport};
 use crate::{activity, raster};
 
 #[derive(Clone)]
@@ -41,6 +41,7 @@ pub struct RouteConfig {
     pub strava_webhook: bool,
     pub strava_auth: bool,
     pub upload: bool,
+    pub render: bool,
 }
 
 #[derive(Embed)]
@@ -99,6 +100,10 @@ impl Config {
                 .layer(DefaultBodyLimit::max(15 * 1024 * 1024));
         }
 
+        if self.routes.render {
+            router = router.route("/render", get(render_viewport));
+        }
+
         // TODO: possibly better better as an Option
         let strava = if use_strava_auth {
             Some(StravaAuth::from_env()?)
@@ -146,9 +151,10 @@ async fn index(State(AppState { config, db, .. }): State<AppState>) -> impl Into
         format!(
             "\
             globalThis.UPLOADS_ENABLED = {};
+            globalThis.RENDER_ENABLED = {};
             globalThis.ACTIVITY_PROPERTIES = {};
         ",
-            config.routes.upload, properties,
+            config.routes.upload, config.routes.render, properties,
         )
         .as_str(),
     );
@@ -175,6 +181,24 @@ async fn static_file(uri: Uri) -> impl IntoResponse {
 
 #[derive(Debug, Deserialize)]
 struct RenderQueryParams {
+    #[serde(default)]
+    color: Option<String>,
+    #[serde(default)]
+    gradient: Option<LinearGradient>,
+    #[serde(default, with = "crate::date::parse")]
+    before: Option<Date>,
+    #[serde(default, with = "crate::date::parse")]
+    after: Option<Date>,
+    #[serde(default)]
+    filter: Option<PropertyFilter>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RenderViewQueryParams {
+    bounds: String,
+    width: u32,
+    height: u32,
+
     #[serde(default)]
     color: Option<String>,
     #[serde(default)]
@@ -270,6 +294,80 @@ async fn get_activity_count(
     let num_activities = filter.count(&db).unwrap();
 
     (StatusCode::OK, num_activities.to_string()).into_response()
+}
+
+async fn render_viewport(
+    State(AppState { db, config, .. }): State<AppState>,
+    Query(params): Query<RenderViewQueryParams>,
+) -> impl IntoResponse {
+    let viewport = match WebMercatorViewport::from_str(&params.bounds) {
+        Ok(viewport) => viewport,
+        Err(err) => {
+            println!("bad: {:?}", err);
+            return (StatusCode::BAD_REQUEST, "invalid viewport given").into_response();
+        }
+    };
+
+    // TODO: real limit?
+    if params.height == 0 || params.height > 3000 || params.width == 0 || params.width > 3000 {
+        return (StatusCode::BAD_REQUEST, "invalid width/height given").into_response();
+    }
+
+    let filter = ActivityFilter::new(params.before, params.after, params.filter);
+    // TODO: Clean up this mess
+    let gradient: &LinearGradient = match (&params.gradient, params.color.as_deref()) {
+        (Some(gradient), None) => gradient,
+        (Some(_), Some(_)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "cannot specify both gradient and color",
+            )
+                .into_response()
+        }
+        (None, None) => &raster::ORANGE,
+        (None, Some("pinkish")) => &raster::PINKISH,
+        (None, Some("blue-red")) => &raster::BLUE_RED,
+        (None, Some("red")) => &raster::RED,
+        (None, Some("orange")) => &raster::ORANGE,
+        (None, Some(_)) => return (StatusCode::BAD_REQUEST, "invalid color").into_response(),
+    };
+
+    match raster::render_view(
+        viewport,
+        gradient,
+        params.width,
+        params.height,
+        &filter,
+        &db,
+    ) {
+        Ok(image) => {
+            // TODO extract this
+            let mut bytes = Vec::new();
+            let mut cursor = Cursor::new(&mut bytes);
+
+            image
+                .write_with_encoder(PngEncoder::new_with_quality(
+                    &mut cursor,
+                    CompressionType::Fast,
+                    FilterType::NoFilter,
+                ))
+                .unwrap();
+
+            let mut res = axum::response::Response::builder()
+                .header(header::CONTENT_TYPE, "image/png")
+                .header(header::CACHE_CONTROL, "max-age=86400");
+
+            if config.cors {
+                res = res.header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
+            }
+
+            res.body(bytes).unwrap().into_parts().into_response()
+        }
+        Err(e) => {
+            tracing::error!("error rendering tile: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 async fn render_tile(

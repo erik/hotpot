@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 
 <head>
@@ -14,6 +14,7 @@
 
     <script>
       // globalThis.UPLOADS_ENABLED = {};
+      // globalThis.RENDER_ENABLED = {};
       // globalThis.ACTIVITY_PROPERTIES = {};
       // $INJECT$
     </script>
@@ -99,7 +100,9 @@
                     grid-gap: 1em;
                     width: 100%;
                     margin: 1em 0;
-                    transition: visibility 300ms, opacity 300ms;
+                    transition:
+                        visibility 300ms,
+                        opacity 300ms;
 
                     .--clickable {
                         cursor: pointer;
@@ -344,7 +347,9 @@
                             <option value="dark-matter-nolabels" selected>
                                 Dark (no labels)
                             </option>
-                            <option value="positron-nolabels">Light (no labels)</option>
+                            <option value="positron-nolabels">
+                                Light (no labels)
+                            </option>
                             <option value="dark-matter">Dark</option>
                             <option value="positron">Light</option>
                             <option value="none-black">Solid Black</option>
@@ -393,8 +398,7 @@
 
         const map = new maplibregl.Map({
             container: "map",
-            style:
-                "https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json",
+            style: "https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json",
             center: [0, 0],
             hash: true,
         });
@@ -456,14 +460,14 @@
             .watch(["$queryString"], async ({ $queryString }) => {
                 const { div } = createElement;
                 const { count, warnings } = await fetch(
-                    "/api/activity-count?" + $queryString
+                  `/api/activity-count?${$queryString}`,
                 )
                     .then(async (res) => [res.status, await res.text()])
                     .catch((err) => [500, err.toString()])
                     .then(([status, text]) =>
                         status === 200
                             ? { count: text, warnings: null }
-                            : { count: null, warnings: text }
+                            : { count: null, warnings: text },
                     );
 
                 if (count != null) nodes.activityCount.innerText = count;
@@ -479,7 +483,7 @@
             const handler = (ev) => (options[key] = el.value);
             el.addEventListener(
                 "input",
-                el.hasAttribute("x-debounce") ? debounce(handler) : handler
+                el.hasAttribute("x-debounce") ? debounce(handler) : handler,
             );
         });
 
@@ -489,26 +493,27 @@
                 map.removeSource("hotpot");
             }
 
-            map
-                .addSource("hotpot", {
-                    type: "raster",
-                    tiles: [options.$tileUrl],
-                    tileSize: +options.size,
-                    minzoom: 0,
-                    maxzoom: 16,
-                })
-                .addLayer({
-                    id: "hotpot",
-                    type: "raster",
-                    source: "hotpot",
-                });
+            map.addSource("hotpot", {
+                type: "raster",
+                tiles: [options.$tileUrl],
+                tileSize: +options.size,
+                minzoom: 0,
+                maxzoom: 16,
+            }).addLayer({
+                id: "hotpot",
+                type: "raster",
+                source: "hotpot",
+            });
         }
 
-        map.on("load", () => updateMapTileSource());
+        map.on("load", () =>  updateMapTileSource());
         map.addControl(new maplibregl.NavigationControl());
 
         globalThis.UPLOADS_ENABLED &&
             map.addControl(new UploadButton(), "top-right");
+
+        globalThis.RENDER_ENABLED &&
+          map.addControl(new ExportButton(options), "top-right");
 
         nodes.filter.addEventListener("click", () => {
             createPropertyModal(globalThis.ACTIVITY_PROPERTIES);

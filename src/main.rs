@@ -150,6 +150,11 @@ enum Commands {
         #[arg(long, default_value = "false")]
         upload: bool,
 
+        /// Allow exporting arbitrary viewports as images via `/render`
+        /// endpoint.
+        #[arg(long, default_value = "false")]
+        render: bool,
+
         /// Enable Strava activity webhook
         ///
         /// Use `strava-auth` subcommand to grab OAuth tokens.
@@ -286,6 +291,7 @@ fn run() -> Result<()> {
             host,
             port,
             upload,
+            render,
             strava_webhook,
             cors,
         } => {
@@ -294,6 +300,7 @@ fn run() -> Result<()> {
             let routes = web::RouteConfig {
                 strava_webhook,
                 upload,
+                render,
                 tiles: true,
                 strava_auth: false,
             };
@@ -315,6 +322,7 @@ fn run() -> Result<()> {
                 tiles: false,
                 strava_webhook: false,
                 upload: false,
+                render: false,
             };
 
             let config = web::Config {

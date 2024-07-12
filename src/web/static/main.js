@@ -305,6 +305,119 @@ customElements.define(
   },
 );
 
+class ExportButton {
+  constructor(options) {
+    this.options = options;
+  }
+
+  onAdd(map) {
+    const { div, button } = createElement;
+
+    // Too lazy to make a createElementNS implementation
+    const btn = button({
+      title: "Export image",
+    });
+    btn.innerHTML = `
+        <svg viewBox="0 0 512 512" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" fill="#000000">
+          <g stroke-linecap="round" stroke-linejoin="round" stroke="#CCCCCC" stroke-width="5"></g>
+          <g stroke-width="0.00512" fill="none" fill-rule="evenodd">
+            <g fill="#000000" transform="translate(42.666667, 42.666667)">
+              <path d="M106.666667,7.10542736e-15 L106.666667,64 L362.666667,64 L362.666667,320 L426.666667,320 L426.666667,362.666667 L362.666667,362.666667 L362.666667,426.666667 L320,426.666667 L320,362.666667 L64,362.666667 L64,7.10542736e-15 L106.666667,7.10542736e-15 Z M166.336,232.64 L106.666,296.422 L106.666667,320 L320,320 L320,308.725 L274.432,263.168 L235.659405,301.959634 L166.336,232.64 Z M320,106.666667 L106.666667,106.666667 L106.666,233.982 L165.332883,171.293333 L235.648,241.621333 L274.447284,202.831976 L320,248.385 L320,106.666667 Z M245.333333,128 C263.006445,128 277.333333,142.326888 277.333333,160 C277.333333,177.673112 263.006445,192 245.333333,192 C227.660221,192 213.333333,177.673112 213.333333,160 C213.333333,142.326888 227.660221,128 245.333333,128 Z M64,64 L64,106.666667 L7.10542736e-15,106.666667 L7.10542736e-15,64 L64,64 Z"></path>
+            </g>
+          </g>
+        </svg>
+    `;
+
+    return div(
+      {
+        class: "maplibregl-ctrl maplibregl-ctrl-group",
+        contextmenu: (ev) => ev.preventDefault(),
+        click: () => this.onClick(map),
+      },
+      btn,
+    );
+  }
+
+  onClick(map) {
+    const canvasStyle = map.getCanvas().style;
+    const originalCursor = canvasStyle.cursor;
+
+    map.dragPan.disable();
+    canvasStyle.cursor = "crosshair";
+
+    map.once("mousedown", (e) => {
+      const start = e;
+      const geojson = {
+        type: "FeatureCollection",
+        features: [
+          {
+            type: "Feature",
+            geometry: { type: "Polygon", coordinates: [] },
+          },
+        ],
+      };
+
+      map.addSource("bbox", { type: "geojson", data: geojson }).addLayer({
+        id: "bbox",
+        source: "bbox",
+        type: "fill",
+        paint: {
+          "fill-outline-color": "white",
+          "fill-color": "#00000099",
+        },
+      });
+
+      const move = (e) => {
+        const bounds = new maplibregl.LngLatBounds(start.lngLat, e.lngLat);
+
+        geojson.features[0].geometry.coordinates = [
+          [
+            bounds.getNorthEast().toArray(),
+            bounds.getNorthWest().toArray(),
+            bounds.getSouthWest().toArray(),
+            bounds.getSouthEast().toArray(),
+            bounds.getNorthEast().toArray(),
+          ],
+        ];
+        map.getSource("bbox").setData(geojson);
+      };
+
+      map.on("mousemove", move).once("mouseup", (e) => {
+        const aspectRatio = Math.abs(
+          (start.point.y - e.point.y) / (e.point.x - start.point.x),
+        );
+
+        // west, south, east, north
+        const bbox = [
+          Math.min(start.lngLat.lng, e.lngLat.lng),
+          Math.min(start.lngLat.lat, e.lngLat.lat),
+          Math.max(start.lngLat.lng, e.lngLat.lng),
+          Math.max(start.lngLat.lat, e.lngLat.lat),
+        ].join(",");
+
+        // Ensure the largest side doesn't exceed limits
+        const [width, height] =
+          aspectRatio <= 1
+            ? [2000, Math.round(aspectRatio * 2000)]
+            : [Math.round(2000 / aspectRatio), 2000];
+
+        const qs = encodeQueryString({ bounds: bbox, width, height });
+        const renderUrl = `/render?${qs}&${this.options.$queryString}`;
+        window.open(renderUrl, "_blank");
+
+        // Reset map state
+        map
+          .removeLayer("bbox")
+          .removeSource("bbox")
+          .off("mousemove", move)
+          .dragPan.enable();
+
+        canvasStyle.cursor = originalCursor;
+      });
+    });
+  }
+}
+
 class UploadButton {
   onAdd(_map) {
     const { div, button } = createElement;
