@@ -14,11 +14,11 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Router, Server, TypedHeader};
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-use reqwest::header::CONTENT_TYPE;
 use rust_embed::Embed;
 use serde::{Deserialize, Deserializer, Serialize};
 use time::Date;
 use tokio::runtime::Runtime;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::{DefaultOnFailure, TraceLayer};
 
 use crate::db::{ActivityFilter, Database, PropertyFilter};
@@ -104,6 +104,14 @@ impl Config {
             router = router.route("/render", get(render_viewport));
         }
 
+        if self.cors {
+            let cors = CorsLayer::new()
+                .allow_methods([Method::GET])
+                .allow_origin(Any);
+
+            router = router.layer(cors);
+        }
+
         // TODO: possibly better better as an Option
         let strava = if use_strava_auth {
             Some(StravaAuth::from_env()?)
@@ -172,7 +180,7 @@ async fn static_file(uri: Uri) -> impl IntoResponse {
                 Some((_, "css")) => "text/plain",
                 _ => "application/octet-stream",
             };
-            ([(CONTENT_TYPE, mime)], content.data).into_response()
+            ([(header::CONTENT_TYPE, mime)], content.data).into_response()
         }
 
         None => (StatusCode::NOT_FOUND, "404 Not Found").into_response(),
@@ -297,20 +305,26 @@ async fn get_activity_count(
 }
 
 async fn render_viewport(
-    State(AppState { db, config, .. }): State<AppState>,
+    State(AppState { db, .. }): State<AppState>,
     Query(params): Query<RenderViewQueryParams>,
 ) -> impl IntoResponse {
     let viewport = match WebMercatorViewport::from_str(&params.bounds) {
         Ok(viewport) => viewport,
         Err(err) => {
-            println!("bad: {:?}", err);
-            return (StatusCode::BAD_REQUEST, "invalid viewport given").into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("invalid viewport given: {:?}", err),
+            )
+                .into_response();
         }
     };
 
-    // TODO: real limit?
     if params.height == 0 || params.height > 3000 || params.width == 0 || params.width > 3000 {
-        return (StatusCode::BAD_REQUEST, "invalid width/height given").into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            "width/height must be in bounds [1, 3000]",
+        )
+            .into_response();
     }
 
     let filter = ActivityFilter::new(params.before, params.after, params.filter);
@@ -353,15 +367,13 @@ async fn render_viewport(
                 ))
                 .unwrap();
 
-            let mut res = axum::response::Response::builder()
+            axum::response::Response::builder()
                 .header(header::CONTENT_TYPE, "image/png")
-                .header(header::CACHE_CONTROL, "max-age=86400");
-
-            if config.cors {
-                res = res.header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
-            }
-
-            res.body(bytes).unwrap().into_parts().into_response()
+                .header(header::CACHE_CONTROL, "max-age=86400")
+                .body(bytes)
+                .expect("create response object")
+                .into_parts()
+                .into_response()
         }
         Err(e) => {
             tracing::error!("error rendering tile: {:?}", e);
@@ -371,7 +383,7 @@ async fn render_viewport(
 }
 
 async fn render_tile(
-    State(AppState { db, config, .. }): State<AppState>,
+    State(AppState { db, .. }): State<AppState>,
     Path((z, x, y_param)): Path<(u8, u32, TileYParam)>,
     Query(params): Query<RenderQueryParams>,
 ) -> impl IntoResponse {
@@ -414,15 +426,13 @@ async fn render_tile(
                 ))
                 .unwrap();
 
-            let mut res = axum::response::Response::builder()
+            axum::response::Response::builder()
                 .header(header::CONTENT_TYPE, "image/png")
-                .header(header::CACHE_CONTROL, "max-age=86400");
-
-            if config.cors {
-                res = res.header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
-            }
-
-            res.body(bytes).unwrap().into_parts().into_response()
+                .header(header::CACHE_CONTROL, "max-age=86400")
+                .body(bytes)
+                .expect("create response")
+                .into_parts()
+                .into_response()
         }
         Ok(None) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => {
