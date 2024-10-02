@@ -55,13 +55,6 @@ pub struct AppState {
     pub config: Config,
 }
 
-pub fn run_blocking(addr: SocketAddr, db: Database, config: Config) -> Result<()> {
-    let rt = Runtime::new()?;
-    let fut = run_async(addr, db, config);
-    rt.block_on(fut)?;
-    Ok(())
-}
-
 impl Config {
     fn build_router<S>(&self, db: Database) -> Result<Router<S>> {
         let trace = TraceLayer::new_for_http()
@@ -139,6 +132,13 @@ async fn run_async(addr: SocketAddr, db: Database, config: Config) -> Result<()>
         .serve(router.into_make_service())
         .await?;
 
+    Ok(())
+}
+
+pub fn run_blocking(addr: SocketAddr, db: Database, config: Config) -> Result<()> {
+    let rt = Runtime::new()?;
+    let fut = run_async(addr, db, config);
+    rt.block_on(fut)?;
     Ok(())
 }
 
@@ -328,58 +328,24 @@ async fn render_viewport(
     }
 
     let filter = ActivityFilter::new(params.before, params.after, params.filter);
-    // TODO: Clean up this mess
-    let gradient: &LinearGradient = match (&params.gradient, params.color.as_deref()) {
-        (Some(gradient), None) => gradient,
-        (Some(_), Some(_)) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                "cannot specify both gradient and color",
-            )
-                .into_response()
-        }
-        (None, None) => &raster::ORANGE,
-        (None, Some("pinkish")) => &raster::PINKISH,
-        (None, Some("blue-red")) => &raster::BLUE_RED,
-        (None, Some("red")) => &raster::RED,
-        (None, Some("orange")) => &raster::ORANGE,
-        (None, Some(_)) => return (StatusCode::BAD_REQUEST, "invalid color").into_response(),
+    let gradient = match choose_gradient(&params.gradient, params.color) {
+        Ok(value) => value,
+        Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
     };
 
-    match raster::render_view(
+    raster::render_view(
         viewport,
         gradient,
         params.width,
         params.height,
         &filter,
         &db,
-    ) {
-        Ok(image) => {
-            // TODO extract this
-            let mut bytes = Vec::new();
-            let mut cursor = Cursor::new(&mut bytes);
-
-            image
-                .write_with_encoder(PngEncoder::new_with_quality(
-                    &mut cursor,
-                    CompressionType::Fast,
-                    FilterType::NoFilter,
-                ))
-                .unwrap();
-
-            axum::response::Response::builder()
-                .header(header::CONTENT_TYPE, "image/png")
-                .header(header::CACHE_CONTROL, "max-age=86400")
-                .body(bytes)
-                .expect("create response object")
-                .into_parts()
-                .into_response()
-        }
-        Err(e) => {
-            tracing::error!("error rendering tile: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+    )
+    .and_then(render_image_response)
+    .unwrap_or_else(|err| {
+        tracing::error!("error rendering tile: {:?}", err);
+        StatusCode::INTERNAL_SERVER_ERROR.into_response()
+    })
 }
 
 async fn render_tile(
@@ -392,53 +358,56 @@ async fn render_tile(
         return StatusCode::NOT_FOUND.into_response();
     }
 
-    // TODO: Clean up this mess
-    let gradient: &LinearGradient = match (&params.gradient, params.color.as_deref()) {
-        (Some(gradient), None) => gradient,
-        (Some(_), Some(_)) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                "cannot specify both gradient and color",
-            )
-                .into_response()
-        }
-        (None, None) => &raster::ORANGE,
-        (None, Some("pinkish")) => &raster::PINKISH,
-        (None, Some("blue-red")) => &raster::BLUE_RED,
-        (None, Some("red")) => &raster::RED,
-        (None, Some("orange")) => &raster::ORANGE,
-        (None, Some(_)) => return (StatusCode::BAD_REQUEST, "invalid color").into_response(),
-    };
-
     let filter = ActivityFilter::new(params.before, params.after, params.filter);
     let tile = Tile::new(x, y_param.y, z);
+    let gradient = match choose_gradient(&params.gradient, params.color) {
+        Ok(value) => value,
+        Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
+    };
 
-    match raster::render_tile(tile, gradient, y_param.tile_size, &filter, &db) {
-        Ok(Some(image)) => {
-            let mut bytes = Vec::new();
-            let mut cursor = Cursor::new(&mut bytes);
-
+    raster::render_tile(tile, gradient, y_param.tile_size, &filter, &db)
+        .and_then(|image| {
             image
-                .write_with_encoder(PngEncoder::new_with_quality(
-                    &mut cursor,
-                    CompressionType::Fast,
-                    FilterType::NoFilter,
-                ))
-                .unwrap();
-
-            axum::response::Response::builder()
-                .header(header::CONTENT_TYPE, "image/png")
-                .header(header::CACHE_CONTROL, "max-age=86400")
-                .body(bytes)
-                .expect("create response")
-                .into_parts()
-                .into_response()
-        }
-        Ok(None) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => {
-            tracing::error!("error rendering tile: {:?}", e);
+                .map(render_image_response)
+                .unwrap_or_else(|| Ok(StatusCode::NO_CONTENT.into_response()))
+        })
+        .unwrap_or_else(|err| {
+            tracing::error!("error rendering tile: {:?}", err);
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        })
+}
+
+fn render_image_response(image: image::ImageBuffer<image::Rgba<u8>, Vec<u8>>) -> Result<Response> {
+    let mut bytes = Vec::new();
+    let mut cursor = Cursor::new(&mut bytes);
+
+    image.write_with_encoder(PngEncoder::new_with_quality(
+        &mut cursor,
+        CompressionType::Fast,
+        FilterType::NoFilter,
+    ))?;
+
+    Ok(axum::response::Response::builder()
+        .header(header::CONTENT_TYPE, "image/png")
+        .header(header::CACHE_CONTROL, "max-age=86400")
+        .body(bytes)?
+        .into_parts()
+        .into_response())
+}
+
+fn choose_gradient<'a>(
+    gradient: &'a Option<LinearGradient>,
+    color: Option<String>,
+) -> Result<&'a LinearGradient, &'static str> {
+    match (gradient, color.as_deref()) {
+        (Some(gradient), None) => Ok(gradient),
+        (Some(_), Some(_)) => Err("cannot specify both gradient and color"),
+        (None, None) => Ok(&raster::ORANGE),
+        (None, Some("pinkish")) => Ok(&raster::PINKISH),
+        (None, Some("blue-red")) => Ok(&raster::BLUE_RED),
+        (None, Some("red")) => Ok(&raster::RED),
+        (None, Some("orange")) => Ok(&raster::ORANGE),
+        (None, Some(_)) => Err("invalid color name"),
     }
 }
 
