@@ -395,10 +395,10 @@ fn render_image_response(image: image::ImageBuffer<image::Rgba<u8>, Vec<u8>>) ->
         .into_response())
 }
 
-fn choose_gradient<'a>(
-    gradient: &'a Option<LinearGradient>,
+fn choose_gradient(
+    gradient: &Option<LinearGradient>,
     color: Option<String>,
-) -> Result<&'a LinearGradient, &'static str> {
+) -> Result<&LinearGradient, &'static str> {
     match (gradient, color.as_deref()) {
         (Some(gradient), None) => Ok(gradient),
         (Some(_), Some(_)) => Err("cannot specify both gradient and color"),

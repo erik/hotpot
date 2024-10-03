@@ -46,7 +46,7 @@ impl TileClipper {
     }
 
     fn last_line(&mut self, tile: &Tile) -> &mut LineString<u16> {
-        let lines = self.tiles.entry(*tile).or_insert_with(Vec::new);
+        let lines = self.tiles.entry(*tile).or_default();
 
         if lines.is_empty() {
             lines.push(LineString::new(vec![]));

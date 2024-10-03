@@ -177,7 +177,7 @@ impl<'a> StravaClient<'a> {
         let client = reqwest::Client::new();
 
         let res = client
-            .get(&format!(
+            .get(format!(
                 "https://www.strava.com/api/v3/activities/{}",
                 activity_id
             ))
