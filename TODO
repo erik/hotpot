@@ -13,3 +13,4 @@ Misc
   - "privacy zones" rather than start/end trim distance
   - Strip noisy points from tracks (e.g. inside buildings, etc.)
   - Remap column names from Strava API to match `activities.csv` (or vice versa?)
+  - Export rendered tiles as PMTiles / MBTiles
