@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::{Args, Parser, Subcommand};
 use image::RgbaImage;
 use tile::WebMercatorViewport;
@@ -181,8 +181,18 @@ enum Commands {
 #[derive(Args)]
 struct GlobalOpts {
     /// Path to database
-    #[arg(short = 'D', long = "db", default_value = "./hotpot.sqlite3")]
+    #[arg(
+        short = 'D',
+        long = "db",
+        default_value = "./hotpot.sqlite3",
+        conflicts_with = "in_memory"
+    )]
     db_path: PathBuf,
+
+    /// Create an in-memory database (data won't be persisted)
+    #[arg(action, long, conflicts_with = "db_path")]
+    in_memory: bool,
+
     /// Enable verbose logging
     #[arg(short, long)]
     verbose: bool,
@@ -197,6 +207,27 @@ struct Opts {
     /// Subcommand
     #[command(subcommand)]
     cmd: Commands,
+}
+
+impl GlobalOpts {
+    fn database_ro(&self) -> anyhow::Result<Database> {
+        if self.in_memory {
+            Err(anyhow!(
+                "in-memory database is not supported for read-only operations"
+            ))
+        } else {
+            Database::new(&self.db_path)
+        }
+    }
+
+    fn database(&self) -> anyhow::Result<Database> {
+        if self.in_memory {
+            tracing::warn!("using empty in-memory DB, data will not be persisted");
+            Database::memory()
+        } else {
+            Database::open(&self.db_path)
+        }
+    }
 }
 
 fn main() {
@@ -226,7 +257,7 @@ fn run() -> Result<()> {
             join,
             trim,
         } => {
-            let mut db = Database::new(&opts.global.db_path)?;
+            let mut db = opts.global.database()?;
 
             // TODO: should be persisted to DB
             if let Some(trim) = trim {
@@ -254,7 +285,7 @@ fn run() -> Result<()> {
             after,
             gradient,
         } => {
-            let db = Database::open(&opts.global.db_path)?;
+            let db = opts.global.database_ro()?;
             let mut file = File::create(output)?;
 
             let filter = ActivityFilter::new(before, after, filter);
@@ -278,7 +309,7 @@ fn run() -> Result<()> {
             gradient,
             output,
         } => {
-            let db = Database::open(&opts.global.db_path)?;
+            let db = opts.global.database_ro()?;
             let filter = ActivityFilter::new(before, after, filter);
             let gradient = gradient.unwrap_or_else(|| PINKISH.clone());
             let mut file = File::create(output)?;
@@ -295,7 +326,8 @@ fn run() -> Result<()> {
             strava_webhook,
             cors,
         } => {
-            let db = Database::new(&opts.global.db_path)?;
+            let db = opts.global.database()?;
+
             let addr = format!("{}:{}", host, port).parse()?;
             let routes = web::RouteConfig {
                 strava_webhook,
@@ -315,7 +347,7 @@ fn run() -> Result<()> {
         }
 
         Commands::StravaAuth { host, port } => {
-            let db = Database::new(&opts.global.db_path)?;
+            let db = opts.global.database()?;
             let addr = format!("{}:{}", host, port).parse()?;
             let routes = web::RouteConfig {
                 strava_auth: true,
