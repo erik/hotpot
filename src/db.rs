@@ -57,16 +57,25 @@ pub struct Database {
 
 impl Database {
     pub fn new(path: &Path) -> Result<Self> {
-        // Check for version which introduced `->>` syntax (released 2022)
-        if rusqlite::version_number() < 30_380_00 {
-            tracing::warn!("sqlite3 version < 3.38.0, property filtering will not be available");
-        }
-
         let manager = SqliteConnectionManager::file(path).with_init(|conn| {
             conn.pragma_update(None, "journal_mode", "WAL")?;
             conn.pragma_update(None, "synchronous", "OFF")?;
             Ok(())
         });
+
+        Self::from_connection(manager)
+    }
+
+    pub fn memory() -> Result<Self> {
+        let manager = SqliteConnectionManager::memory();
+        Self::from_connection(manager)
+    }
+
+    fn from_connection(manager: SqliteConnectionManager) -> Result<Self> {
+        // Check for version which introduced `->>` syntax (released 2022)
+        if rusqlite::version_number() < 3038000 {
+            tracing::warn!("sqlite3 version < 3.38.0, property filtering will not be available");
+        }
 
         let pool = r2d2::Pool::new(manager)?;
         let mut conn = pool.get()?;
