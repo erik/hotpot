@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use axum::body::HttpBody;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::headers::authorization::Bearer;
@@ -20,6 +20,7 @@ use time::Date;
 use tokio::runtime::Runtime;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::{DefaultOnFailure, TraceLayer};
+use tracing::Level;
 
 use crate::db::{ActivityFilter, Database, PropertyFilter};
 use crate::raster::LinearGradient;
@@ -57,12 +58,18 @@ pub struct AppState {
 
 impl Config {
     fn build_router<S>(&self, db: Database) -> Result<Router<S>> {
+        let span = tracing::span!(Level::INFO, "build_router");
+        let _guard = span.enter();
+
         let trace = TraceLayer::new_for_http()
             .on_response(trace_request)
             .on_failure(DefaultOnFailure::new());
 
         let mut router = Router::new();
         if self.routes.tiles {
+            tracing::info!("/ (web ui)");
+            tracing::info!("/tile/:z/:x/:y (tile rendering)");
+
             router = router
                 .route("/", get(index))
                 .route("/static/*path", get(static_file))
@@ -72,16 +79,22 @@ impl Config {
 
         let mut use_strava_auth = false;
         if self.routes.strava_webhook {
+            tracing::info!("/strava/webhook (strava activity upload webhook)");
+
             router = router.nest("/strava", strava::webhook_routes());
             use_strava_auth = true;
         }
 
         if self.routes.strava_auth {
+            tracing::info!("/strava/auth (strava api oauth)");
+
             router = router.nest("/strava", strava::auth_routes());
             use_strava_auth = true;
         }
 
         if self.routes.upload {
+            tracing::info!("/upload (http activity upload)");
+
             if self.upload_token.is_none() {
                 tracing::warn!(
                     "HOTPOT_UPLOAD_TOKEN not set, unauthenticated uploads will be allowed"
@@ -94,6 +107,8 @@ impl Config {
         }
 
         if self.routes.render {
+            tracing::info!("/render (image export)");
+
             router = router.route("/render", get(render_viewport));
         }
 
@@ -107,7 +122,14 @@ impl Config {
 
         // TODO: possibly better better as an Option
         let strava = if use_strava_auth {
-            Some(StravaAuth::from_env()?)
+            let auth = StravaAuth::from_env().map_err(|err| {
+                anyhow!(
+                    "Failed to load Strava credentials from environment: {}",
+                    err
+                )
+            })?;
+
+            Some(auth)
         } else {
             None
         };

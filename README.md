@@ -205,6 +205,11 @@ success page to complete setup.
 To simplify things, a basic `Dockerfile` is included. Mount a volume at
 `/data/` to persist the sqlite database between runs.
 
+```console
+docker build -t hotpot .
+docker run -p 8080:8080 -v ./data:/data hotpot
+```
+
 Since we're using sqlite as our data store, it's easy to first run the bulk
 import locally, then copy the database over to a remote host.
 

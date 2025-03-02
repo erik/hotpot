@@ -132,12 +132,20 @@ pub struct StravaAuth {
 
 impl StravaAuth {
     pub fn from_env() -> Result<StravaAuth> {
-        let get_env =
-            |k| std::env::var(k).map_err(|_| anyhow!("environment variable not set: {}", k));
+        let get_env = |k| {
+            std::env::var(k).map_err(|_| anyhow!("required environment variable not set: {}", k))
+        };
 
-        let client_id = get_env("STRAVA_CLIENT_ID")?.parse()?;
+        let client_id = get_env("STRAVA_CLIENT_ID")?;
         let client_secret = get_env("STRAVA_CLIENT_SECRET")?;
         let webhook_secret = get_env("STRAVA_WEBHOOK_SECRET")?;
+
+        let client_id = client_id.parse().map_err(|_| {
+            anyhow!(
+                "expected valid integer for STRAVA_CLIENT_ID, got: {}",
+                client_id
+            )
+        })?;
 
         Ok(Self {
             client_id,

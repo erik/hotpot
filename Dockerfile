@@ -32,8 +32,10 @@ CMD ["--db", "/data/hotpot.sqlite3", "serve", "--host", "0.0.0.0", "--strava-web
 
 EXPOSE 8080
 
-ENV STRAVA_CLIENT_ID=unset
-ENV STRAVA_CLIENT_SECRET=unset
-ENV STRAVA_WEBHOOK_SECRET=unset
-
-# ENV HOTPOT_UPLOAD_TOKEN=unset
+# REQUIRED (--strava-webhook)
+#  - ENV STRAVA_CLIENT_ID      1234567890
+#  - ENV STRAVA_CLIENT_SECRET  abc123
+#  - ENV STRAVA_WEBHOOK_SECRET xyz123
+#
+# OPTIONAL (--upload)
+#  - ENV HOTPOT_UPLOAD_TOKEN   unset
