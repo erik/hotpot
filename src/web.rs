@@ -4,11 +4,11 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use axum::body::HttpBody;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::headers::authorization::Bearer;
-use axum::http::{header, Method, Request, StatusCode, Uri};
+use axum::http::{Method, Request, StatusCode, Uri, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -264,7 +264,7 @@ impl<'de> Deserialize<'de> for TileYParam {
                 return Err(serde::de::Error::custom(format!(
                     "invalid tile size: {}",
                     size
-                )))
+                )));
             }
         };
 

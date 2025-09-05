@@ -1,8 +1,8 @@
 use std::fmt::Formatter;
 use std::marker::PhantomData;
 
-use serde::de::Error;
 use serde::Deserializer;
+use serde::de::Error;
 use time::Date;
 
 struct Visitor<T>(PhantomData<T>);

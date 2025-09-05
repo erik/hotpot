@@ -4,13 +4,13 @@ use std::io::Cursor;
 use std::path::Path;
 use std::str::FromStr;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use geo::{CoordNum, LineString};
 use geo_types::Coord;
 use num_traits::AsPrimitive;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{params, ToSql};
+use rusqlite::{ToSql, params};
 use serde::{Deserialize, Deserializer};
 use time::{Date, OffsetDateTime};
 

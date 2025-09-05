@@ -2,7 +2,7 @@ use std::ops::Range;
 use std::str::FromStr;
 use std::{f64::consts::PI, ops::RangeInclusive};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use derive_more::{From, Into};
 use geo_types::{Coord, Point};
 

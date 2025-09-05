@@ -3,16 +3,16 @@ use std::fmt::Display;
 use std::ops::RangeInclusive;
 use std::str::FromStr;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use geo_types::Coord;
 use image::{Rgba, RgbaImage};
 use once_cell::sync::Lazy;
-use rusqlite::{params, ToSql};
+use rusqlite::{ToSql, params};
 use serde::{Deserialize, Deserializer};
 
-use crate::db::{decode_line, ActivityFilter, Database};
-use crate::tile::{Tile, TileBounds};
 use crate::WebMercatorViewport;
+use crate::db::{ActivityFilter, Database, decode_line};
+use crate::tile::{Tile, TileBounds};
 
 pub static PINKISH: Lazy<LinearGradient> = Lazy::new(|| {
     LinearGradient::from_stops(&[

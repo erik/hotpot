@@ -3,11 +3,11 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use csv::StringRecord;
-use fitparser::de::{from_reader_with_options, DecodeOption};
-use fitparser::profile::MesgNum;
 use fitparser::Value;
+use fitparser::de::{DecodeOption, from_reader_with_options};
+use fitparser::profile::MesgNum;
 use flate2::read::GzDecoder;
 use geo::{EuclideanDistance, MapCoords, Simplify};
 use geo_types::{LineString, MultiLineString, Point};
@@ -19,7 +19,7 @@ use time::OffsetDateTime;
 use walkdir::WalkDir;
 
 use crate::db;
-use crate::db::{encode_line, Database};
+use crate::db::{Database, encode_line};
 use crate::tile::{BBox, LngLat, Tile, WebMercator};
 
 struct TileClipper {
@@ -135,9 +135,9 @@ impl RawActivity {
     pub fn clip_to_tiles(
         &self,
         db::Config {
-            ref zoom_levels,
-            ref trim_dist,
-            ref tile_extent,
+            zoom_levels,
+            trim_dist,
+            tile_extent,
         }: &db::Config,
     ) -> ClippedTiles {
         let mut clippers: Vec<_> = zoom_levels
