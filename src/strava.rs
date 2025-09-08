@@ -343,8 +343,8 @@ Next, make sure the webhook is set up to be called for new activities:
 Confirm the webhook was set up correctly with:
 
     curl --get https://www.strava.com/api/v3/push_subscriptions \\
-         -F \"client_id={0}\" \\
-         -F \"client_secret={1}\"
+         -d \"client_id={0}\" \\
+         -d \"client_secret={1}\"
 
 More information: https://developers.strava.com/docs/getting-started
 ",

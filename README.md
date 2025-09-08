@@ -30,7 +30,7 @@ hotpot serve
 ### Docker
 ```bash
 # Either pull the pre-built container from GitHub Container Registry
-docker pull ghcr.io/erik/hotpot:latest
+docker pull ghcr.io/erik/hotpot:main
 
 # Or build the Docker image yourself
 docker build -t hotpot .
