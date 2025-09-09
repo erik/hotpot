@@ -140,6 +140,15 @@ impl BBox {
     const BOTTOM: u8 = 0b0100;
     const TOP: u8 = 0b1000;
 
+    pub fn square(width: f64) -> Self {
+        Self {
+            left: 0.0,
+            bot: 0.0,
+            right: width,
+            top: width,
+        }
+    }
+
     pub fn contains(&self, pt: &WebMercator) -> bool {
         pt.0.x() >= self.left
             && pt.0.y() >= self.bot

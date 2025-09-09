@@ -1,4 +1,5 @@
 use std::fs::File;
+use std::io::BufWriter;
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
@@ -286,17 +287,18 @@ fn run() -> Result<()> {
             gradient,
         } => {
             let db = opts.global.database_ro()?;
-            let mut file = File::create(output)?;
+            let mut file = BufWriter::new(File::create(output)?);
 
             let filter = ActivityFilter::new(before, after, filter);
             let gradient = gradient.unwrap_or_else(|| PINKISH.clone());
-            let image =
-                raster::render_tile(zxy, &gradient, width, &filter, &db)?.unwrap_or_else(|| {
+            let image = raster::rasterize_tile(zxy, width, &filter, &db)?
+                .map(|raster| raster.apply_gradient(&gradient))
+                .unwrap_or_else(|| {
                     // note: could also just use RgbaImage::default() here if we don't care about size.
                     RgbaImage::new(width, width)
                 });
 
-            image.write_to(&mut file, image::ImageOutputFormat::Png)?;
+            image.write_to(&mut file, image::ImageFormat::Png)?;
         }
 
         Commands::Render {
@@ -312,10 +314,10 @@ fn run() -> Result<()> {
             let db = opts.global.database_ro()?;
             let filter = ActivityFilter::new(before, after, filter);
             let gradient = gradient.unwrap_or_else(|| PINKISH.clone());
-            let mut file = File::create(output)?;
+            let mut file = BufWriter::new(File::create(output)?);
 
             let image = raster::render_view(viewport, &gradient, width, height, &filter, &db)?;
-            image.write_to(&mut file, image::ImageOutputFormat::Png)?;
+            image.write_to(&mut file, image::ImageFormat::Png)?;
         }
 
         Commands::Serve {

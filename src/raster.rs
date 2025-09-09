@@ -7,6 +7,7 @@ use anyhow::{Result, anyhow};
 use geo_types::Coord;
 use image::{Rgba, RgbaImage};
 use once_cell::sync::Lazy;
+use rayon::prelude::*;
 use rusqlite::{ToSql, params};
 use serde::{Deserialize, Deserializer};
 
@@ -45,7 +46,7 @@ pub static ORANGE: Lazy<LinearGradient> = Lazy::new(|| {
     ])
 });
 
-struct TileRaster {
+pub struct TileRaster {
     bounds: TileBounds,
     scale: u32,
     width: u32,
@@ -79,6 +80,8 @@ impl TileRaster {
         let x_offset = self.tile_extent * (source_tile.x - self.bounds.xmin);
         let y_offset = self.tile_extent * (source_tile.y - self.bounds.ymin);
 
+        let tile_bbox = crate::tile::BBox::square(self.width as f64 - 1.0);
+
         let mut prev = None;
         for Coord { x, y } in coords {
             // Translate (x,y) to location in target tile.
@@ -90,30 +93,46 @@ impl TileRaster {
             let x = x >> self.scale;
             let y = y >> self.scale;
 
-            if let Some(Coord { x: px, y: py }) = prev {
-                if x == px && y == py {
-                    continue;
-                }
+            let Some(Coord { x: px, y: py }) = prev else {
+                prev = Some(Coord { x, y });
+                continue;
+            };
 
-                let line_iter = line_drawing::Bresenham::<i32>::new(
-                    (px as i32, py as i32),
-                    (x as i32, y as i32),
-                );
+            if x == px && y == py {
+                continue;
+            }
 
-                for (ix, iy) in line_iter {
-                    if ix < 0 || iy < 0 || ix >= self.width as i32 || iy >= self.width as i32 {
-                        continue;
-                    }
+            // Pre-clamp the coordinates to the target tile bounds so we can
+            // avoid a bounds check in the loop
+            let Some((start, end)) = tile_bbox.clip_line(
+                &geo::Point::new(px as f64, py as f64).into(),
+                &geo::Point::new(x as f64, y as f64).into(),
+            ) else {
+                continue;
+            };
 
-                    let idx = (iy as u32 * self.width + ix as u32) as usize;
-                    self.pixels[idx] = self.pixels[idx].saturating_add(1);
-                }
+            let line_iter = line_drawing::Bresenham::<i32>::new(
+                (start.0.x() as i32, start.0.y() as i32),
+                (end.0.x() as i32, end.0.y() as i32),
+            );
+
+            for (ix, iy) in line_iter {
+                let idx = (iy as u32 * self.width + ix as u32) as usize;
+                self.pixels[idx] = self.pixels[idx].saturating_add(1);
             }
             prev = Some(Coord { x, y });
         }
     }
 
-    fn apply_gradient(&self, gradient: &LinearGradient) -> RgbaImage {
+    fn enumerate_pixels(&self) -> EnumerateRasterPixels<'_> {
+        EnumerateRasterPixels {
+            width: self.width as usize,
+            idx: 0,
+            pixels: self.pixels.as_ref(),
+        }
+    }
+
+    pub fn apply_gradient(&self, gradient: &LinearGradient) -> RgbaImage {
         RgbaImage::from_fn(self.width, self.width, |x, y| {
             let idx = (y * self.width + x) as usize;
             gradient.sample(self.pixels[idx])
@@ -129,6 +148,28 @@ fn lerp(a: Rgba<u8>, b: Rgba<u8>, t: f32) -> Rgba<u8> {
         (a[2] as f32 * (1.0 - t) + b[2] as f32 * t) as u8,
         (a[3] as f32 * (1.0 - t) + b[3] as f32 * t) as u8,
     ])
+}
+
+struct EnumerateRasterPixels<'a> {
+    width: usize,
+    idx: usize,
+    pixels: &'a [u8],
+}
+
+impl Iterator for EnumerateRasterPixels<'_> {
+    type Item = (usize, usize, u8);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.idx >= (self.width * self.width) {
+            None
+        } else {
+            let pixel = self.pixels[self.idx];
+            let x = self.idx % self.width;
+            let y = self.idx / self.width;
+            self.idx += 1;
+            Some((x, y, pixel))
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -281,32 +322,39 @@ pub fn render_view(
     let margin_x = (src_w - img_w) / 2;
     let margin_y = (src_h - img_h) / 2;
 
-    for row in 0..num_y {
-        for col in 0..num_x {
-            // Position of the tile in the mosaic
-            let tile_origin_y = row * tile_size;
-            let tile_origin_x = col * tile_size;
+    // Collect all tile positions for parallel processing
+    let tile_positions: Vec<_> = (0..num_y)
+        .flat_map(|row| (0..num_x).map(move |col| (row, col)))
+        .collect();
 
+    // Render tiles in parallel
+    let tile_results: Vec<_> = tile_positions
+        .par_iter()
+        .map(|(row, col)| {
             let tile = Tile::new(
                 tile_bounds.xmin + col,
                 tile_bounds.ymin + row,
                 tile_bounds.z,
             );
 
-            let sub_img = render_tile(tile, gradient, tile_size, filter, db)?;
-            if let Some(img) = sub_img {
-                for (x, y, pixel) in img.enumerate_pixels() {
-                    let x = tile_origin_x + x;
-                    let y = tile_origin_y + y;
+            // Position of the tile in the mosaic
+            let tile_origin_y = row * tile_size;
+            let tile_origin_x = col * tile_size;
 
-                    // Ignore pixels which fall into the margins
-                    if x >= margin_x
-                        && x < margin_x + img_w
-                        && y >= margin_y
-                        && y < margin_y + img_h
-                    {
-                        mosaic.put_pixel(x - margin_x, y - margin_y, *pixel);
-                    }
+            rasterize_tile(tile, tile_size, filter, db)
+                .map(|img| img.map(|img| (tile_origin_x, tile_origin_y, img)))
+        })
+        .collect();
+
+    for result in tile_results {
+        if let Some((tile_origin_x, tile_origin_y, raster)) = result? {
+            for (x, y, pixel) in raster.enumerate_pixels() {
+                let x = tile_origin_x + x as u32;
+                let y = tile_origin_y + y as u32;
+
+                // Ignore pixels which fall into the margins
+                if x >= margin_x && x < margin_x + img_w && y >= margin_y && y < margin_y + img_h {
+                    mosaic.put_pixel(x - margin_x, y - margin_y, gradient.sample(pixel));
                 }
             }
         }
@@ -315,13 +363,12 @@ pub fn render_view(
     Ok(mosaic)
 }
 
-pub fn render_tile(
+pub fn rasterize_tile(
     tile: Tile,
-    gradient: &LinearGradient,
     width: u32,
     filter: &ActivityFilter,
     db: &Database,
-) -> Result<Option<RgbaImage>> {
+) -> Result<Option<TileRaster>> {
     let zoom_level = db
         .config
         .source_level(tile.z)
@@ -348,7 +395,7 @@ pub fn render_tile(
         return Ok(None);
     }
 
-    Ok(Some(raster.apply_gradient(gradient)))
+    Ok(Some(raster))
 }
 
 fn prepare_activities_query<'a>(

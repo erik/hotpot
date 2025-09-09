@@ -387,9 +387,10 @@ async fn render_tile(
         Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
     };
 
-    raster::render_tile(tile, gradient, y_param.tile_size, &filter, &db)
-        .and_then(|image| {
-            image
+    raster::rasterize_tile(tile, y_param.tile_size, &filter, &db)
+        .and_then(|raster| {
+            raster
+                .map(|raster| raster.apply_gradient(gradient))
                 .map(render_image_response)
                 .unwrap_or_else(|| Ok(StatusCode::NO_CONTENT.into_response()))
         })
