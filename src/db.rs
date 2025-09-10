@@ -73,7 +73,7 @@ impl Database {
 
     fn from_connection(manager: SqliteConnectionManager) -> Result<Self> {
         // Check for version which introduced `->>` syntax (released 2022)
-        if rusqlite::version_number() < 3038000 {
+        if rusqlite::version_number() < 30_38_000 {
             tracing::warn!("sqlite3 version < 3.38.0, property filtering will not be available");
         }
 

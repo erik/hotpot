@@ -14,6 +14,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Router, Server, TypedHeader};
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+use image::codecs::webp::WebPEncoder;
 use rust_embed::Embed;
 use serde::{Deserialize, Deserializer, Serialize};
 use time::Date;
@@ -28,6 +29,12 @@ use crate::strava;
 use crate::strava::StravaAuth;
 use crate::tile::{Tile, WebMercatorViewport};
 use crate::{activity, raster};
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ImageFormat {
+    Png,
+    WebP,
+}
 
 #[derive(Clone)]
 pub struct Config {
@@ -329,6 +336,7 @@ async fn get_activity_count(
 async fn render_viewport(
     State(AppState { db, .. }): State<AppState>,
     Query(params): Query<RenderViewQueryParams>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     let viewport = match WebMercatorViewport::from_str(&params.bounds) {
         Ok(viewport) => viewport,
@@ -355,6 +363,7 @@ async fn render_viewport(
         Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
     };
 
+    let image_format = get_image_format(&headers);
     raster::render_view(
         viewport,
         gradient,
@@ -363,7 +372,7 @@ async fn render_viewport(
         &filter,
         &db,
     )
-    .and_then(render_image_response)
+    .and_then(|image| render_image_response(image, image_format))
     .unwrap_or_else(|err| {
         tracing::error!("error rendering tile: {:?}", err);
         StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -374,6 +383,7 @@ async fn render_tile(
     State(AppState { db, .. }): State<AppState>,
     Path((z, x, y_param)): Path<(u8, u32, TileYParam)>,
     Query(params): Query<RenderQueryParams>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     // Fail fast when tile is higher zoom level than we store data for.
     if db.config.source_level(z).is_none() {
@@ -387,11 +397,12 @@ async fn render_tile(
         Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
     };
 
+    let image_format = get_image_format(&headers);
     raster::rasterize_tile(tile, y_param.tile_size, &filter, &db)
         .and_then(|raster| {
             raster
                 .map(|raster| raster.apply_gradient(gradient))
-                .map(render_image_response)
+                .map(|image| render_image_response(image, image_format))
                 .unwrap_or_else(|| Ok(StatusCode::NO_CONTENT.into_response()))
         })
         .unwrap_or_else(|err| {
@@ -400,22 +411,50 @@ async fn render_tile(
         })
 }
 
-fn render_image_response(image: image::ImageBuffer<image::Rgba<u8>, Vec<u8>>) -> Result<Response> {
+fn render_image_response(
+    image: image::ImageBuffer<image::Rgba<u8>, Vec<u8>>,
+    format: ImageFormat,
+) -> Result<Response> {
     let mut bytes = Vec::new();
     let mut cursor = Cursor::new(&mut bytes);
 
-    image.write_with_encoder(PngEncoder::new_with_quality(
-        &mut cursor,
-        CompressionType::Fast,
-        FilterType::NoFilter,
-    ))?;
+    let (content_type, result) = match format {
+        ImageFormat::WebP => {
+            let encoder = WebPEncoder::new_lossless(&mut cursor);
+            ("image/webp", image.write_with_encoder(encoder))
+        }
+        ImageFormat::Png => {
+            let encoder = PngEncoder::new_with_quality(
+                &mut cursor,
+                CompressionType::Fast,
+                FilterType::NoFilter,
+            );
+            ("image/png", image.write_with_encoder(encoder))
+        }
+    };
+
+    result?;
 
     Ok(axum::response::Response::builder()
-        .header(header::CONTENT_TYPE, "image/png")
+        .header(header::CONTENT_TYPE, content_type)
         .header(header::CACHE_CONTROL, "max-age=86400")
         .body(bytes)?
         .into_parts()
         .into_response())
+}
+
+fn get_image_format(headers: &HeaderMap) -> ImageFormat {
+    let accepts_webp = headers
+        .get(header::ACCEPT)
+        .and_then(|h| h.to_str().ok())
+        .map(|accept| accept.to_lowercase().contains("image/webp"))
+        .unwrap_or(false);
+
+    if accepts_webp {
+        ImageFormat::WebP
+    } else {
+        ImageFormat::Png
+    }
 }
 
 fn choose_gradient(
