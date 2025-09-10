@@ -57,9 +57,9 @@ pub struct TileRaster {
 impl TileRaster {
     fn new(tile: Tile, source: TileBounds, width: u32, tile_extent: u32) -> Self {
         // TODO: support upscaling
-        assert!(width <= tile_extent, "Upscaling not supported");
-        assert!(width.is_power_of_two(), "width must be power of two");
-        assert!(source.z >= tile.z, "source zoom must be >= target zoom");
+        debug_assert!(width <= tile_extent, "Upscaling not supported");
+        debug_assert!(width.is_power_of_two(), "width must be power of two");
+        debug_assert!(source.z >= tile.z, "source zoom must be >= target zoom");
 
         let zoom_steps = (source.z - tile.z) as u32;
         let width_steps = tile_extent.ilog2() - width.ilog2();

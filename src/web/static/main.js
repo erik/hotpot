@@ -451,13 +451,14 @@ function createPropertyModal(props) {
 
   const fmt = new Intl.NumberFormat();
 
-  // TODO: maybe display property type
-  const rows = props.map(({ key, activity_count }) => {
-    return div({ class: "__row" }, [
-      div({ class: "__prop", title: key }, key),
-      div({ class: "__count" }, fmt.format(activity_count)),
-    ]);
-  });
+  const rows = Object.entries(props)
+    .toSorted()
+    .map(([key, activity_count]) =>
+      div({ class: "__row" }, [
+        div({ class: "__prop", title: key }, key),
+        div({ class: "__count" }, fmt.format(activity_count)),
+      ]),
+    );
 
   const node = modal({}, [
     style(

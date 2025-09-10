@@ -8,7 +8,7 @@ use anyhow::{Result, anyhow};
 use axum::body::HttpBody;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::headers::authorization::Bearer;
-use axum::http::{Method, Request, StatusCode, Uri, header};
+use axum::http::{HeaderMap, Method, Request, StatusCode, Uri, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -16,7 +16,7 @@ use axum::{Router, Server, TypedHeader};
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::codecs::webp::WebPEncoder;
 use rust_embed::Embed;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer};
 use time::Date;
 use tokio::runtime::Runtime;
 use tower_http::cors::{Any, CorsLayer};
@@ -174,8 +174,8 @@ pub fn run_blocking(addr: SocketAddr, db: Database, config: Config) -> Result<()
 async fn index(State(AppState { config, db, .. }): State<AppState>) -> impl IntoResponse {
     let index_file = StaticAsset::get("index.html").expect("missing file");
     let html = std::str::from_utf8(&index_file.data).expect("valid utf8");
-    let properties = load_activity_properties(&db)
-        .await
+    let properties = db
+        .count_properties()
         .and_then(|props| Ok(serde_json::to_string(&props)?))
         .unwrap_or_else(|err| {
             tracing::error!("failed to generate activity properties: {:?}", err);
@@ -279,56 +279,14 @@ impl<'de> Deserialize<'de> for TileYParam {
     }
 }
 
-#[derive(Debug, Serialize)]
-struct ActivityProperty {
-    key: String,
-    activity_count: usize,
-}
-
-#[derive(Debug, Serialize)]
-struct ActivityProperties(Vec<ActivityProperty>);
-
-// TODO: shouldn't live here
-async fn load_activity_properties(db: &Database) -> Result<ActivityProperties> {
-    let conn = db.connection()?;
-    let mut stmt = conn.prepare(
-        "\
-            SELECT
-                key,
-                sum(count) as num_activities
-            FROM (
-                SELECT
-                    prop.key,
-                    count(*) as count
-                FROM (
-                    SELECT props.*
-                    FROM activities, json_each(properties) props
-                ) prop
-                GROUP BY 1
-            )
-            GROUP BY 1
-            ORDER BY 1;
-        ",
-    )?;
-    let mut rows = stmt.query([])?;
-
-    let mut properties = vec![];
-    while let Some(row) = rows.next()? {
-        properties.push(ActivityProperty {
-            key: row.get_unwrap(0),
-            activity_count: row.get_unwrap(1),
-        });
-    }
-
-    Ok(ActivityProperties(properties))
-}
-
 async fn get_activity_count(
     State(AppState { db, .. }): State<AppState>,
     Query(params): Query<RenderQueryParams>,
 ) -> impl IntoResponse {
     let filter = ActivityFilter::new(params.before, params.after, params.filter);
-    let num_activities = filter.count(&db).unwrap();
+    let num_activities = db
+        .count_activities(&filter)
+        .expect("failed to count activities");
 
     (StatusCode::OK, num_activities.to_string()).into_response()
 }

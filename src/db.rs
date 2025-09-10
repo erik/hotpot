@@ -368,13 +368,14 @@ impl ActivityFilter {
 
         clauses.join(" AND ")
     }
+}
 
-    // TODO: wrong place for this function
-    pub fn count(&self, db: &Database) -> Result<usize, anyhow::Error> {
+impl Database {
+    pub fn count_activities(&self, filter: &ActivityFilter) -> Result<usize, anyhow::Error> {
         let mut params = vec![];
-        let filter = self.to_query(&mut params);
+        let filter = filter.to_query(&mut params);
 
-        let conn = db.connection()?;
+        let conn = self.connection()?;
         let mut stmt = conn.prepare(&format!(
             "SELECT count(*) FROM activities WHERE {};",
             filter
@@ -386,5 +387,25 @@ impl ActivityFilter {
         };
 
         Ok(count.get_unwrap(0))
+    }
+
+    pub fn count_properties(&self) -> Result<HashMap<String, usize>> {
+        let conn = self.connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT
+                p.key,
+                COUNT(DISTINCT a.id)
+            FROM activities a, json_each(a.properties) p
+            GROUP BY 1;",
+        )?;
+
+        let mut properties = HashMap::new();
+
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            properties.insert(row.get_unwrap(0), row.get_unwrap(1));
+        }
+
+        Ok(properties)
     }
 }
