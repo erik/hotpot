@@ -13,10 +13,10 @@
     <script src="/static/main.js"></script>
 
     <script>
-      // globalThis.UPLOADS_ENABLED = {};
-      // globalThis.RENDER_ENABLED = {};
-      // globalThis.ACTIVITY_PROPERTIES = {};
-      // $INJECT$
+            // globalThis.UPLOADS_ENABLED = {};
+            // globalThis.RENDER_ENABLED = {};
+            // globalThis.ACTIVITY_PROPERTIES = {};
+            // $INJECT$
     </script>
 </head>
 
@@ -336,6 +336,16 @@
                         <label for="gradient">Gradient</label>
                         <input key="gradient" name="gradient" x-debounce placeholder="1:400;10:fff" />
                     </div>
+
+                    <div class="__setting">
+                        <label for="line_width">Line Width</label>
+                        <select key="line_width" name="line_width">
+                            <option value="1">Thin</option>
+                            <option value="2" selected>Normal</option>
+                            <option value="4">Thick</option>
+                            <option value="6">Very Thick</option>
+                        </select>
+                    </div>
                 </fieldset>
 
                 <fieldset class="__group">
@@ -418,6 +428,7 @@
             map: "dark-matter-nolabels",
             filter: null,
             gradient: null,
+            line_width: "3",
 
             $color: ({ color }) => (color === "custom" ? null : color),
             $gradient: ({ color, gradient }) =>
@@ -433,13 +444,21 @@
                         return `https://basemaps.cartocdn.com/gl/${map}-gl-style/style.json`;
                 }
             },
-            $queryString: ({ before, after, filter, $gradient, $color }) =>
+            $queryString: ({
+                before,
+                after,
+                filter,
+                $gradient,
+                $color,
+                line_width,
+            }) =>
                 encodeQueryString({
                     before,
                     after,
                     filter,
                     gradient: $gradient,
                     color: $color,
+                    line_width,
                 }),
             $tileUrl: ({ $queryString }) =>
                 "/tile/{z}/{x}/{y}{ratio}?" + $queryString,
@@ -460,7 +479,7 @@
             .watch(["$queryString"], async ({ $queryString }) => {
                 const { div } = createElement;
                 const { count, warnings } = await fetch(
-                  `/api/activity-count?${$queryString}`,
+                    `/api/activity-count?${$queryString}`,
                 )
                     .then(async (res) => [res.status, await res.text()])
                     .catch((err) => [500, err.toString()])
@@ -506,14 +525,14 @@
             });
         }
 
-        map.on("load", () =>  updateMapTileSource());
+        map.on("load", () => updateMapTileSource());
         map.addControl(new maplibregl.NavigationControl());
 
         globalThis.UPLOADS_ENABLED &&
             map.addControl(new UploadButton(), "top-right");
 
         globalThis.RENDER_ENABLED &&
-          map.addControl(new ExportButton(options), "top-right");
+            map.addControl(new ExportButton(options), "top-right");
 
         nodes.filter.addEventListener("click", () => {
             createPropertyModal(globalThis.ACTIVITY_PROPERTIES);

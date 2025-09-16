@@ -222,6 +222,8 @@ struct RenderQueryParams {
     color: Option<String>,
     #[serde(default)]
     gradient: Option<LinearGradient>,
+    #[serde(default)]
+    line_width: Option<u32>,
     #[serde(default, with = "crate::date::parse")]
     before: Option<Date>,
     #[serde(default, with = "crate::date::parse")]
@@ -240,6 +242,8 @@ struct RenderViewQueryParams {
     color: Option<String>,
     #[serde(default)]
     gradient: Option<LinearGradient>,
+    #[serde(default)]
+    line_width: Option<u32>,
     #[serde(default, with = "crate::date::parse")]
     before: Option<Date>,
     #[serde(default, with = "crate::date::parse")]
@@ -322,19 +326,23 @@ async fn render_viewport(
     };
 
     let image_format = get_image_format(&headers);
-    raster::render_view(
+    let line_width = params.line_width.unwrap_or(3); // Default to 3 if not provided
+
+    match raster::render_view(
         viewport,
         gradient,
         params.width,
         params.height,
+        line_width,
         &filter,
         &db,
-    )
-    .and_then(|image| render_image_response(image, image_format))
-    .unwrap_or_else(|err| {
-        tracing::error!("error rendering tile: {:?}", err);
-        StatusCode::INTERNAL_SERVER_ERROR.into_response()
-    })
+    ) {
+        Ok(image) => render_image_response(image, image_format).unwrap(), // Directly return the response
+        Err(err) => {
+            tracing::error!("error rendering viewport: {:?}", err);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 async fn render_tile(
@@ -356,17 +364,19 @@ async fn render_tile(
     };
 
     let image_format = get_image_format(&headers);
-    raster::rasterize_tile(tile, y_param.tile_size, &filter, &db)
-        .and_then(|raster| {
-            raster
-                .map(|raster| raster.apply_gradient(gradient))
-                .map(|image| render_image_response(image, image_format))
-                .unwrap_or_else(|| Ok(StatusCode::NO_CONTENT.into_response()))
-        })
-        .unwrap_or_else(|err| {
+    let line_width = params.line_width.unwrap_or(3); // Default to 3 if not provided
+
+    match raster::rasterize_tile(tile, y_param.tile_size, line_width, &filter, &db) {
+        Ok(Some(raster_data)) => {
+            let image = raster_data.apply_gradient(gradient, line_width);
+            render_image_response(image, image_format).unwrap() // Directly return the response
+        }
+        Ok(None) => StatusCode::NO_CONTENT.into_response(),
+        Err(err) => {
             tracing::error!("error rendering tile: {:?}", err);
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        })
+        }
+    }
 }
 
 fn render_image_response(

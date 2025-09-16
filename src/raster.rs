@@ -73,7 +73,7 @@ impl TileRaster {
         }
     }
 
-    fn add_activity(&mut self, source_tile: &Tile, coords: &[Coord<u32>]) {
+    fn add_activity(&mut self, source_tile: &Tile, coords: &[Coord<u32>], line_width: u32) {
         debug_assert_eq!(source_tile.z, self.bounds.z);
 
         // Origin of source tile within target tile
@@ -116,9 +116,36 @@ impl TileRaster {
                 (end.0.x() as i32, end.0.y() as i32),
             );
 
+            // For each pixel on the line, draw a small diamond shape to create thickness.
+            let half_width = (line_width / 2) as i32; // Integer division is fine here.
+
             for (ix, iy) in line_iter {
-                let idx = (iy as u32 * self.width + ix as u32) as usize;
-                self.pixels[idx] = self.pixels[idx].saturating_add(1);
+                // Iterate over a square region around the current pixel (ix, iy)
+                // The size of this region is determined by LINE_WIDTH.
+                for dy in -half_width..=half_width {
+                    for dx in -half_width..=half_width {
+                        // Calculate the Manhattan distance from the center pixel (ix, iy)
+                        let dist = (dx.abs() + dy.abs()) as u32;
+
+                        // Only color pixels within the desired distance to form a diamond shape.
+                        // We use line_width / 2 as the radius for the diamond.
+                        if dist <= line_width as u32 / 2 {
+                            let px = ix + dx;
+                            let py = iy + dy;
+
+                            // Ensure the pixel is within the bounds of the tile
+                            if px >= 0
+                                && px < self.width as i32
+                                && py >= 0
+                                && py < self.width as i32
+                            {
+                                let idx = (py as u32 * self.width + px as u32) as usize;
+                                // Increment the pixel value. Use saturating_add to prevent overflow.
+                                self.pixels[idx] = self.pixels[idx].saturating_add(1);
+                            }
+                        }
+                    }
+                }
             }
             prev = Some(Coord { x, y });
         }
@@ -132,10 +159,11 @@ impl TileRaster {
         }
     }
 
-    pub fn apply_gradient(&self, gradient: &LinearGradient) -> RgbaImage {
+    pub fn apply_gradient(&self, gradient: &LinearGradient, line_width: u32) -> RgbaImage {
         RgbaImage::from_fn(self.width, self.width, |x, y| {
             let idx = (y * self.width + x) as usize;
-            gradient.sample(self.pixels[idx])
+            let scaled_value = scale_for_line_width(self.pixels[idx], line_width);
+            gradient.sample(scaled_value)
         })
     }
 }
@@ -280,15 +308,23 @@ impl<'de> Deserialize<'de> for LinearGradient {
     }
 }
 
+fn scale_for_line_width(value: u8, line_width: u32) -> u8 {
+    // Scale down pixel values based on line width to maintain consistent brightness
+    let scale_factor = 3.0 / line_width as f32; // normalize relative to default width of 3
+    (value as f32 * scale_factor).min(255.0) as u8
+}
+
 pub fn render_view(
     viewport: WebMercatorViewport,
     gradient: &LinearGradient,
     width: u32,
     height: u32,
+    line_width: u32,
     filter: &ActivityFilter,
     db: &Database,
 ) -> Result<RgbaImage> {
     let tile_size = 256;
+    let tile_extent = db.config.tile_extent;
     let zoom_range = RangeInclusive::new(
         *db.config.zoom_levels.iter().min().unwrap() as u32,
         *db.config.zoom_levels.iter().max().unwrap() as u32,
@@ -315,7 +351,7 @@ pub fn render_view(
         tile_bounds.z
     );
 
-    let mut mosaic = RgbaImage::new(img_w, img_h);
+    let mut mosaic = TileRaster::new(Tile::new(0, 0, 0), tile_bounds, img_w, tile_extent);
 
     // The tile bounds will be aligned to the tile grid, so we need to trim
     // the excess pixels from the edges of the image.
@@ -341,7 +377,7 @@ pub fn render_view(
             let tile_origin_y = row * tile_size;
             let tile_origin_x = col * tile_size;
 
-            rasterize_tile(tile, tile_size, filter, db)
+            rasterize_tile(tile, tile_size, line_width, filter, db)
                 .map(|img| img.map(|img| (tile_origin_x, tile_origin_y, img)))
         })
         .collect();
@@ -354,18 +390,20 @@ pub fn render_view(
 
                 // Ignore pixels which fall into the margins
                 if x >= margin_x && x < margin_x + img_w && y >= margin_y && y < margin_y + img_h {
-                    mosaic.put_pixel(x - margin_x, y - margin_y, gradient.sample(pixel));
+                    let idx = ((y - margin_y) * img_w + (x - margin_x)) as usize;
+                    mosaic.pixels[idx] = mosaic.pixels[idx].saturating_add(pixel);
                 }
             }
         }
     }
 
-    Ok(mosaic)
+    Ok(mosaic.apply_gradient(gradient, line_width))
 }
 
 pub fn rasterize_tile(
     tile: Tile,
     width: u32,
+    line_width: u32,
     filter: &ActivityFilter,
     db: &Database,
 ) -> Result<Option<TileRaster>> {
@@ -386,7 +424,7 @@ pub fn rasterize_tile(
         let source_tile = Tile::new(row.get_unwrap(0), row.get_unwrap(1), row.get_unwrap(2));
 
         let bytes: Vec<u8> = row.get_unwrap(3);
-        raster.add_activity(&source_tile, &decode_line(&bytes)?);
+        raster.add_activity(&source_tile, &decode_line(&bytes)?, line_width);
 
         have_activity = true;
     }

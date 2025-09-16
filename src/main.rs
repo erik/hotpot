@@ -86,6 +86,10 @@ enum Commands {
         #[arg(short, long, default_value = "1024")]
         width: u32,
 
+        /// Line width in pixels
+        #[arg(long, default_value = "4")]
+        line_width: u32,
+
         /// Path to output image.
         #[arg(short, long, default_value = "tile.png")]
         output: PathBuf,
@@ -106,6 +110,10 @@ enum Commands {
         /// Height of output image in pixels.
         #[arg(short = 'H', long, default_value = "1024")]
         height: u32,
+
+        /// Line width in pixels
+        #[arg(long, default_value = "4")]
+        line_width: u32,
 
         /// Select activities before this date (YYYY-MM-DD).
         #[arg(short, long, value_parser = try_parse_date)]
@@ -285,14 +293,15 @@ fn run() -> Result<()> {
             before,
             after,
             gradient,
+            line_width,
         } => {
             let db = opts.global.database_ro()?;
             let mut file = BufWriter::new(File::create(output)?);
 
             let filter = ActivityFilter::new(before, after, filter);
             let gradient = gradient.unwrap_or_else(|| PINKISH.clone());
-            let image = raster::rasterize_tile(zxy, width, &filter, &db)?
-                .map(|raster| raster.apply_gradient(&gradient))
+            let image = raster::rasterize_tile(zxy, width, line_width, &filter, &db)?
+                .map(|raster| raster.apply_gradient(&gradient, line_width))
                 .unwrap_or_else(|| {
                     // note: could also just use RgbaImage::default() here if we don't care about size.
                     RgbaImage::new(width, width)
@@ -305,6 +314,7 @@ fn run() -> Result<()> {
             viewport,
             width,
             height,
+            line_width,
             before,
             after,
             filter,
@@ -316,7 +326,8 @@ fn run() -> Result<()> {
             let gradient = gradient.unwrap_or_else(|| PINKISH.clone());
             let mut file = BufWriter::new(File::create(output)?);
 
-            let image = raster::render_view(viewport, &gradient, width, height, &filter, &db)?;
+            let image =
+                raster::render_view(viewport, &gradient, width, height, line_width, &filter, &db)?;
             image.write_to(&mut file, image::ImageFormat::Png)?;
         }
 
