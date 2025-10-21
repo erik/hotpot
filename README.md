@@ -30,13 +30,13 @@ hotpot serve
 ### Docker
 ```bash
 # Either pull the pre-built container from GitHub Container Registry
-docker pull ghcr.io/erik/hotpot:main
+docker pull ghcr.io/erik/hotpot
 
 # Or build the Docker image yourself
-docker build -t hotpot .
+docker build -t ghcr.io/erik/hotpot .
 
 # Run the container (always mount a volume at /data for the database)
-docker run -p 8080:8080 -v ./data:/data hotpot
+docker run -p 8080:8080 -v ./data:/data ghcr.io/erik/hotpot
 
 # Visit http://127.0.0.1:8080 to browse the map
 ```
@@ -208,6 +208,16 @@ open http://127.0.0.1:8080/strava/auth
 Once you've authenticated successfully, you'll need to register the callback
 URL of your server with Strava's API. Follow the `curl` commands shown on the
 success page to complete setup.
+
+The webhook endpoints can then be enabled with the `--strava-webhook` flag
+
+```bash
+export STRAVA_CLIENT_ID=... \
+       STRAVA_CLIENT_SECRET=...\
+       STRAVA_WEBHOOK_SECRET=...
+
+hotpot serve --strava-webhook
+```
 
 ## Deployment
 
