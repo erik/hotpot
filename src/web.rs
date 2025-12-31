@@ -1,3 +1,5 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::io::Cursor;
 use std::net::SocketAddr;
 use std::str::FromStr;
@@ -5,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use axum::body::HttpBody;
+use axum::body::{Body, HttpBody};
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::headers::authorization::Bearer;
 use axum::http::{HeaderMap, Method, Request, StatusCode, Uri, header};
@@ -316,6 +318,12 @@ async fn render_viewport(
     }
 
     let filter = ActivityFilter::new(params.before, params.after, params.filter);
+
+    let etag = match check_etag(&db, &headers) {
+        Ok(etag) => etag,
+        Err(status) => return status.into_response(),
+    };
+
     let gradient = match choose_gradient(&params.gradient, params.color) {
         Ok(value) => value,
         Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
@@ -330,7 +338,7 @@ async fn render_viewport(
         &filter,
         &db,
     )
-    .and_then(|image| render_image_response(image, image_format))
+    .and_then(|image| render_image_response(image, image_format, &etag))
     .unwrap_or_else(|err| {
         tracing::error!("error rendering tile: {:?}", err);
         StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -349,6 +357,13 @@ async fn render_tile(
     }
 
     let filter = ActivityFilter::new(params.before, params.after, params.filter);
+
+    // Check ETag for caching
+    let etag = match check_etag(&db, &headers) {
+        Ok(etag) => etag,
+        Err(status) => return status.into_response(),
+    };
+
     let tile = Tile::new(x, y_param.y, z);
     let gradient = match choose_gradient(&params.gradient, params.color) {
         Ok(value) => value,
@@ -360,8 +375,13 @@ async fn render_tile(
         .and_then(|raster| {
             raster
                 .map(|raster| raster.apply_gradient(gradient))
-                .map(|image| render_image_response(image, image_format))
-                .unwrap_or_else(|| Ok(StatusCode::NO_CONTENT.into_response()))
+                .map(|image| render_image_response(image, image_format, &etag))
+                .unwrap_or_else(|| {
+                    Ok(cached_response(StatusCode::NO_CONTENT, &etag)
+                        .body(Body::empty())
+                        .unwrap()
+                        .into_response())
+                })
         })
         .unwrap_or_else(|err| {
             tracing::error!("error rendering tile: {:?}", err);
@@ -372,6 +392,7 @@ async fn render_tile(
 fn render_image_response(
     image: image::ImageBuffer<image::Rgba<u8>, Vec<u8>>,
     format: ImageFormat,
+    etag: &str,
 ) -> Result<Response> {
     let mut bytes = Vec::new();
     let mut cursor = Cursor::new(&mut bytes);
@@ -393,12 +414,62 @@ fn render_image_response(
 
     result?;
 
-    Ok(axum::response::Response::builder()
+    Ok(cached_response(StatusCode::OK, etag)
         .header(header::CONTENT_TYPE, content_type)
-        .header(header::CACHE_CONTROL, "max-age=86400")
         .body(bytes)?
         .into_parts()
         .into_response())
+}
+
+// Build a partial response with Cache-Control and Etag headers set.
+//
+// - `public`: Allows caching by any cache (CDNs, proxies, browsers)
+// - `max-age=0`: Forces revalidation on every request to ensure freshness
+// - `stale-while-revalidate=86400`: Allows using stale content for 24 hours
+//
+// This provides immediate responses to users while ensuring they eventually see fresh data,
+// with graceful degradation if the server is unavailable.
+fn cached_response(status: StatusCode, etag: &str) -> axum::http::response::Builder {
+    Response::builder()
+        .status(status)
+        .header(header::ETAG, etag)
+        .header(
+            header::CACHE_CONTROL,
+            "public, max-age=0, stale-while-revalidate=86400",
+        )
+}
+
+// Right now we assume that if the activity count changes then new data was
+// added. You could trivially come up with a counter-example for this this, but
+// why would you want to?
+fn generate_etag(db: &Database) -> Result<String, StatusCode> {
+    let activity_count = db
+        .count_activities(&ActivityFilter::default())
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut hasher = DefaultHasher::new();
+    activity_count.hash(&mut hasher);
+
+    Ok(hasher.finish().to_string())
+}
+
+// Check if the request's ETag matches the current content
+// Returns Ok(etag) if content is fresh, Err(StatusCode::NOT_MODIFIED) if not modified
+fn check_etag(db: &Database, headers: &HeaderMap) -> Result<String, StatusCode> {
+    let client_etag = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|s| s.to_str().ok())
+        .map(|s| s.trim_matches('"'));
+
+    let etag = generate_etag(db)?;
+    if let Some(t) = client_etag
+        && t == etag
+    {
+        return Err(StatusCode::NOT_MODIFIED);
+    }
+
+    // ETag not provided by client or didn't match, regenerate response
+    Ok(etag)
 }
 
 fn get_image_format(headers: &HeaderMap) -> ImageFormat {
@@ -520,4 +591,67 @@ fn trace_request(res: &Response, latency: Duration, _span: &tracing::Span) {
         size = res.size_hint().exact(),
         "response"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_tile_caching() {
+        let db = Database::memory().expect("db create");
+        let conn = db.connection().expect("db connection");
+        let router = Config {
+            cors: false,
+            upload_token: None,
+            routes: RouteConfig {
+                tiles: true,
+                strava_webhook: false,
+                strava_auth: false,
+                upload: false,
+                render: true,
+            },
+        }
+        .build_router(db)
+        .unwrap();
+
+        let request = Request::builder()
+            .uri("/tile/0/0/0")
+            .body(Body::empty())
+            .expect("tile request");
+
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        let etag = response.headers().get(header::ETAG).expect("to see etag");
+
+        let request = Request::builder()
+            .uri("/tile/0/0/0")
+            .header(header::IF_NONE_MATCH, etag.clone())
+            .body(Body::empty())
+            .expect("tile request w/ if-none-match");
+
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+
+        // now, modify the database and ensure we get a new etag
+        conn.execute("INSERT INTO activities (file) VALUES (?)", ["foo"])
+            .expect("to insert dummy activity");
+
+        let request = Request::builder()
+            .uri("/tile/0/0/0")
+            .header(header::IF_NONE_MATCH, etag.clone())
+            .body(Body::empty())
+            .expect("tile request");
+
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        let etag2 = response.headers().get(header::ETAG).unwrap().clone();
+        assert_ne!(etag, etag2);
+    }
 }
