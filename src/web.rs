@@ -1,5 +1,4 @@
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Cursor;
 use std::net::SocketAddr;
 use std::str::FromStr;
@@ -358,7 +357,6 @@ async fn render_tile(
 
     let filter = ActivityFilter::new(params.before, params.after, params.filter);
 
-    // Check ETag for caching
     let etag = match check_etag(&db, &headers) {
         Ok(etag) => etag,
         Err(status) => return status.into_response(),
@@ -595,8 +593,6 @@ fn trace_request(res: &Response, latency: Duration, _span: &tracing::Span) {
 
 #[cfg(test)]
 mod tests {
-    use axum::body::Body;
-    use axum::http::Request;
     use tower::ServiceExt;
 
     use super::*;
