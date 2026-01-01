@@ -24,6 +24,27 @@ mod web;
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Query information about activities currently stored in the database.
+    Activities {
+        /// Select activities before this date (YYYY-MM-DD).
+        #[arg(short, long, value_parser = date::try_parse)]
+        before: Option<Date>,
+
+        /// Select activities after this date (YYYY-MM-DD).
+        #[arg(short, long, value_parser = date::try_parse)]
+        after: Option<Date>,
+
+        /// Filter activities by arbitrary metadata properties
+        ///
+        /// {"elev_gain": { ">": 1000 }}
+        #[arg(short = 'f', long = "filter")]
+        filter: Option<PropertyFilter>,
+
+        /// Print count of matching activities rather than printing them out
+        #[arg(short = 'c', long = "count", default_value = "false")]
+        print_count: bool,
+    },
+
     /// Import activities from GPX, TCX, and FIT files.
     ///
     /// Imports will be deduplicated (based on file name), so it's safe to run
@@ -64,6 +85,8 @@ enum Commands {
         after: Option<Date>,
 
         /// Filter activities by arbitrary metadata properties
+        ///
+        /// {"elev_gain": { ">": 1000 }}
         #[arg(short, long)]
         filter: Option<PropertyFilter>,
 
@@ -111,7 +134,7 @@ enum Commands {
 
         /// Filter activities by arbitrary metadata properties
         ///
-        /// {"key": "elev_gain", ">": 1000}
+        /// {"elev_gain": { ">": 1000 }}
         #[arg(short = 'f', long = "filter")]
         filter: Option<PropertyFilter>,
 
@@ -237,6 +260,7 @@ fn run() -> Result<()> {
 
     tracing_subscriber::fmt()
         .compact()
+        .with_writer(std::io::stderr)
         .with_max_level(if opts.global.verbose {
             tracing::Level::DEBUG
         } else {
@@ -246,6 +270,30 @@ fn run() -> Result<()> {
 
     // TODO: pull out into separate function
     match opts.cmd {
+        Commands::Activities {
+            before,
+            after,
+            filter,
+            print_count,
+        } => {
+            let db = opts.global.database_ro()?;
+
+            let filter = ActivityFilter::new(before, after, filter);
+
+            if print_count {
+                let num_activities = db.activity_count(&filter)?;
+                println!("{}", num_activities);
+                return Ok(());
+            } else {
+                for info in db.activity_info(&filter)? {
+                    println!(
+                        "{}",
+                        serde_json::to_string(&info)
+                            .expect("ActivityStat should serialize to JSON")
+                    );
+                }
+            }
+        }
         Commands::Import {
             path,
             reset,

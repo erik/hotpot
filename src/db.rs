@@ -4,7 +4,7 @@ use std::io::Cursor;
 use std::path::Path;
 use std::str::FromStr;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use geo::{CoordNum, LineString};
 use geo_types::Coord;
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS activities (
       id            INTEGER PRIMARY KEY
     , file          TEXT     NOT NULL
     , title         TEXT
-    , start_time    INTEGER
+    , start_time    TEXT
     , properties    TEXT    NOT NULL DEFAULT '{}'
 );
 
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS strava_tokens (
 const MIGRATIONS: [&str; 1] = [
     // Keep track of when activities are added to the DB separately from when
     // they occurred.
-    "ALTER TABLE activities ADD COLUMN created_at INTEGER;",
+    "ALTER TABLE activities ADD COLUMN created_at TEXT;",
 ];
 
 pub struct Database {
@@ -79,7 +79,7 @@ impl Database {
 
     fn from_connection(manager: SqliteConnectionManager) -> Result<Self> {
         // Check for version which introduced `->>` syntax (released 2022)
-        if rusqlite::version_number() < 30_38_000 {
+        if rusqlite::version_number() < 3_038_000 {
             tracing::warn!("sqlite3 version < 3.38.0, property filtering will not be available");
         }
 
@@ -385,23 +385,75 @@ impl ActivityFilter {
     }
 }
 
-impl Database {
-    pub fn count_activities(&self, filter: &ActivityFilter) -> Result<usize, anyhow::Error> {
-        let mut params = vec![];
-        let filter = filter.to_query(&mut params);
+#[derive(Debug, serde::Serialize)]
+pub struct ActivityInfo {
+    file_name: String,
+    title: Option<String>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    start_time: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    created_at: Option<OffsetDateTime>,
+    properties: serde_json::Map<String, serde_json::Value>,
+    tile_count: usize,
+}
 
+impl Database {
+    pub fn activity_count(&self, filter: &ActivityFilter) -> Result<usize, anyhow::Error> {
+        let mut params = vec![];
+
+        let count = self.connection()?.query_row(
+            &format!(
+                "SELECT count(*) FROM activities WHERE {};",
+                filter.to_query(&mut params)
+            ),
+            &params[..],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    }
+
+    pub fn activity_info(
+        &self,
+        filter: &ActivityFilter,
+    ) -> Result<Vec<ActivityInfo>, anyhow::Error> {
+        let mut params = vec![];
         let conn = self.connection()?;
         let mut stmt = conn.prepare(&format!(
-            "SELECT count(*) FROM activities WHERE {};",
-            filter
+            "
+               SELECT
+                   a.file,
+                   a.title,
+                   a.start_time,
+                   a.properties,
+                   a.created_at,
+                   COALESCE(
+                      COUNT(DISTINCT format('%d/%d/%d', z, x, y)),
+                      0
+                   ) as cnt_tiles
+                FROM activities a
+                LEFT JOIN activity_tiles t ON (a.id = t.activity_id)
+                WHERE {}
+                GROUP BY 1, 2, 3, 4, 5
+                ORDER BY COALESCE(a.created_at, a.start_time, a.id) ASC
+            ",
+            filter.to_query(&mut params)
         ))?;
 
+        let mut info = vec![];
         let mut rows = stmt.query(&params[..])?;
-        let Some(count) = rows.next()? else {
-            return Err(anyhow!("bad query result"));
-        };
+        while let Some(row) = rows.next()? {
+            info.push(ActivityInfo {
+                file_name: row.get_unwrap(0),
+                title: row.get_unwrap(1),
+                start_time: row.get_unwrap(2),
+                properties: serde_json::from_str(&row.get_unwrap::<_, String>(3))
+                    .expect("activity `properties` should contain valid JSON"),
+                created_at: row.get_unwrap(4),
+                tile_count: row.get_unwrap(5),
+            });
+        }
 
-        Ok(count.get_unwrap(0))
+        Ok(info)
     }
 
     pub fn count_properties(&self) -> Result<HashMap<String, usize>> {

@@ -286,7 +286,7 @@ async fn get_activity_count(
 ) -> impl IntoResponse {
     let filter = ActivityFilter::new(params.before, params.after, params.filter);
     let num_activities = db
-        .count_activities(&filter)
+        .activity_count(&filter)
         .expect("failed to count activities");
 
     (StatusCode::OK, num_activities.to_string()).into_response()
@@ -442,7 +442,7 @@ fn cached_response(status: StatusCode, etag: &str) -> axum::http::response::Buil
 // would you want to?
 fn generate_etag(db: &Database) -> Result<String, StatusCode> {
     let activity_count = db
-        .count_activities(&ActivityFilter::default())
+        .activity_count(&ActivityFilter::default())
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let mut hasher = DefaultHasher::new();
