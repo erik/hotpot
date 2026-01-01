@@ -120,7 +120,6 @@ impl ClippedTiles {
 #[derive(Clone)]
 pub struct RawActivity {
     pub title: Option<String>,
-
     pub start_time: Option<OffsetDateTime>,
     pub tracks: MultiLineString,
     pub properties: HashMap<String, serde_json::Value>,
@@ -409,13 +408,14 @@ pub fn upsert(
     let num_rows = conn.execute(
         "\
         INSERT OR REPLACE \
-        INTO activities (file, title, start_time, properties) \
-        VALUES (?, ?, ?, ?)",
+        INTO activities (file, title, start_time, properties, created_at) \
+        VALUES (?, ?, ?, ?, ?)",
         params![
             name,
             activity.title,
             activity.start_time,
             serde_json::to_string(&activity.properties)?,
+            OffsetDateTime::now_utc(),
         ],
     )?;
 
