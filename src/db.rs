@@ -50,6 +50,12 @@ CREATE TABLE IF NOT EXISTS strava_tokens (
 );
 ";
 
+const MIGRATIONS: [&str; 1] = [
+    // Keep track of when activities are added to the DB separately from when
+    // they occurred.
+    "ALTER TABLE activities ADD COLUMN created_at INTEGER;",
+];
+
 pub struct Database {
     pool: r2d2::Pool<SqliteConnectionManager>,
     pub config: Config,
@@ -119,13 +125,22 @@ impl Database {
     }
 }
 
-// NOTE: we can use PRAGMA.user_version to track schema versions
-// https://www.sqlite.org/pragma.html#pragma_user_version
 fn apply_schema(conn: &mut rusqlite::Connection) -> Result<()> {
     let tx = conn.transaction()?;
     tx.execute_batch(SCHEMA)?;
-    tx.commit()?;
 
+    let version: usize = tx.query_row("PRAGMA user_version;", [], |r| r.get(0))?;
+    if version < MIGRATIONS.len() {
+        for sql in MIGRATIONS.iter().skip(version) {
+            tracing::info!("applying migration: `{}`", sql);
+            tx.execute_batch(sql)?;
+        }
+
+        // TODO: can MIGRATIONS.len() be passed as a param? Seeing syntax errors.
+        tx.execute(&format!("PRAGMA user_version = {};", MIGRATIONS.len()), [])?;
+    }
+
+    tx.commit()?;
     Ok(())
 }
 
