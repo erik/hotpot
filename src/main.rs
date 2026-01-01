@@ -22,12 +22,6 @@ mod strava;
 mod tile;
 mod web;
 
-// TODO: move to `date` module, use a `FromStr` impl
-fn try_parse_date(value: &str) -> Result<Date, &'static str> {
-    Date::parse(value, &time::format_description::well_known::Iso8601::DATE)
-        .map_err(|_| "invalid date")
-}
-
 #[derive(Subcommand)]
 enum Commands {
     /// Import activities from GPX, TCX, and FIT files.
@@ -62,11 +56,11 @@ enum Commands {
         zxy: Tile,
 
         /// Select activities before this date (YYYY-MM-DD).
-        #[arg(short, long, value_parser = try_parse_date)]
+        #[arg(short, long, value_parser = date::try_parse)]
         before: Option<Date>,
 
         /// Select activities after this date (YYYY-MM-DD).
-        #[arg(short, long, value_parser = try_parse_date)]
+        #[arg(short, long, value_parser = date::try_parse)]
         after: Option<Date>,
 
         /// Filter activities by arbitrary metadata properties
@@ -108,11 +102,11 @@ enum Commands {
         height: u32,
 
         /// Select activities before this date (YYYY-MM-DD).
-        #[arg(short, long, value_parser = try_parse_date)]
+        #[arg(short, long, value_parser = date::try_parse)]
         before: Option<Date>,
 
         /// Select activities after this date (YYYY-MM-DD).
-        #[arg(short, long, value_parser = try_parse_date)]
+        #[arg(short, long, value_parser = date::try_parse)]
         after: Option<Date>,
 
         /// Filter activities by arbitrary metadata properties

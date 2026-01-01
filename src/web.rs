@@ -438,8 +438,8 @@ fn cached_response(status: StatusCode, etag: &str) -> axum::http::response::Buil
 }
 
 // Right now we assume that if the activity count changes then new data was
-// added. You could trivially come up with a counter-example for this this, but
-// why would you want to?
+// added. You could trivially come up with a counter-example for this, but why
+// would you want to?
 fn generate_etag(db: &Database) -> Result<String, StatusCode> {
     let activity_count = db
         .count_activities(&ActivityFilter::default())
@@ -452,7 +452,6 @@ fn generate_etag(db: &Database) -> Result<String, StatusCode> {
 }
 
 // Check if the request's ETag matches the current content
-// Returns Ok(etag) if content is fresh, Err(StatusCode::NOT_MODIFIED) if not modified
 fn check_etag(db: &Database, headers: &HeaderMap) -> Result<String, StatusCode> {
     let client_etag = headers
         .get(header::IF_NONE_MATCH)
@@ -466,7 +465,6 @@ fn check_etag(db: &Database, headers: &HeaderMap) -> Result<String, StatusCode> 
         return Err(StatusCode::NOT_MODIFIED);
     }
 
-    // ETag not provided by client or didn't match, regenerate response
     Ok(etag)
 }
 

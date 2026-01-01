@@ -29,12 +29,7 @@ impl<'de> serde::de::Visitor<'de> for Visitor<Option<Date>> {
     where
         E: Error,
     {
-        Date::parse(
-            v,
-            &time::format_description::well_known::iso8601::Iso8601::DATE,
-        )
-        .map_err(Error::custom)
-        .map(Some)
+        try_parse(v).map_err(Error::custom).map(Some)
     }
 
     fn visit_none<E>(self) -> Result<Self::Value, E>
@@ -57,4 +52,11 @@ impl<'de> serde::de::Visitor<'de> for Visitor<Option<Date>> {
     {
         Ok(None)
     }
+}
+
+pub fn try_parse(value: &str) -> Result<time::Date, time::error::Parse> {
+    Date::parse(
+        value,
+        &time::format_description::well_known::iso8601::Iso8601::DATE,
+    )
 }
