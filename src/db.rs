@@ -105,12 +105,8 @@ impl Database {
 
     pub fn reset_activities(&self) -> Result<()> {
         let conn = self.connection()?;
-
-        let num_activities = conn.execute("DELETE FROM activities", [])?;
-        let num_tiles = conn.execute("DELETE FROM activity_tiles", [])?;
-        conn.execute_batch("VACUUM")?;
-
-        tracing::info!(num_activities, num_tiles, "Reset database");
+        conn.execute_batch("DELETE FROM activities; DELETE FROM activity_tiles; VACUUM;")?;
+        tracing::info!("database reset");
 
         Ok(())
     }
@@ -129,15 +125,14 @@ fn apply_schema(conn: &mut rusqlite::Connection) -> Result<()> {
     let tx = conn.transaction()?;
     tx.execute_batch(SCHEMA)?;
 
-    let version: usize = tx.query_row("PRAGMA user_version;", [], |r| r.get(0))?;
+    let version: usize = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
     if version < MIGRATIONS.len() {
         for sql in MIGRATIONS.iter().skip(version) {
             tracing::info!("applying migration: `{}`", sql);
             tx.execute_batch(sql)?;
         }
 
-        // TODO: can MIGRATIONS.len() be passed as a param? Seeing syntax errors.
-        tx.execute(&format!("PRAGMA user_version = {};", MIGRATIONS.len()), [])?;
+        tx.pragma_update(None, "user_version", MIGRATIONS.len())?;
     }
 
     tx.commit()?;

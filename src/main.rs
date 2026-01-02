@@ -1,3 +1,4 @@
+use std::backtrace::BacktraceStatus;
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::PathBuf;
@@ -234,7 +235,7 @@ impl GlobalOpts {
                 "in-memory database is not supported for read-only operations"
             ))
         } else {
-            Database::new(&self.db_path)
+            Database::open(&self.db_path)
         }
     }
 
@@ -243,14 +244,18 @@ impl GlobalOpts {
             tracing::warn!("using empty in-memory DB, data will not be persisted");
             Database::memory()
         } else {
-            Database::open(&self.db_path)
+            Database::new(&self.db_path)
         }
     }
 }
 
 fn main() {
-    if let Err(e) = run() {
-        eprintln!("error: {}", e);
+    if let Err(err) = run() {
+        eprintln!("[ERROR] {:?}", err);
+        let bt = err.backtrace();
+        if bt.status() == BacktraceStatus::Captured {
+            eprintln!("{}", bt);
+        }
         std::process::exit(1);
     }
 }
@@ -315,6 +320,11 @@ fn run() -> Result<()> {
             if reset {
                 db.reset_activities()?;
             }
+
+            // Use absolute path for imports to dedupe more effectively
+            let path = path
+                .canonicalize()
+                .map_err(|err| anyhow!("{:?} {}", path, err))?;
 
             activity::import_path(&path, &db, &prop_source)?;
         }

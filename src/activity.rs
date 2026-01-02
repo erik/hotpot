@@ -507,6 +507,7 @@ impl PropertySource {
 
     /// Merge properties from the attribute source into the activity.
     fn enrich(&self, path: &Path, activity: &mut RawActivity) {
+        // /../../export/activities/file.gpx => activities/file.gpx
         let path = path.strip_prefix(&self.base_dir).ok();
         let Some(props) = path.and_then(|p| self.path_props.get(p)) else {
             // We'll get here if there are activities in the import directory which don't have
@@ -520,7 +521,7 @@ impl PropertySource {
     }
 }
 
-pub fn import_path(p: &Path, db: &Database, prop_source: &PropertySource) -> Result<()> {
+pub fn import_path(path: &Path, db: &Database, prop_source: &PropertySource) -> Result<()> {
     let conn = db.connection()?;
 
     // Skip any files that are already in the database.
@@ -531,13 +532,13 @@ pub fn import_path(p: &Path, db: &Database, prop_source: &PropertySource) -> Res
         .collect();
 
     tracing::info!(
-        path = ?p,
+        path = ?path,
         num_known = known_files.len(),
         "starting activity import"
     );
 
     let num_imported = AtomicU32::new(0);
-    WalkDir::new(p)
+    WalkDir::new(path)
         .into_iter()
         .par_bridge()
         .filter_map(|dir| {
