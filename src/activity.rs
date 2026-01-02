@@ -526,34 +526,52 @@ pub fn import_path(path: &Path, db: &Database, prop_source: &PropertySource) -> 
 
     // Skip any files that are already in the database.
     let known_files: HashSet<String> = conn
-        .prepare("SELECT file FROM activities")?
+        .prepare("SELECT DISTINCT file FROM activities")?
         .query_map([], |row| row.get(0))?
         .filter_map(|n| n.ok())
         .collect();
 
     tracing::info!(
         path = ?path,
-        num_known = known_files.len(),
+        count_known_files = known_files.len(),
         "starting activity import"
     );
 
-    let num_imported = AtomicU32::new(0);
+    let imported = AtomicU32::new(0);
+    let skipped = AtomicU32::new(0);
+    let failed = AtomicU32::new(0);
+
     WalkDir::new(path)
         .into_iter()
         .par_bridge()
         .filter_map(|dir| {
             let dir = dir.ok()?;
+            if !dir.file_type().is_file() {
+                return None;
+            }
+
             let path = dir.path();
 
             if !known_files.contains(path.to_str()?) {
                 Some(path.to_owned())
             } else {
+                tracing::debug!(?path, "skipping, already imported");
+                skipped.fetch_add(1, Ordering::Relaxed);
                 None
             }
         })
         .filter_map(|path| {
             let activity = read_file(&path)
-                .map_err(|err| tracing::error!(?path, ?err, "failed to read activity"))
+                .inspect_err(|err| {
+                    tracing::error!(?path, ?err, "failed to read activity");
+                    failed.fetch_add(1, Ordering::Relaxed);
+                })
+                .inspect(|activity| {
+                    if activity.is_none() {
+                        tracing::debug!(?path, "skipping, no track data");
+                        skipped.fetch_add(1, Ordering::Relaxed);
+                    }
+                })
                 .ok()??;
 
             Some((path, activity))
@@ -570,11 +588,18 @@ pub fn import_path(path: &Path, db: &Database, prop_source: &PropertySource) -> 
                 upsert(&mut conn, path.to_str().unwrap(), &activity, &db.config)
                     .expect("insert activity");
 
-                num_imported.fetch_add(1, Ordering::Relaxed);
+                imported.fetch_add(1, Ordering::Relaxed);
             },
         );
 
     conn.execute_batch("VACUUM")?;
-    tracing::info!(?num_imported, "finished import");
+    tracing::info!(
+        ?imported,
+        ?skipped,
+        ?failed,
+        "finished import from {:?}",
+        path
+    );
+
     Ok(())
 }
