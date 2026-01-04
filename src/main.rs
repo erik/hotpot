@@ -273,62 +273,19 @@ fn run() -> Result<()> {
         })
         .init();
 
-    // TODO: pull out into separate function
     match opts.cmd {
         Commands::Activities {
             before,
             after,
             filter,
             print_count,
-        } => {
-            let db = opts.global.database_ro()?;
-
-            let filter = ActivityFilter::new(before, after, filter);
-
-            if print_count {
-                let num_activities = db.activity_count(&filter)?;
-                println!("{}", num_activities);
-                return Ok(());
-            } else {
-                for info in db.activity_info(&filter)? {
-                    println!(
-                        "{}",
-                        serde_json::to_string(&info)
-                            .expect("ActivityStat should serialize to JSON")
-                    );
-                }
-            }
-        }
+        } => command_activity_info(opts.global, before, after, filter, print_count)?,
         Commands::Import {
             path,
             reset,
             join,
             trim,
-        } => {
-            let mut db = opts.global.database()?;
-
-            // TODO: should be persisted to DB
-            if let Some(trim) = trim {
-                db.config.trim_dist = trim;
-            }
-
-            let prop_source = join
-                .map(|csv| PropertySource::from_csv(&csv))
-                .transpose()?
-                .unwrap_or_default();
-
-            if reset {
-                db.reset_activities()?;
-            }
-
-            // Use absolute path for imports to dedupe more effectively
-            let path = path
-                .canonicalize()
-                .map_err(|err| anyhow!("{:?} {}", path, err))?;
-
-            activity::import_path(&path, &db, &prop_source)?;
-        }
-
+        } => command_import_activities(opts.global, path, reset, join, trim)?,
         Commands::Tile {
             zxy,
             width,
@@ -337,22 +294,16 @@ fn run() -> Result<()> {
             before,
             after,
             gradient,
-        } => {
-            let db = opts.global.database_ro()?;
-            let mut file = BufWriter::new(File::create(output)?);
-
-            let filter = ActivityFilter::new(before, after, filter);
-            let gradient = gradient.unwrap_or_else(|| PINKISH.clone());
-            let image = raster::rasterize_tile(zxy, width, &filter, &db)?
-                .map(|raster| raster.apply_gradient(&gradient))
-                .unwrap_or_else(|| {
-                    // note: could also just use RgbaImage::default() here if we don't care about size.
-                    RgbaImage::new(width, width)
-                });
-
-            image.write_to(&mut file, image::ImageFormat::Png)?;
-        }
-
+        } => command_render_tile(
+            opts.global,
+            zxy,
+            width,
+            output,
+            filter,
+            before,
+            after,
+            gradient,
+        )?,
         Commands::Render {
             viewport,
             width,
@@ -362,16 +313,17 @@ fn run() -> Result<()> {
             filter,
             gradient,
             output,
-        } => {
-            let db = opts.global.database_ro()?;
-            let filter = ActivityFilter::new(before, after, filter);
-            let gradient = gradient.unwrap_or_else(|| PINKISH.clone());
-            let mut file = BufWriter::new(File::create(output)?);
-
-            let image = raster::render_view(viewport, &gradient, width, height, &filter, &db)?;
-            image.write_to(&mut file, image::ImageFormat::Png)?;
-        }
-
+        } => command_render_view(
+            opts.global,
+            viewport,
+            width,
+            height,
+            before,
+            after,
+            filter,
+            gradient,
+            output,
+        )?,
         Commands::Serve {
             host,
             port,
@@ -379,53 +331,174 @@ fn run() -> Result<()> {
             render,
             strava_webhook,
             cors,
-        } => {
-            let db = opts.global.database()?;
-
-            let addr = format!("{}:{}", host, port).parse()?;
-            let routes = web::RouteConfig {
-                strava_webhook,
-                upload,
-                render,
-                tiles: true,
-                strava_auth: false,
-            };
-
-            let config = web::Config {
-                cors,
-                routes,
-                upload_token: std::env::var("HOTPOT_UPLOAD_TOKEN").ok(),
-            };
-
-            web::run_blocking(addr, db, config)?;
-        }
-
-        Commands::StravaAuth { host, port } => {
-            let db = opts.global.database()?;
-            let addr = format!("{}:{}", host, port).parse()?;
-            let routes = web::RouteConfig {
-                strava_auth: true,
-                tiles: false,
-                strava_webhook: false,
-                upload: false,
-                render: false,
-            };
-
-            let config = web::Config {
-                routes,
-                cors: false,
-                upload_token: None,
-            };
-
-            println!(
-                "==============================\
-                \nOpen http://{}/strava/auth in your browser.\
-                \n==============================",
-                addr
-            );
-            web::run_blocking(addr, db, config)?;
-        }
+        } => command_serve(
+            opts.global,
+            host,
+            port,
+            upload,
+            render,
+            strava_webhook,
+            cors,
+        )?,
+        Commands::StravaAuth { host, port } => command_strava_auth(opts.global, host, port)?,
     };
 
     Ok(())
+}
+
+fn command_activity_info(
+    global: GlobalOpts,
+    before: Option<Date>,
+    after: Option<Date>,
+    filter: Option<PropertyFilter>,
+    print_count: bool,
+) -> Result<()> {
+    let db = global.database_ro()?;
+    let filter = ActivityFilter::new(before, after, filter);
+
+    if print_count {
+        let num_activities = db.activity_count(&filter)?;
+        println!("{}", num_activities);
+    } else {
+        for info in db.activity_info(&filter)? {
+            println!(
+                "{}",
+                serde_json::to_string(&info).expect("ActivityStat should serialize to JSON")
+            );
+        }
+    }
+    Ok(())
+}
+
+fn command_import_activities(
+    global: GlobalOpts,
+    path: PathBuf,
+    reset: bool,
+    join: Option<PathBuf>,
+    trim: Option<f64>,
+) -> Result<()> {
+    let mut db = global.database()?;
+
+    // TODO: should be persisted to DB
+    if let Some(trim) = trim {
+        db.config.trim_dist = trim;
+    }
+
+    let prop_source = join
+        .map(|csv| PropertySource::from_csv(&csv))
+        .transpose()?
+        .unwrap_or_default();
+
+    if reset {
+        db.reset_activities()?;
+    }
+
+    // Use absolute path for imports to dedupe more effectively
+    let path = path
+        .canonicalize()
+        .map_err(|err| anyhow!("{:?} {}", path, err))?;
+
+    activity::import_path(&path, &db, &prop_source)
+}
+
+fn command_render_tile(
+    global: GlobalOpts,
+    zxy: Tile,
+    width: u32,
+    output: PathBuf,
+    filter: Option<PropertyFilter>,
+    before: Option<Date>,
+    after: Option<Date>,
+    gradient: Option<LinearGradient>,
+) -> Result<()> {
+    let db = global.database_ro()?;
+    let mut file = BufWriter::new(File::create(output)?);
+
+    let filter = ActivityFilter::new(before, after, filter);
+    let gradient = gradient.unwrap_or_else(|| PINKISH.clone());
+    let image = raster::rasterize_tile(zxy, width, &filter, &db)?
+        .map(|raster| raster.apply_gradient(&gradient))
+        .unwrap_or_else(|| {
+            // note: could also just use RgbaImage::default() here if we don't care about size.
+            RgbaImage::new(width, width)
+        });
+
+    image.write_to(&mut file, image::ImageFormat::Png)?;
+    Ok(())
+}
+
+fn command_render_view(
+    global: GlobalOpts,
+    viewport: WebMercatorViewport,
+    width: u32,
+    height: u32,
+    before: Option<Date>,
+    after: Option<Date>,
+    filter: Option<PropertyFilter>,
+    gradient: Option<LinearGradient>,
+    output: PathBuf,
+) -> Result<()> {
+    let db = global.database_ro()?;
+    let filter = ActivityFilter::new(before, after, filter);
+    let gradient = gradient.unwrap_or_else(|| PINKISH.clone());
+    let mut file = BufWriter::new(File::create(output)?);
+
+    let image = raster::render_view(viewport, &gradient, width, height, &filter, &db)?;
+    image.write_to(&mut file, image::ImageFormat::Png)?;
+    Ok(())
+}
+
+fn command_serve(
+    global: GlobalOpts,
+    host: String,
+    port: u16,
+    upload: bool,
+    render: bool,
+    strava_webhook: bool,
+    cors: bool,
+) -> Result<()> {
+    let db = global.database()?;
+
+    let addr = format!("{}:{}", host, port).parse()?;
+    let routes = web::RouteConfig {
+        strava_webhook,
+        upload,
+        render,
+        tiles: true,
+        strava_auth: false,
+    };
+
+    let config = web::Config {
+        cors,
+        routes,
+        upload_token: std::env::var("HOTPOT_UPLOAD_TOKEN").ok(),
+    };
+
+    web::run_blocking(addr, db, config)
+}
+
+fn command_strava_auth(global: GlobalOpts, host: String, port: u16) -> Result<()> {
+    let db = global.database()?;
+    let addr = format!("{}:{}", host, port).parse()?;
+    let routes = web::RouteConfig {
+        strava_auth: true,
+        tiles: false,
+        strava_webhook: false,
+        upload: false,
+        render: false,
+    };
+
+    let config = web::Config {
+        routes,
+        cors: false,
+        upload_token: None,
+    };
+
+    println!(
+        "==============================\
+        \nOpen http://{}/strava/auth in your browser.\
+        \n==============================",
+        addr
+    );
+    web::run_blocking(addr, db, config)
 }
