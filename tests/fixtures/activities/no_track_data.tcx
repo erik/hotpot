@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TrainingCenterDatabase xsi:schemaLocation="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2 http://www.garmin.com/xmlschemas/TrainingCenterDatabasev2.xsd" xmlns:ns5="http://www.garmin.com/xmlschemas/ActivityGoals/v1" xmlns:ns3="http://www.garmin.com/xmlschemas/ActivityExtension/v2" xmlns:ns2="http://www.garmin.com/xmlschemas/UserProfile/v2" xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:ns4="http://www.garmin.com/xmlschemas/ProfileExtension/v1" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+            <Activities>
+              <Activity Sport="Biking">
+      <Id>2022-06-02T16:22:25Z</Id>
+      <Lap StartTime="2022-06-02T16:22:25Z">
+        <TotalTimeSeconds>240</TotalTimeSeconds>
+        <DistanceMeters>2051.72</DistanceMeters>
+        <MaximumSpeed>8.88888888888889</MaximumSpeed>
+        <Calories>33</Calories>
+        <AverageHeartRateBpm>
+          <Value>102</Value>
+        </AverageHeartRateBpm>
+        <MaximumHeartRateBpm>
+          <Value>110</Value>
+        </MaximumHeartRateBpm>
+        <Intensity>Active</Intensity>
+        <Cadence>83</Cadence>
+        <TriggerMethod>Time</TriggerMethod>
+        <Track>
+          <Trackpoint>
+            <Time>2022-06-02T16:22:25Z</Time>
+            <DistanceMeters>0</DistanceMeters>
+            <HeartRateBpm>
+              <Value>93</Value>
+            </HeartRateBpm>
+            <Cadence>74</Cadence>
+            <Extensions>
+              <ns3:TPX>
+                <ns3:Watts>142</ns3:Watts>
+                <ns3:Speed>6.75</ns3:Speed>
+              </ns3:TPX>
+            </Extensions>
+          </Trackpoint>
+          <Trackpoint>
+            <Time>2022-06-02T16:22:26Z</Time>
+            <DistanceMeters>7.28</DistanceMeters>
+            <HeartRateBpm>
+              <Value>93</Value>
+            </HeartRateBpm>
+            <Cadence>74</Cadence>
+            <Extensions>
+              <ns3:TPX>
+                <ns3:Watts>142</ns3:Watts>
+                <ns3:Speed>7.27777777777778</ns3:Speed>
+              </ns3:TPX>
+            </Extensions>
+          </Trackpoint>
+        </Track>
+        <Extensions>
+          <ns3:LX>
+            <AvgSpeed xmlns:ns3="http://www.garmin.com/xmlschemas/ActivityExtension/v2" xmlns="">8.5413785154449</AvgSpeed>
+          </ns3:LX>
+          <ns3:LX>
+            <ns3:MaxBikeCadence>86</ns3:MaxBikeCadence>
+          </ns3:LX>
+          <ns3:LX>
+            <ns3:MaxWatts>143</ns3:MaxWatts>
+          </ns3:LX>
+          <ns3:LX>
+            <ns3:AvgWatts>142</ns3:AvgWatts>
+          </ns3:LX>
+        </Extensions>
+      </Lap>
+      <Notes />
+      <Creator xsi:type="Application_t">
+        <Name>TrainerRoad</Name>
+      </Creator>
+    </Activity>
+            </Activities>
+
+          </TrainingCenterDatabase>

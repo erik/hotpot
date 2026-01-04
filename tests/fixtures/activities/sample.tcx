@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2
+  http://www.garmin.com/xmlschemas/TrainingCenterDatabasev2.xsd">
+
+  <Activities>
+    <Activity Sport="Biking">
+      <Id>2026-01-02T10:00:00Z</Id>
+      <Lap StartTime="2026-01-02T10:00:00Z">
+        <TotalTimeSeconds>300</TotalTimeSeconds>
+        <DistanceMeters>2500</DistanceMeters>
+        <MaximumSpeed>10.5</MaximumSpeed>
+        <Calories>120</Calories>
+        <AverageHeartRateBpm><Value>140</Value></AverageHeartRateBpm>
+        <MaximumHeartRateBpm><Value>155</Value></MaximumHeartRateBpm>
+        <Cadence>85</Cadence>
+        <Intensity>Active</Intensity>
+        <TriggerMethod>Manual</TriggerMethod>
+
+        <Track>
+          <Trackpoint>
+            <Time>2026-01-02T10:00:00Z</Time>
+            <Position><LatitudeDegrees>42.0001</LatitudeDegrees><LongitudeDegrees>-71.0001</LongitudeDegrees></Position>
+            <DistanceMeters>0</DistanceMeters>
+            <HeartRateBpm><Value>138</Value></HeartRateBpm>
+            <Cadence>82</Cadence>
+            <Extensions>
+              <TPX xmlns="http://www.garmin.com/xmlschemas/ActivityExtension/v2">
+                <Speed>8.2</Speed>
+              </TPX>
+            </Extensions>
+          </Trackpoint>
+
+          <Trackpoint>
+            <Time>2026-01-02T10:02:30Z</Time>
+            <Position><LatitudeDegrees>42.0005</LatitudeDegrees><LongitudeDegrees>-71.0005</LongitudeDegrees></Position>
+            <DistanceMeters>1250</DistanceMeters>
+            <HeartRateBpm><Value>145</Value></HeartRateBpm>
+            <Cadence>88</Cadence>
+            <Extensions>
+              <TPX xmlns="http://www.garmin.com/xmlschemas/ActivityExtension/v2">
+                <Speed>9.1</Speed>
+              </TPX>
+            </Extensions>
+          </Trackpoint>
+
+          <Trackpoint>
+            <Time>2026-01-02T10:05:00Z</Time>
+            <Position><LatitudeDegrees>42.0009</LatitudeDegrees><LongitudeDegrees>-71.0009</LongitudeDegrees></Position>
+            <DistanceMeters>2500</DistanceMeters>
+            <HeartRateBpm><Value>150</Value></HeartRateBpm>
+            <Cadence>85</Cadence>
+            <Extensions>
+              <TPX xmlns="http://www.garmin.com/xmlschemas/ActivityExtension/v2">
+                <Speed>10.0</Speed>
+              </TPX>
+            </Extensions>
+          </Trackpoint>
+        </Track>
+      </Lap>
+    </Activity>
+  </Activities>
+</TrainingCenterDatabase>

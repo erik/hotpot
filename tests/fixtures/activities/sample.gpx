@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx creator="hacks" version="1.1" xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
+  <metadata>
+    <name>20250816 gravel return</name>
+    <time>2025-08-16T10:18:54.087Z</time>
+  </metadata>
+  <trk>
+    <name>20250816 gravel return</name>
+    <trkseg>      <trkpt lat="52.489478" lon="13.377609">
+        <ele>43.8</ele>
+      </trkpt>
+      <trkpt lat="52.489465" lon="13.377443">
+        <ele>43.9</ele>
+      </trkpt>
+      <trkpt lat="52.489428" lon="13.376965">
+        <ele>44</ele>
+      </trkpt>
+      <trkpt lat="52.489422" lon="13.376905">
+        <ele>44.1</ele>
+      </trkpt>
+      <trkpt lat="52.489403" lon="13.376698">
+        <ele>44.1</ele>
+      </trkpt>
+      <trkpt lat="52.489532" lon="13.376716">
+        <ele>44.2</ele>
+      </trkpt>
+      <trkpt lat="52.489568" lon="13.376721">
+        <ele>44.2</ele>
+      </trkpt>
+      <trkpt lat="52.489921" lon="13.376731">
+        <ele>44.3</ele>
+      </trkpt>
+      <trkpt lat="52.490137" lon="13.376738">
+        <ele>44</ele>
+      </trkpt>
+    </trkseg>
+  </trk>
+</gpx>

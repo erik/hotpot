@@ -1,0 +1,5 @@
+filename,distance,elevation_gain,activity_type,duration
+activities/sample.gpx,25000,500,ride,3600
+activities/sample.tcx,10000,100,run,2400
+activities/sample.fit,5000,50,workout,1800
+activities/missing.gpx,,,,
