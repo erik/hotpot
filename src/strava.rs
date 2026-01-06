@@ -442,5 +442,7 @@ async fn receive_webhook(
         return (StatusCode::INTERNAL_SERVER_ERROR, "error writing activity");
     }
 
+    tracing::info!("Imported Strava activity {} via webhook", activity.id);
+
     (StatusCode::OK, "added!")
 }
