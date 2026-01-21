@@ -26,175 +26,193 @@ mod web;
 #[derive(Subcommand)]
 enum Commands {
     /// Query information about activities currently stored in the database.
-    Activities {
-        /// Select activities before this date (YYYY-MM-DD).
-        #[arg(short, long, value_parser = date::try_parse)]
-        before: Option<Date>,
-
-        /// Select activities after this date (YYYY-MM-DD).
-        #[arg(short, long, value_parser = date::try_parse)]
-        after: Option<Date>,
-
-        /// Filter activities by arbitrary metadata properties
-        ///
-        /// {"elev_gain": { ">": 1000 }}
-        #[arg(short = 'f', long = "filter")]
-        filter: Option<PropertyFilter>,
-
-        /// Print count of matching activities rather than printing them out
-        #[arg(short = 'c', long = "count", default_value = "false")]
-        print_count: bool,
-    },
+    Activities(ActivitiesCmdArgs),
 
     /// Import activities from GPX, TCX, and FIT files.
     ///
     /// Imports will be deduplicated (based on file name), so it's safe to run
     /// this twice on the same directory.
-    Import {
-        /// Path to activity data.
-        ///
-        /// Can also pass a path to a single file.
-        path: PathBuf,
-
-        /// Remove all existing activity data before importing.
-        #[arg(long, default_value = "false")]
-        reset: bool,
-
-        /// Hide points within given distance (meters) of start/end of activity.
-        #[arg(short, long)]
-        trim: Option<f64>,
-
-        /// Path to a CSV with additional activity metadata.
-        ///
-        /// The `filename` column contains paths (relative to the CSV file)
-        /// which will assign properties to each parsed activity.
-        #[arg(long)]
-        join: Option<PathBuf>,
-    },
+    Import(ImportCmdArgs),
 
     /// Render a single XYZ tile as a PNG.
-    Tile {
-        /// Tile to render, in "z/x/y" format.
-        zxy: Tile,
+    Tile(TileCmdArgs),
 
-        /// Select activities before this date (YYYY-MM-DD).
-        #[arg(short, long, value_parser = date::try_parse)]
-        before: Option<Date>,
-
-        /// Select activities after this date (YYYY-MM-DD).
-        #[arg(short, long, value_parser = date::try_parse)]
-        after: Option<Date>,
-
-        /// Filter activities by arbitrary metadata properties
-        ///
-        /// {"elev_gain": { ">": 1000 }}
-        #[arg(short, long)]
-        filter: Option<PropertyFilter>,
-
-        /// Custom color gradient to use for heatmap.
-        ///
-        /// Represented as a string of threshold values and colors, separated
-        /// by `;`. Colors may be written as `RGB`, `RRGGBB`, or `RRGGBBAA`
-        ///
-        /// For example: `0:001122;25:789;50:334455;75:ffffff33`
-        #[arg(short, long)]
-        gradient: Option<LinearGradient>,
-
-        /// Width of output image in pixels.
-        #[arg(short, long, default_value = "1024")]
-        width: u32,
-
-        /// Path to output image.
-        #[arg(short, long, default_value = "tile.png")]
-        output: PathBuf,
-    },
-
-    /// Render an arbitrary region, defined by a bounding box
-    Render {
-        /// Coordinates in order of "west,south,east,north"
-        ///
-        /// Use a tool like https://boundingbox.klokantech.com/ to generate.
-        #[arg(long = "bounds")]
-        viewport: WebMercatorViewport,
-
-        /// Width of output image in pixels.
-        #[arg(short, long, default_value = "1024")]
-        width: u32,
-
-        /// Height of output image in pixels.
-        #[arg(short = 'H', long, default_value = "1024")]
-        height: u32,
-
-        /// Select activities before this date (YYYY-MM-DD).
-        #[arg(short, long, value_parser = date::try_parse)]
-        before: Option<Date>,
-
-        /// Select activities after this date (YYYY-MM-DD).
-        #[arg(short, long, value_parser = date::try_parse)]
-        after: Option<Date>,
-
-        /// Filter activities by arbitrary metadata properties
-        ///
-        /// {"elev_gain": { ">": 1000 }}
-        #[arg(short = 'f', long = "filter")]
-        filter: Option<PropertyFilter>,
-
-        /// Custom color gradient to use for heatmap.
-        ///
-        /// Represented as a string of threshold values and colors, separated
-        /// by `;`. Colors may be written as `RGB`, `RRGGBB`, or `RRGGBBAA`
-        ///
-        /// For example: `0:001122;25:789;50:334455;75:ffffff33`
-        #[arg(short, long)]
-        gradient: Option<LinearGradient>,
-
-        /// Path to output image.
-        #[arg(short, long, default_value = "tile.png")]
-        output: PathBuf,
-    },
+    /// Render an arbitrary region, defined by a bounding box.
+    Render(RenderCmdArgs),
 
     /// Start an XYZ raster tile server.
-    Serve {
-        /// Host to listen on.
-        #[arg(short = 'H', long, default_value = "127.0.0.1")]
-        host: String,
-
-        /// Port to listen on.
-        #[arg(short, long, default_value = "8080")]
-        port: u16,
-
-        /// Allow uploading new activities via `/upload` endpoint.
-        ///
-        /// Remember to set `HOTPOT_UPLOAD_TOKEN` environment variable.
-        #[arg(long, default_value = "false")]
-        upload: bool,
-
-        /// Allow exporting arbitrary viewports as images via `/render`
-        /// endpoint.
-        #[arg(long, default_value = "false")]
-        render: bool,
-
-        /// Enable Strava activity webhook
-        ///
-        /// Use `strava-auth` subcommand to grab OAuth tokens.
-        #[arg(long, default_value = "false")]
-        strava_webhook: bool,
-
-        /// Allow cross origin requests (use CORS headers)
-        #[arg(long, default_value = "false")]
-        cors: bool,
-    },
+    Serve(ServeCmdArgs),
 
     /// Authenticate with Strava to fetch OAuth tokens for webhook.
-    StravaAuth {
-        /// Host to listen on
-        #[arg(short = 'H', long, default_value = "127.0.0.1")]
-        host: String,
+    StravaAuth(StravaAuthCmdArgs),
+}
 
-        /// Port to listen on
-        #[arg(short, long, default_value = "8080")]
-        port: u16,
-    },
+#[derive(Args)]
+struct ActivitiesCmdArgs {
+    /// Select activities before this date (YYYY-MM-DD).
+    #[arg(short, long, value_parser = date::try_parse)]
+    before: Option<Date>,
+
+    /// Select activities after this date (YYYY-MM-DD).
+    #[arg(short, long, value_parser = date::try_parse)]
+    after: Option<Date>,
+
+    /// Filter activities by arbitrary metadata properties
+    ///
+    /// {"elev_gain": { ">": 1000 }}
+    #[arg(short = 'f', long = "filter")]
+    filter: Option<PropertyFilter>,
+
+    /// Print count of matching activities rather than printing them out
+    #[arg(short = 'c', long = "count", default_value = "false")]
+    print_count: bool,
+}
+
+#[derive(Args)]
+struct ImportCmdArgs {
+    /// Path to activity data.
+    ///
+    /// Can also pass a path to a single file.
+    path: PathBuf,
+
+    /// Remove all existing activity data before importing.
+    #[arg(long, default_value = "false")]
+    reset: bool,
+
+    /// Hide points within given distance (meters) of start/end of activity.
+    #[arg(short, long)]
+    trim: Option<f64>,
+
+    /// Path to a CSV with additional activity metadata.
+    ///
+    /// The `filename` column contains paths (relative to the CSV file)
+    /// which will assign properties to each parsed activity.
+    #[arg(long)]
+    join: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct TileCmdArgs {
+    /// Tile to render, in "z/x/y" format.
+    zxy: Tile,
+
+    /// Select activities before this date (YYYY-MM-DD).
+    #[arg(short, long, value_parser = date::try_parse)]
+    before: Option<Date>,
+
+    /// Select activities after this date (YYYY-MM-DD).
+    #[arg(short, long, value_parser = date::try_parse)]
+    after: Option<Date>,
+
+    /// Filter activities by arbitrary metadata properties
+    ///
+    /// {"elev_gain": { ">": 1000 }}
+    #[arg(short, long)]
+    filter: Option<PropertyFilter>,
+
+    /// Custom color gradient to use for heatmap.
+    ///
+    /// Represented as a string of threshold values and colors, separated
+    /// by `;`. Colors may be written as `RGB`, `RRGGBB`, or `RRGGBBAA`
+    ///
+    /// For example: `0:001122;25:789;50:334455;75:ffffff33`
+    #[arg(short, long)]
+    gradient: Option<LinearGradient>,
+
+    /// Width of output image in pixels.
+    #[arg(short, long, default_value = "1024")]
+    width: u32,
+
+    /// Path to output image.
+    #[arg(short, long, default_value = "tile.png")]
+    output: PathBuf,
+}
+
+#[derive(Args)]
+struct RenderCmdArgs {
+    /// Coordinates in order of "west,south,east,north"
+    ///
+    /// Use a tool like https://boundingbox.klokantech.com/ to generate.
+    #[arg(long = "bounds")]
+    viewport: WebMercatorViewport,
+
+    /// Width of output image in pixels.
+    #[arg(short, long, default_value = "1024")]
+    width: u32,
+
+    /// Height of output image in pixels.
+    #[arg(short = 'H', long, default_value = "1024")]
+    height: u32,
+
+    /// Select activities before this date (YYYY-MM-DD).
+    #[arg(short, long, value_parser = date::try_parse)]
+    before: Option<Date>,
+
+    /// Select activities after this date (YYYY-MM-DD).
+    #[arg(short, long, value_parser = date::try_parse)]
+    after: Option<Date>,
+
+    /// Filter activities by arbitrary metadata properties
+    ///
+    /// {"elev_gain": { ">": 1000 }}
+    #[arg(short = 'f', long = "filter")]
+    filter: Option<PropertyFilter>,
+
+    /// Custom color gradient to use for heatmap.
+    ///
+    /// Represented as a string of threshold values and colors, separated
+    /// by `;`. Colors may be written as `RGB`, `RRGGBB`, or `RRGGBBAA`
+    ///
+    /// For example: `0:001122;25:789;50:334455;75:ffffff33`
+    #[arg(short, long)]
+    gradient: Option<LinearGradient>,
+
+    /// Path to output image.
+    #[arg(short, long, default_value = "tile.png")]
+    output: PathBuf,
+}
+
+#[derive(Args)]
+struct ServeCmdArgs {
+    /// Host to listen on.
+    #[arg(short = 'H', long, default_value = "127.0.0.1")]
+    host: String,
+
+    /// Port to listen on.
+    #[arg(short, long, default_value = "8080")]
+    port: u16,
+
+    /// Allow uploading new activities via `/upload` endpoint.
+    ///
+    /// Remember to set `HOTPOT_UPLOAD_TOKEN` environment variable.
+    #[arg(long, default_value = "false")]
+    upload: bool,
+
+    /// Allow exporting arbitrary viewports as images via `/render`
+    /// endpoint.
+    #[arg(long, default_value = "false")]
+    render: bool,
+
+    /// Enable Strava activity webhook
+    ///
+    /// Use `strava-auth` subcommand to grab OAuth tokens.
+    #[arg(long, default_value = "false")]
+    strava_webhook: bool,
+
+    /// Allow cross origin requests (use CORS headers)
+    #[arg(long, default_value = "false")]
+    cors: bool,
+}
+
+#[derive(Args)]
+struct StravaAuthCmdArgs {
+    /// Host to listen on
+    #[arg(short = 'H', long, default_value = "127.0.0.1")]
+    host: String,
+
+    /// Port to listen on
+    #[arg(short, long, default_value = "8080")]
+    port: u16,
 }
 
 #[derive(Args)]
@@ -274,85 +292,24 @@ fn run() -> Result<()> {
         .init();
 
     match opts.cmd {
-        Commands::Activities {
-            before,
-            after,
-            filter,
-            print_count,
-        } => command_activity_info(opts.global, before, after, filter, print_count)?,
-        Commands::Import {
-            path,
-            reset,
-            join,
-            trim,
-        } => command_import_activities(opts.global, path, reset, join, trim)?,
-        Commands::Tile {
-            zxy,
-            width,
-            output,
-            filter,
-            before,
-            after,
-            gradient,
-        } => command_render_tile(
-            opts.global,
-            zxy,
-            width,
-            output,
-            filter,
-            before,
-            after,
-            gradient,
-        )?,
-        Commands::Render {
-            viewport,
-            width,
-            height,
-            before,
-            after,
-            filter,
-            gradient,
-            output,
-        } => command_render_view(
-            opts.global,
-            viewport,
-            width,
-            height,
-            before,
-            after,
-            filter,
-            gradient,
-            output,
-        )?,
-        Commands::Serve {
-            host,
-            port,
-            upload,
-            render,
-            strava_webhook,
-            cors,
-        } => command_serve(
-            opts.global,
-            host,
-            port,
-            upload,
-            render,
-            strava_webhook,
-            cors,
-        )?,
-        Commands::StravaAuth { host, port } => command_strava_auth(opts.global, host, port)?,
+        Commands::Activities(args) => command_activity_info(opts.global, args)?,
+        Commands::Import(args) => command_import_activities(opts.global, args)?,
+        Commands::Tile(args) => command_render_tile(opts.global, args)?,
+        Commands::Render(args) => command_render_view(opts.global, args)?,
+        Commands::Serve(args) => command_serve(opts.global, args)?,
+        Commands::StravaAuth(args) => command_strava_auth(opts.global, args)?,
     };
 
     Ok(())
 }
 
-fn command_activity_info(
-    global: GlobalOpts,
-    before: Option<Date>,
-    after: Option<Date>,
-    filter: Option<PropertyFilter>,
-    print_count: bool,
-) -> Result<()> {
+fn command_activity_info(global: GlobalOpts, args: ActivitiesCmdArgs) -> Result<()> {
+    let ActivitiesCmdArgs {
+        before,
+        after,
+        filter,
+        print_count,
+    } = args;
     let db = global.database_ro()?;
     let filter = ActivityFilter::new(before, after, filter);
 
@@ -370,13 +327,13 @@ fn command_activity_info(
     Ok(())
 }
 
-fn command_import_activities(
-    global: GlobalOpts,
-    path: PathBuf,
-    reset: bool,
-    join: Option<PathBuf>,
-    trim: Option<f64>,
-) -> Result<()> {
+fn command_import_activities(global: GlobalOpts, args: ImportCmdArgs) -> Result<()> {
+    let ImportCmdArgs {
+        path,
+        reset,
+        join,
+        trim,
+    } = args;
     let mut db = global.database()?;
 
     // TODO: should be persisted to DB
@@ -401,16 +358,16 @@ fn command_import_activities(
     activity::import_path(&path, &db, &prop_source)
 }
 
-fn command_render_tile(
-    global: GlobalOpts,
-    zxy: Tile,
-    width: u32,
-    output: PathBuf,
-    filter: Option<PropertyFilter>,
-    before: Option<Date>,
-    after: Option<Date>,
-    gradient: Option<LinearGradient>,
-) -> Result<()> {
+fn command_render_tile(global: GlobalOpts, args: TileCmdArgs) -> Result<()> {
+    let TileCmdArgs {
+        zxy,
+        width,
+        output,
+        filter,
+        before,
+        after,
+        gradient,
+    } = args;
     let db = global.database_ro()?;
     let mut file = BufWriter::new(File::create(output)?);
 
@@ -427,17 +384,17 @@ fn command_render_tile(
     Ok(())
 }
 
-fn command_render_view(
-    global: GlobalOpts,
-    viewport: WebMercatorViewport,
-    width: u32,
-    height: u32,
-    before: Option<Date>,
-    after: Option<Date>,
-    filter: Option<PropertyFilter>,
-    gradient: Option<LinearGradient>,
-    output: PathBuf,
-) -> Result<()> {
+fn command_render_view(global: GlobalOpts, args: RenderCmdArgs) -> Result<()> {
+    let RenderCmdArgs {
+        viewport,
+        width,
+        height,
+        before,
+        after,
+        filter,
+        gradient,
+        output,
+    } = args;
     let db = global.database_ro()?;
     let filter = ActivityFilter::new(before, after, filter);
     let gradient = gradient.unwrap_or_else(|| PINKISH.clone());
@@ -448,15 +405,15 @@ fn command_render_view(
     Ok(())
 }
 
-fn command_serve(
-    global: GlobalOpts,
-    host: String,
-    port: u16,
-    upload: bool,
-    render: bool,
-    strava_webhook: bool,
-    cors: bool,
-) -> Result<()> {
+fn command_serve(global: GlobalOpts, args: ServeCmdArgs) -> Result<()> {
+    let ServeCmdArgs {
+        host,
+        port,
+        upload,
+        render,
+        strava_webhook,
+        cors,
+    } = args;
     let db = global.database()?;
 
     let addr = format!("{}:{}", host, port).parse()?;
@@ -477,7 +434,8 @@ fn command_serve(
     web::run_blocking(addr, db, config)
 }
 
-fn command_strava_auth(global: GlobalOpts, host: String, port: u16) -> Result<()> {
+fn command_strava_auth(global: GlobalOpts, args: StravaAuthCmdArgs) -> Result<()> {
+    let StravaAuthCmdArgs { host, port } = args;
     let db = global.database()?;
     let addr = format!("{}:{}", host, port).parse()?;
     let routes = web::RouteConfig {
