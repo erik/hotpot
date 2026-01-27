@@ -183,6 +183,10 @@ async fn index(State(AppState { config, db, .. }): State<AppState>) -> impl Into
             "{}".to_string()
         });
 
+    let default_filter = serde_json::to_string(
+        &db.config.default_filter.as_ref().map(|f| f.as_inner())
+    ).unwrap_or_else(|_| "null".to_string());
+
     // Dynamically inject config
     let html = html.replace(
         "// $INJECT$",
@@ -191,8 +195,9 @@ async fn index(State(AppState { config, db, .. }): State<AppState>) -> impl Into
             globalThis.UPLOADS_ENABLED = {};
             globalThis.RENDER_ENABLED = {};
             globalThis.ACTIVITY_PROPERTIES = {};
+            globalThis.DEFAULT_FILTER = {};
         ",
-            config.routes.upload, config.routes.render, properties,
+            config.routes.upload, config.routes.render, properties, default_filter,
         )
         .as_str(),
     );
@@ -284,7 +289,7 @@ async fn get_activity_count(
     State(AppState { db, .. }): State<AppState>,
     Query(params): Query<RenderQueryParams>,
 ) -> impl IntoResponse {
-    let filter = ActivityFilter::new(params.before, params.after, params.filter);
+    let filter = ActivityFilter::with_config(params.before, params.after, params.filter, &db.config);
     let num_activities = db
         .activity_count(&filter)
         .expect("failed to count activities");
@@ -316,7 +321,7 @@ async fn render_viewport(
             .into_response();
     }
 
-    let filter = ActivityFilter::new(params.before, params.after, params.filter);
+    let filter = ActivityFilter::with_config(params.before, params.after, params.filter, &db.config);
 
     let etag = match check_etag(&db, &headers) {
         Ok(etag) => etag,
@@ -355,7 +360,7 @@ async fn render_tile(
         return StatusCode::NOT_FOUND.into_response();
     }
 
-    let filter = ActivityFilter::new(params.before, params.after, params.filter);
+    let filter = ActivityFilter::with_config(params.before, params.after, params.filter, &db.config);
 
     let etag = match check_etag(&db, &headers) {
         Ok(etag) => etag,

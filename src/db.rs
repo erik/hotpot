@@ -150,6 +150,8 @@ pub struct Config {
     pub tile_extent: u32,
     /// Distance to trim start/end of activities, in meters.
     pub trim_dist: f64,
+    /// Default filter to apply when no filter is specified.
+    pub default_filter: Option<PropertyFilter>,
 }
 
 impl Config {
@@ -167,6 +169,8 @@ impl Config {
                 "zoom_levels" => cfg.zoom_levels = serde_json::from_str(&value)?,
                 "tile_extent" => cfg.tile_extent = value.parse()?,
                 "trim_dist" => cfg.trim_dist = value.parse()?,
+                "default_filter" if !value.is_empty() => cfg.default_filter = Some(value.parse()?),
+                "default_filter" => {}
                 key => tracing::warn!("Ignoring unknown config key: {}", key),
             }
         }
@@ -174,8 +178,14 @@ impl Config {
         Ok(cfg)
     }
 
-    fn save(&self, conn: &mut rusqlite::Connection) -> Result<()> {
+    pub fn save(&self, conn: &mut rusqlite::Connection) -> Result<()> {
         let zoom_levels = serde_json::to_string(&self.zoom_levels)?;
+        let default_filter = self
+            .default_filter
+            .as_ref()
+            .map(|f| serde_json::to_string(&f.0))
+            .transpose()?
+            .unwrap_or_default();
 
         let mut stmt = conn.prepare(
             "\
@@ -185,6 +195,7 @@ impl Config {
         stmt.execute(params!["zoom_levels", &zoom_levels])?;
         stmt.execute(params!["tile_extent", &self.tile_extent])?;
         stmt.execute(params!["trim_dist", &self.trim_dist])?;
+        stmt.execute(params!["default_filter", &default_filter])?;
 
         Ok(())
     }
@@ -205,6 +216,7 @@ impl Default for Config {
             zoom_levels: DEFAULT_ZOOM_LEVELS.to_vec(),
             tile_extent: DEFAULT_TILE_EXTENT,
             trim_dist: DEFAULT_TRIM_DIST,
+            default_filter: None,
         }
     }
 }
@@ -236,6 +248,10 @@ pub fn decode_line(bytes: &[u8]) -> Result<Vec<Coord<u32>>> {
 pub struct PropertyFilter(HashMap<String, PropExpr>);
 
 impl PropertyFilter {
+    pub fn as_inner(&self) -> &HashMap<String, PropExpr> {
+        &self.0
+    }
+
     fn to_query<'a>(&'a self, clauses: &mut Vec<Cow<'a, str>>, params: &mut Vec<&'a dyn ToSql>) {
         for (key, expr) in self.0.iter() {
             expr.as_sql(key, clauses, params);
@@ -294,7 +310,7 @@ impl PropExpr {
     }
 }
 
-#[derive(Clone, Deserialize, Debug)]
+#[derive(Clone, Deserialize, serde::Serialize, Debug)]
 #[serde(rename_all = "snake_case")]
 pub struct PropExpr {
     any_of: Option<Vec<String>>,
@@ -357,6 +373,10 @@ impl ActivityFilter {
             before: before.map(|date| date.midnight().assume_utc()),
             after: after.map(|date| date.midnight().assume_utc()),
         }
+    }
+
+    pub fn with_config(before: Option<Date>, after: Option<Date>, props: Option<PropertyFilter>, config: &Config) -> Self {
+        Self::new(before, after, props.or_else(|| config.default_filter.clone()))
     }
 
     pub fn to_query<'a>(&'a self, params: &mut Vec<&'a dyn ToSql>) -> String {

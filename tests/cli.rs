@@ -147,3 +147,94 @@ fn test_filter_by_date_after() {
     assert_eq!(activities.lines().count(), 1);
     assert!(activities.contains("sample.fit"));
 }
+
+#[test]
+fn test_config_list() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("test.sqlite3");
+
+    // Initialize the database
+    build_subcommand(&db_path, "import", &[&format!("{}activities/no_track_data.tcx", TEST_DATA_DIR)])
+        .success();
+
+    let assert = build_subcommand(&db_path, "config", &[]);
+    let result = assert.success();
+    let output = String::from_utf8_lossy(&result.get_output().stdout);
+
+    assert!(output.contains("trim_dist = 200"));
+}
+
+#[test]
+fn test_config_set_trim_dist() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("test.sqlite3");
+
+    build_subcommand(&db_path, "import", &[&format!("{}activities/no_track_data.tcx", TEST_DATA_DIR)])
+        .success();
+
+    build_subcommand(&db_path, "config", &["set", "trim_dist", "150"])
+        .success();
+
+    let assert = build_subcommand(&db_path, "config", &[]);
+    let result = assert.success();
+    let output = String::from_utf8_lossy(&result.get_output().stdout);
+
+    assert!(output.contains("trim_dist = 150"));
+}
+
+#[test]
+fn test_config_set_default_filter() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("test.sqlite3");
+
+    build_subcommand(&db_path, "import", &[
+        TEST_DATA_DIR,
+        "--join",
+        &format!("{}/metadata.csv", TEST_DATA_DIR),
+    ]).success();
+
+    // Set a default filter
+    build_subcommand(&db_path, "config", &[
+        "set",
+        "default_filter",
+        r#"{"activity_type": {"=": "ride"}}"#,
+    ]).success();
+
+    // Verify it's saved
+    let config_output = build_subcommand(&db_path, "config", &[]).success();
+    let output = String::from_utf8_lossy(&config_output.get_output().stdout);
+    assert!(output.contains("default_filter"));
+
+    // Verify it affects activity filtering (without explicit filter)
+    let activities = build_subcommand(&db_path, "activities", &["--count"]).success();
+    let count = String::from_utf8_lossy(&activities.get_output().stdout);
+    assert_eq!(count.trim(), "1", "Default filter should limit to rides only");
+}
+
+#[test]
+fn test_config_default_filter_override() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("test.sqlite3");
+
+    build_subcommand(&db_path, "import", &[
+        TEST_DATA_DIR,
+        "--join",
+        &format!("{}/metadata.csv", TEST_DATA_DIR),
+    ]).success();
+
+    // Set a restrictive default filter
+    build_subcommand(&db_path, "config", &[
+        "set",
+        "default_filter",
+        r#"{"activity_type": {"=": "ride"}}"#,
+    ]).success();
+
+    // Explicit filter should override the default
+    let activities = build_subcommand(&db_path, "activities", &[
+        "--count",
+        "--filter",
+        r#"{"activity_type": {"=": "run"}}"#,
+    ]).success();
+    let count = String::from_utf8_lossy(&activities.get_output().stdout);
+    assert_eq!(count.trim(), "1", "Explicit filter should override default");
+}

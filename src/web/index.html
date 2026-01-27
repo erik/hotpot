@@ -410,13 +410,15 @@
             activityCount: document.getElementById("activity_count"),
         };
 
+        const defaultFilter = globalThis.DEFAULT_FILTER || null;
+
         const options = livewire({
             color: null,
             before: null,
             after: null,
             size: "512",
             map: "dark-matter-nolabels",
-            filter: null,
+            filter: defaultFilter ? JSON.stringify(defaultFilter) : null,
             gradient: null,
 
             $color: ({ color }) => (color === "custom" ? null : color),
@@ -485,6 +487,11 @@
                 "input",
                 el.hasAttribute("x-debounce") ? debounce(handler) : handler,
             );
+
+            // Initialize form elements with default values
+            if (key === "filter" && defaultFilter) {
+                el.value = JSON.stringify(defaultFilter);
+            }
         });
 
         function updateMapTileSource() {
