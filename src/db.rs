@@ -11,7 +11,7 @@ use geo_types::Coord;
 use num_traits::AsPrimitive;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{ToSql, params};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime};
 
 const SCHEMA: &str = "\
@@ -88,7 +88,7 @@ impl Database {
 
         apply_schema(&mut conn)?;
 
-        let config = Config::load(&mut conn)?;
+        let config = Config::from_db(&mut conn)?;
         config.save(&mut conn)?;
 
         Ok(Database { pool, config })
@@ -150,12 +150,12 @@ pub struct Config {
     pub tile_extent: u32,
     /// Distance to trim start/end of activities, in meters.
     pub trim_dist: f64,
-    /// Default filter to apply when no filter is specified.
+    /// Filter to apply when no filter is specified.
     pub default_filter: Option<PropertyFilter>,
 }
 
 impl Config {
-    fn load(conn: &mut rusqlite::Connection) -> Result<Self> {
+    fn from_db(conn: &mut rusqlite::Connection) -> Result<Self> {
         let mut cfg = Config::default();
 
         let mut stmt = conn.prepare("SELECT key, value FROM config")?;
@@ -169,8 +169,7 @@ impl Config {
                 "zoom_levels" => cfg.zoom_levels = serde_json::from_str(&value)?,
                 "tile_extent" => cfg.tile_extent = value.parse()?,
                 "trim_dist" => cfg.trim_dist = value.parse()?,
-                "default_filter" if !value.is_empty() => cfg.default_filter = Some(value.parse()?),
-                "default_filter" => {}
+                "default_filter" => cfg.default_filter = serde_json::from_str(&value)?,
                 key => tracing::warn!("Ignoring unknown config key: {}", key),
             }
         }
@@ -180,12 +179,7 @@ impl Config {
 
     pub fn save(&self, conn: &mut rusqlite::Connection) -> Result<()> {
         let zoom_levels = serde_json::to_string(&self.zoom_levels)?;
-        let default_filter = self
-            .default_filter
-            .as_ref()
-            .map(|f| serde_json::to_string(&f.0))
-            .transpose()?
-            .unwrap_or_default();
+        let default_filter = serde_json::to_string(&self.default_filter)?;
 
         let mut stmt = conn.prepare(
             "\
@@ -244,14 +238,10 @@ pub fn decode_line(bytes: &[u8]) -> Result<Vec<Coord<u32>>> {
     Ok(coords)
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct PropertyFilter(HashMap<String, PropExpr>);
 
 impl PropertyFilter {
-    pub fn as_inner(&self) -> &HashMap<String, PropExpr> {
-        &self.0
-    }
-
     fn to_query<'a>(&'a self, clauses: &mut Vec<Cow<'a, str>>, params: &mut Vec<&'a dyn ToSql>) {
         for (key, expr) in self.0.iter() {
             expr.as_sql(key, clauses, params);
@@ -313,28 +303,33 @@ impl PropExpr {
 #[derive(Clone, Deserialize, serde::Serialize, Debug)]
 #[serde(rename_all = "snake_case")]
 pub struct PropExpr {
+    #[serde(skip_serializing_if = "Option::is_none")]
     any_of: Option<Vec<String>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     none_of: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     matches: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     exists: Option<bool>,
 
     // TODO: support non-string type here as well
-    #[serde(rename = "=")]
+    #[serde(rename = "=", skip_serializing_if = "Option::is_none")]
     eq: Option<String>,
 
-    #[serde(rename = "!=")]
+    #[serde(rename = "!=", skip_serializing_if = "Option::is_none")]
     neq: Option<String>,
 
-    #[serde(rename = ">")]
+    #[serde(rename = ">", skip_serializing_if = "Option::is_none")]
     gt: Option<f64>,
 
-    #[serde(rename = ">=")]
+    #[serde(rename = ">=", skip_serializing_if = "Option::is_none")]
     gte: Option<f64>,
 
-    #[serde(rename = "<")]
+    #[serde(rename = "<", skip_serializing_if = "Option::is_none")]
     lt: Option<f64>,
 
-    #[serde(rename = "<=")]
+    #[serde(rename = "<=", skip_serializing_if = "Option::is_none")]
     lte: Option<f64>,
 }
 
@@ -347,18 +342,6 @@ impl FromStr for PropertyFilter {
     }
 }
 
-impl<'de> Deserialize<'de> for PropertyFilter {
-    fn deserialize<D>(deserializer: D) -> Result<PropertyFilter, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        PropertyFilter::from_str(&s).map_err(|err| {
-            serde::de::Error::custom(format!("invalid filter expression: {:?}", err))
-        })
-    }
-}
-
 #[derive(Default)]
 pub struct ActivityFilter {
     before: Option<OffsetDateTime>,
@@ -367,16 +350,17 @@ pub struct ActivityFilter {
 }
 
 impl ActivityFilter {
-    pub fn new(before: Option<Date>, after: Option<Date>, props: Option<PropertyFilter>) -> Self {
+    pub fn new(
+        before: Option<Date>,
+        after: Option<Date>,
+        props: Option<PropertyFilter>,
+        config: &Config,
+    ) -> Self {
         Self {
-            props,
             before: before.map(|date| date.midnight().assume_utc()),
             after: after.map(|date| date.midnight().assume_utc()),
+            props: props.or_else(|| config.default_filter.clone()),
         }
-    }
-
-    pub fn with_config(before: Option<Date>, after: Option<Date>, props: Option<PropertyFilter>, config: &Config) -> Self {
-        Self::new(before, after, props.or_else(|| config.default_filter.clone()))
     }
 
     pub fn to_query<'a>(&'a self, params: &mut Vec<&'a dyn ToSql>) -> String {

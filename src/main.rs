@@ -50,7 +50,7 @@ enum Commands {
     ///
     /// Supported keys:
     ///   trim_dist      - Distance to trim from activity start/end in meters (default: 200)
-    ///   default_filter - Default activity filter when none specified (JSON, e.g. {"type":{"=":"Run"}})
+    ///   default_filter - Default activity filter when none specified (JSON, e.g. {"elev":{">":1000}})
     Config(ConfigCmdArgs),
 }
 
@@ -318,12 +318,12 @@ fn run() -> Result<()> {
 
     match opts.cmd {
         Commands::Activities(args) => command_activity_info(opts.global, args)?,
+        Commands::Config(args) => command_config(opts.global, args)?,
         Commands::Import(args) => command_import_activities(opts.global, args)?,
-        Commands::Tile(args) => command_render_tile(opts.global, args)?,
         Commands::Render(args) => command_render_view(opts.global, args)?,
         Commands::Serve(args) => command_serve(opts.global, args)?,
         Commands::StravaAuth(args) => command_strava_auth(opts.global, args)?,
-        Commands::Config(args) => command_config(opts.global, args)?,
+        Commands::Tile(args) => command_render_tile(opts.global, args)?,
     };
 
     Ok(())
@@ -337,7 +337,7 @@ fn command_activity_info(global: GlobalOpts, args: ActivitiesCmdArgs) -> Result<
         print_count,
     } = args;
     let db = global.database_ro()?;
-    let filter = ActivityFilter::with_config(before, after, filter, &db.config);
+    let filter = ActivityFilter::new(before, after, filter, &db.config);
 
     if print_count {
         let num_activities = db.activity_count(&filter)?;
@@ -397,7 +397,7 @@ fn command_render_tile(global: GlobalOpts, args: TileCmdArgs) -> Result<()> {
     let db = global.database_ro()?;
     let mut file = BufWriter::new(File::create(output)?);
 
-    let filter = ActivityFilter::with_config(before, after, filter, &db.config);
+    let filter = ActivityFilter::new(before, after, filter, &db.config);
     let gradient = gradient.unwrap_or_else(|| PINKISH.clone());
     let image = raster::rasterize_tile(zxy, width, &filter, &db)?
         .map(|raster| raster.apply_gradient(&gradient))
@@ -422,7 +422,7 @@ fn command_render_view(global: GlobalOpts, args: RenderCmdArgs) -> Result<()> {
         output,
     } = args;
     let db = global.database_ro()?;
-    let filter = ActivityFilter::with_config(before, after, filter, &db.config);
+    let filter = ActivityFilter::new(before, after, filter, &db.config);
     let gradient = gradient.unwrap_or_else(|| PINKISH.clone());
     let mut file = BufWriter::new(File::create(output)?);
 
@@ -494,16 +494,25 @@ fn command_config(global: GlobalOpts, args: ConfigCmdArgs) -> Result<()> {
         None => {
             println!("trim_dist = {}", db.config.trim_dist);
             if let Some(ref filter) = db.config.default_filter {
-                println!("default_filter = {}", serde_json::to_string(filter.as_inner())?);
+                println!("default_filter = {}", serde_json::to_string(filter)?);
             }
         }
         Some(ConfigAction::Set { key, value }) => {
             match key.as_str() {
                 "trim_dist" => db.config.trim_dist = value.parse()?,
-                "default_filter" => db.config.default_filter = Some(value.parse()?),
+                "default_filter" => {
+                    db.config.default_filter = if value.is_empty() {
+                        None
+                    } else {
+                        Some(value.parse()?)
+                    }
+                }
                 _ => return Err(anyhow!("Unknown config key: {}", key)),
             }
-            db.config.save(&mut *db.connection()?)?;
+
+            let mut conn = db.connection()?;
+            db.config.save(&mut conn)?;
+
             println!("Set {} = {}", key, value);
         }
     }
