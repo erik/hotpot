@@ -12,8 +12,8 @@ use rusqlite::{ToSql, params};
 use serde::{Deserialize, Deserializer};
 
 use crate::WebMercatorViewport;
-use crate::db::{ActivityFilter, Database, decode_line};
-use crate::tile::{Tile, TileBounds};
+use crate::db::{ActivityFilter, Database, PrivacyZone, decode_line};
+use crate::tile::{Tile, TileBounds, TilePrivacyFilter};
 
 pub static PINKISH: Lazy<LinearGradient> = Lazy::new(|| {
     LinearGradient::from_stops(&[
@@ -73,7 +73,12 @@ impl TileRaster {
         }
     }
 
-    fn add_activity(&mut self, source_tile: &Tile, coords: &[Coord<u32>]) {
+    fn add_activity(
+        &mut self,
+        source_tile: &Tile,
+        coords: &[Coord<u32>],
+        privacy_filter: Option<&TilePrivacyFilter>,
+    ) {
         debug_assert_eq!(source_tile.z, self.bounds.z);
 
         // Origin of source tile within target tile
@@ -92,6 +97,14 @@ impl TileRaster {
             // Scale the coordinates back down to [0..width]
             let x = x >> self.scale;
             let y = y >> self.scale;
+
+            // Apply privacy filter in target tile space
+            if let Some(filter) = privacy_filter {
+                if filter.is_hidden(x, y) {
+                    prev = None; // Break the line
+                    continue;
+                }
+            }
 
             let Some(Coord { x: px, y: py }) = prev else {
                 prev = Some(Coord { x, y });
@@ -369,6 +382,16 @@ pub fn rasterize_tile(
     filter: &ActivityFilter,
     db: &Database,
 ) -> Result<Option<TileRaster>> {
+    rasterize_tile_with_privacy(tile, width, filter, &db.config.privacy_zones, db)
+}
+
+pub fn rasterize_tile_with_privacy(
+    tile: Tile,
+    width: u32,
+    filter: &ActivityFilter,
+    privacy_zones: &[PrivacyZone],
+    db: &Database,
+) -> Result<Option<TileRaster>> {
     let zoom_level = db
         .config
         .source_level(tile.z)
@@ -376,6 +399,8 @@ pub fn rasterize_tile(
 
     let bounds = TileBounds::from(zoom_level, &tile);
     let mut raster = TileRaster::new(tile, bounds, width, db.config.tile_extent);
+
+    let privacy_filter = TilePrivacyFilter::new(privacy_zones, &tile, width);
 
     let mut have_activity = false;
 
@@ -386,7 +411,9 @@ pub fn rasterize_tile(
         let source_tile = Tile::new(row.get_unwrap(0), row.get_unwrap(1), row.get_unwrap(2));
 
         let bytes: Vec<u8> = row.get_unwrap(3);
-        raster.add_activity(&source_tile, &decode_line(&bytes)?);
+        let coords = decode_line(&bytes)?;
+
+        raster.add_activity(&source_tile, &coords, privacy_filter.as_ref());
 
         have_activity = true;
     }
