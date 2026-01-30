@@ -6,6 +6,8 @@ use anyhow::{Result, anyhow};
 use derive_more::{From, Into};
 use geo_types::{Coord, Point};
 
+use crate::db::PrivacyZone;
+
 const EARTH_RADIUS_METERS: f64 = 6_378_137.0;
 const EARTH_CIRCUMFERENCE: f64 = 2.0 * PI * EARTH_RADIUS_METERS;
 const ORIGIN_OFFSET: f64 = EARTH_CIRCUMFERENCE / 2.0;
@@ -55,12 +57,12 @@ impl TileBounds {
         let min_zoom = *zoom_range.start();
         let max_zoom = *zoom_range.end();
 
-        let sw_px = viewport.sw.to_global_pixel(max_zoom as u8, tile_size);
-        let ne_px = viewport.ne.to_global_pixel(max_zoom as u8, tile_size);
+        let sw_px = viewport.sw.to_mercator_pixel(max_zoom as u8, tile_size);
+        let ne_px = viewport.ne.to_mercator_pixel(max_zoom as u8, tile_size);
 
         let scale = f64::max(
-            (ne_px.x() - sw_px.x()) as f64 / (viewport_width as f64),
-            (sw_px.y() - ne_px.y()) as f64 / (viewport_height as f64),
+            (ne_px.x - sw_px.x) / (viewport_width as f64),
+            (sw_px.y - ne_px.y) / (viewport_height as f64),
         );
 
         // Find the smallest zoom level which will cover our viewport at full
@@ -84,9 +86,6 @@ pub struct LngLat(pub Point<f64>);
 
 #[derive(Copy, Clone, PartialEq, Debug, From, Into)]
 pub struct WebMercator(pub Point<f64>);
-
-#[derive(Copy, Clone, PartialEq, Debug, From, Into)]
-pub struct TilePixel(pub Coord<u16>);
 
 #[derive(Debug, Clone)]
 pub struct WebMercatorViewport {
@@ -239,100 +238,6 @@ impl BBox {
     }
 }
 
-/*
-Alternative type-safe coordinate system design using phantom types.
-
-This would provide compile-time guarantees that coordinates are in the correct space,
-preventing bugs like accidentally using LngLat coordinates where WebMercator is expected.
-
-Example usage:
-    let lnglat = TypedCoord::<f64, LngLatSpace>::new(13.3643882, 52.528125);
-    let merc = lnglat.to_web_mercator()?;
-    let tile = merc.to_tile(10);
-    let pixel = merc.to_tile_pixel(&tile.bounds(), 4096);
-
-Benefits:
-- Compile-time type safety: can't accidentally mix coordinate spaces
-- Self-documenting: function signatures make coordinate space explicit
-- Zero runtime cost: PhantomData is zero-sized
-
-Tradeoffs:
-- More verbose type signatures
-- Requires conversion methods between coordinate spaces
-- May need wrapper types for existing geo_types::Point usage
-
-struct TypedCoord<T: CoordNum, Space> {
-    pub x: T,
-    pub y: T,
-    _space: std::marker::PhantomData<Space>,
-}
-
-// Marker types for different coordinate spaces
-struct LngLatSpace;
-struct WebMercatorSpace;
-struct TilePixelSpace;
-struct GlobalPixelSpace;
-
-impl<T: CoordNum> TypedCoord<T, LngLatSpace> {
-    pub fn new(lng: T, lat: T) -> Self {
-        Self {
-            x: lng,
-            y: lat,
-            _space: std::marker::PhantomData,
-        }
-    }
-
-    pub fn to_web_mercator(&self) -> Option<TypedCoord<f64, WebMercatorSpace>>
-    where
-        T: Into<f64> + Copy,
-    {
-        // Web Mercator projection logic
-        // Returns None for invalid latitudes (outside ±85.05°)
-    }
-}
-
-impl<T: CoordNum> TypedCoord<T, WebMercatorSpace> {
-    pub fn to_tile(&self, zoom: u8) -> Tile
-    where
-        T: Into<f64> + Copy,
-    {
-        // Calculate tile coordinates from Web Mercator position
-    }
-
-    pub fn to_tile_pixel(
-        &self,
-        bbox: &BBox,
-        tile_width: u16,
-    ) -> TypedCoord<u16, TilePixelSpace>
-    where
-        T: Into<f64> + Copy,
-    {
-        // Convert to pixel coordinates within a tile
-    }
-
-    pub fn to_global_pixel(
-        &self,
-        zoom: u8,
-        tile_extent: u32,
-    ) -> TypedCoord<u32, GlobalPixelSpace>
-    where
-        T: Into<f64> + Copy,
-    {
-        // Convert to global pixel coordinates at a given zoom level
-    }
-}
-
-impl<T: CoordNum> TypedCoord<T, TilePixelSpace> {
-    pub fn new(x: T, y: T) -> Self {
-        Self {
-            x,
-            y,
-            _space: std::marker::PhantomData,
-        }
-    }
-}
-*/
-
 impl WebMercator {
     /// Return the tile coordinate for this point at the given zoom level.
     pub fn tile(&self, zoom: u8) -> Tile {
@@ -345,38 +250,26 @@ impl WebMercator {
         Tile::new(x, y, zoom)
     }
 
-    pub fn to_global_pixel(self, zoom: u8, tile_extent: u32) -> Point<u32> {
+    pub fn to_mercator_pixel(self, zoom: u8, tile_extent: u32) -> Coord<f64> {
         let num_tiles = 1u32 << zoom;
         let scale = (num_tiles * tile_extent) as f64 / EARTH_CIRCUMFERENCE;
 
-        Point::from((
-            (scale * (self.0.x() + ORIGIN_OFFSET)) as u32,
-            (scale * (ORIGIN_OFFSET - self.0.y())) as u32,
-        ))
+        Coord {
+            x: (scale * (self.0.x() + ORIGIN_OFFSET)),
+            y: (scale * (ORIGIN_OFFSET - self.0.y())),
+        }
     }
 
-    pub fn to_tile_relative_px(self, bbox: &BBox, size: u16) -> Coord<i32> {
+    pub fn to_tile_pixel(self, bbox: &BBox, tile_size: i32) -> Coord<i32> {
         let Coord { x, y } = self.0.into();
 
         let width = bbox.right - bbox.left;
         let height = bbox.top - bbox.bot;
 
-        let px = ((x - bbox.left) / width * size as f64).round() as i32;
-        let py = ((y - bbox.bot) / height * size as f64).round() as i32;
+        let px = ((x - bbox.left) / width * tile_size as f64).round() as i32;
+        let py = ((y - bbox.bot) / height * tile_size as f64).round() as i32;
 
-        (px, size as i32 - py).into()
-    }
-
-    pub fn to_tile_pixel(self, bbox: &BBox, tile_width: u16) -> TilePixel {
-        let Coord { x, y } = self.0.into();
-
-        let width = bbox.right - bbox.left;
-        let height = bbox.top - bbox.bot;
-
-        let px = ((x - bbox.left) / width * tile_width as f64).round() as u16;
-        let py = ((y - bbox.bot) / height * tile_width as f64).round() as u16;
-
-        TilePixel((px, py).into())
+        (px, tile_size - py).into()
     }
 }
 
@@ -428,7 +321,7 @@ impl Tile {
         }
     }
 
-    pub fn privacy_filter(&self, zones: &[PrivacyZone], tile_extent: u32) -> TilePrivacyFilter {
+    pub fn privacy_filter(&self, zones: &[PrivacyZone], tile_extent: i32) -> TilePrivacyFilter {
         TilePrivacyFilter::new(zones, self, tile_extent)
     }
 }
@@ -450,16 +343,14 @@ impl FromStr for Tile {
     }
 }
 
-use crate::db::PrivacyZone;
-
 #[derive(Debug)]
 pub struct TilePrivacyFilter {
-    pixel_pz: Vec<(i32, i32, u32)>,
+    pixel_pz: Vec<(i32, i32, i32)>,
 }
 
 impl TilePrivacyFilter {
     /// Create a filter for the given tile. Returns None if no zones intersect.
-    pub fn new(zones: &[PrivacyZone], tile: &Tile, tile_extent: u32) -> Self {
+    pub fn new(zones: &[PrivacyZone], tile: &Tile, tile_extent: i32) -> Self {
         let tile_bounds_xyz = tile.xy_bounds();
 
         let tile_width_meter = tile_bounds_xyz.right - tile_bounds_xyz.left;
@@ -483,9 +374,9 @@ impl TilePrivacyFilter {
                     return None;
                 }
 
-                let pz_tile = pz_merc.to_tile_relative_px(&tile_bounds_xyz, tile_extent as u16);
+                let pz_tile = pz_merc.to_tile_pixel(&tile_bounds_xyz, tile_extent);
                 let radius_sq = pz_size_px * pz_size_px;
-                Some((pz_tile.x, pz_tile.y, radius_sq as u32))
+                Some((pz_tile.x, pz_tile.y, radius_sq as i32))
             })
             .collect();
 
@@ -498,7 +389,7 @@ impl TilePrivacyFilter {
         self.pixel_pz.iter().any(|&(px, py, radius_sq)| {
             let dx = x - px;
             let dy = y - py;
-            dx * dx + dy * dy < radius_sq as i32
+            dx * dx + dy * dy < radius_sq
         })
     }
 }
@@ -628,7 +519,7 @@ mod tests {
 
         let filter = tile_in_pz.privacy_filter(&[pz], tile_size);
 
-        let px = pt_in_pz.to_tile_relative_px(&tile_in_pz.xy_bounds(), tile_size as u16);
+        let px = pt_in_pz.to_tile_pixel(&tile_in_pz.xy_bounds(), tile_size as i32);
         let is_hidden = filter.is_hidden(px.x, px.y);
 
         assert!(is_hidden, "point inside zone should be hidden");
@@ -645,12 +536,12 @@ mod tests {
         // Point outside the circle
         let pt_outside_pz = LngLat::new(13.8221594, 52.6044458).xy().unwrap();
         let tile = pt_outside_pz.tile(10);
-        let tile_extent = 256u32;
+        let tile_extent = 4096;
 
         let filter = tile.privacy_filter(&[zone], tile_extent);
 
         // Filter may or may not exist for this tile, but if it does, the point should not be hidden
-        let outside_px = pt_outside_pz.to_tile_relative_px(&tile.xy_bounds(), tile_extent as u16);
+        let outside_px = pt_outside_pz.to_tile_pixel(&tile.xy_bounds(), tile_extent);
         assert!(
             !filter.is_hidden(outside_px.x, outside_px.y),
             "point outside zone should not be hidden"
