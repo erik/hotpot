@@ -148,7 +148,7 @@ const DEFAULT_TRIM_DIST: f64 = 200.0;
 pub struct PrivacyZone {
     pub lat: f64,
     pub lng: f64,
-    pub radius_m: f64,
+    pub size_meters: f64,
 }
 
 pub struct Config {
@@ -187,7 +187,7 @@ impl Config {
 
     fn save(&self, conn: &mut rusqlite::Connection) -> Result<()> {
         let zoom_levels = serde_json::to_string(&self.zoom_levels)?;
-        let privacy_zones = serde_json::to_string(&self.privacy_zones)?;
+        //let privacy_zones = serde_json::to_string(&self.privacy_zones)?;
 
         let mut stmt = conn.prepare(
             "\
@@ -197,7 +197,7 @@ impl Config {
         stmt.execute(params!["zoom_levels", &zoom_levels])?;
         stmt.execute(params!["tile_extent", &self.tile_extent])?;
         stmt.execute(params!["trim_dist", &self.trim_dist])?;
-        stmt.execute(params!["privacy_zones", &privacy_zones])?;
+        // TODO: stmt.execute(params!["privacy_zones", &privacy_zones])?;
 
         Ok(())
     }
@@ -218,7 +218,11 @@ impl Default for Config {
             zoom_levels: DEFAULT_ZOOM_LEVELS.to_vec(),
             tile_extent: DEFAULT_TILE_EXTENT,
             trim_dist: DEFAULT_TRIM_DIST,
-            privacy_zones: Vec::new(),
+            privacy_zones: vec![PrivacyZone {
+                lng: -118.2640689,
+                lat: 34.0498589,
+                size_meters: 400.0,
+            }],
         }
     }
 }

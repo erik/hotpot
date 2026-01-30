@@ -149,11 +149,8 @@ impl BBox {
         }
     }
 
-    pub fn contains(&self, pt: &WebMercator) -> bool {
-        pt.0.x() >= self.left
-            && pt.0.y() >= self.bot
-            && pt.0.x() <= self.right
-            && pt.0.y() <= self.top
+    pub fn contains(&self, x: f64, y: f64) -> bool {
+        self.compute_edges(x, y) == Self::INSIDE
     }
 
     fn compute_edges(&self, x: f64, y: f64) -> u8 {
@@ -242,6 +239,100 @@ impl BBox {
     }
 }
 
+/*
+Alternative type-safe coordinate system design using phantom types.
+
+This would provide compile-time guarantees that coordinates are in the correct space,
+preventing bugs like accidentally using LngLat coordinates where WebMercator is expected.
+
+Example usage:
+    let lnglat = TypedCoord::<f64, LngLatSpace>::new(13.3643882, 52.528125);
+    let merc = lnglat.to_web_mercator()?;
+    let tile = merc.to_tile(10);
+    let pixel = merc.to_tile_pixel(&tile.bounds(), 4096);
+
+Benefits:
+- Compile-time type safety: can't accidentally mix coordinate spaces
+- Self-documenting: function signatures make coordinate space explicit
+- Zero runtime cost: PhantomData is zero-sized
+
+Tradeoffs:
+- More verbose type signatures
+- Requires conversion methods between coordinate spaces
+- May need wrapper types for existing geo_types::Point usage
+
+struct TypedCoord<T: CoordNum, Space> {
+    pub x: T,
+    pub y: T,
+    _space: std::marker::PhantomData<Space>,
+}
+
+// Marker types for different coordinate spaces
+struct LngLatSpace;
+struct WebMercatorSpace;
+struct TilePixelSpace;
+struct GlobalPixelSpace;
+
+impl<T: CoordNum> TypedCoord<T, LngLatSpace> {
+    pub fn new(lng: T, lat: T) -> Self {
+        Self {
+            x: lng,
+            y: lat,
+            _space: std::marker::PhantomData,
+        }
+    }
+
+    pub fn to_web_mercator(&self) -> Option<TypedCoord<f64, WebMercatorSpace>>
+    where
+        T: Into<f64> + Copy,
+    {
+        // Web Mercator projection logic
+        // Returns None for invalid latitudes (outside ±85.05°)
+    }
+}
+
+impl<T: CoordNum> TypedCoord<T, WebMercatorSpace> {
+    pub fn to_tile(&self, zoom: u8) -> Tile
+    where
+        T: Into<f64> + Copy,
+    {
+        // Calculate tile coordinates from Web Mercator position
+    }
+
+    pub fn to_tile_pixel(
+        &self,
+        bbox: &BBox,
+        tile_width: u16,
+    ) -> TypedCoord<u16, TilePixelSpace>
+    where
+        T: Into<f64> + Copy,
+    {
+        // Convert to pixel coordinates within a tile
+    }
+
+    pub fn to_global_pixel(
+        &self,
+        zoom: u8,
+        tile_extent: u32,
+    ) -> TypedCoord<u32, GlobalPixelSpace>
+    where
+        T: Into<f64> + Copy,
+    {
+        // Convert to global pixel coordinates at a given zoom level
+    }
+}
+
+impl<T: CoordNum> TypedCoord<T, TilePixelSpace> {
+    pub fn new(x: T, y: T) -> Self {
+        Self {
+            x,
+            y,
+            _space: std::marker::PhantomData,
+        }
+    }
+}
+*/
+
 impl WebMercator {
     /// Return the tile coordinate for this point at the given zoom level.
     pub fn tile(&self, zoom: u8) -> Tile {
@@ -262,6 +353,18 @@ impl WebMercator {
             (scale * (self.0.x() + ORIGIN_OFFSET)) as u32,
             (scale * (ORIGIN_OFFSET - self.0.y())) as u32,
         ))
+    }
+
+    pub fn to_tile_relative_px(self, bbox: &BBox, size: u16) -> Coord<i32> {
+        let Coord { x, y } = self.0.into();
+
+        let width = bbox.right - bbox.left;
+        let height = bbox.top - bbox.bot;
+
+        let px = ((x - bbox.left) / width * size as f64).round() as i32;
+        let py = ((y - bbox.bot) / height * size as f64).round() as i32;
+
+        (px, size as i32 - py).into()
     }
 
     pub fn to_tile_pixel(self, bbox: &BBox, tile_width: u16) -> TilePixel {
@@ -324,6 +427,10 @@ impl Tile {
             right: left + tile_size,
         }
     }
+
+    pub fn privacy_filter(&self, zones: &[PrivacyZone], tile_extent: u32) -> TilePrivacyFilter {
+        TilePrivacyFilter::new(zones, self, tile_extent)
+    }
 }
 
 impl FromStr for Tile {
@@ -345,66 +452,53 @@ impl FromStr for Tile {
 
 use crate::db::PrivacyZone;
 
-struct ProjectedZone {
-    center_x: f64,
-    center_y: f64,
-    radius_sq: f64,
-}
-
-/// Pre-computed privacy filter for a specific tile.
+#[derive(Debug)]
 pub struct TilePrivacyFilter {
-    zones: Vec<ProjectedZone>,
+    pixel_pz: Vec<(i32, i32, u32)>,
 }
 
 impl TilePrivacyFilter {
     /// Create a filter for the given tile. Returns None if no zones intersect.
-    pub fn new(zones: &[PrivacyZone], tile: &Tile, tile_extent: u32) -> Option<Self> {
-        let bbox = tile.xy_bounds();
-        let tile_width_m = EARTH_CIRCUMFERENCE / (1u64 << tile.z) as f64;
-        let px_per_m = tile_extent as f64 / tile_width_m;
+    pub fn new(zones: &[PrivacyZone], tile: &Tile, tile_extent: u32) -> Self {
+        let tile_bounds_xyz = tile.xy_bounds();
+
+        let tile_width_meter = tile_bounds_xyz.right - tile_bounds_xyz.left;
+        let pixels_per_meter = tile_extent as f64 / tile_width_meter;
 
         let zones: Vec<_> = zones
             .iter()
-            .filter_map(|zone| {
-                let center_wm = LngLat::new(zone.lng, zone.lat).xy()?;
+            .filter_map(|pz| {
+                let pz_merc = LngLat::new(pz.lng, pz.lat).xy()?;
+                let pz_size_px = pz.size_meters * pixels_per_meter;
 
-                // Check if zone intersects tile (expand bbox by radius)
-                let radius_wm = zone.radius_m;
-                let expanded_bbox = BBox {
-                    left: bbox.left - radius_wm,
-                    right: bbox.right + radius_wm,
-                    bot: bbox.bot - radius_wm,
-                    top: bbox.top + radius_wm,
+                // Check if privacy zone intersects tile (buffered by size of privacy zone)
+                let bbox = BBox {
+                    left: tile_bounds_xyz.left - pz_size_px,
+                    right: tile_bounds_xyz.right + pz_size_px,
+                    bot: tile_bounds_xyz.bot - pz_size_px,
+                    top: tile_bounds_xyz.top + pz_size_px,
                 };
-                if !expanded_bbox.contains(&center_wm) {
+
+                if !bbox.contains(pz_merc.0.x(), pz_merc.0.y()) {
                     return None;
                 }
 
-                let center_px = center_wm.to_tile_pixel(&bbox, tile_extent as u16);
-                let radius_px = zone.radius_m * px_per_m;
-
-                Some(ProjectedZone {
-                    center_x: center_px.0.x as f64,
-                    center_y: center_px.0.y as f64,
-                    radius_sq: radius_px * radius_px,
-                })
+                let pz_tile = pz_merc.to_tile_relative_px(&tile_bounds_xyz, tile_extent as u16);
+                let radius_sq = pz_size_px * pz_size_px;
+                Some((pz_tile.x, pz_tile.y, radius_sq as u32))
             })
             .collect();
 
-        if zones.is_empty() {
-            None
-        } else {
-            Some(Self { zones })
-        }
+        Self { pixel_pz: zones }
     }
 
     /// Check if a point should be hidden (is within any privacy zone).
     #[inline]
-    pub fn is_hidden(&self, px: u32, py: u32) -> bool {
-        self.zones.iter().any(|z| {
-            let dx = px as f64 - z.center_x;
-            let dy = py as f64 - z.center_y;
-            dx * dx + dy * dy <= z.radius_sq
+    pub fn is_hidden(&self, x: i32, y: i32) -> bool {
+        self.pixel_pz.iter().any(|&(px, py, radius_sq)| {
+            let dx = x - px;
+            let dy = y - py;
+            dx * dx + dy * dy < radius_sq as i32
         })
     }
 }
@@ -520,101 +614,75 @@ mod tests {
 
     #[test]
     fn test_privacy_filter_hides_point_in_zone() {
-        // Berlin, 15km radius
-        let zone = PrivacyZone {
+        let tile_size = 4096;
+
+        let pz = PrivacyZone {
             lat: 52.528125,
             lng: 13.3643882,
-            radius_m: 15000.0,
+            size_meters: 15000.0,
         };
 
         // Point inside the circle
-        let inside = LngLat::new(13.3382299, 52.528125).xy().unwrap();
-        let tile = inside.tile(10);
-        let tile_extent = 256u32;
+        let pt_in_pz = LngLat::new(pz.lng, pz.lat).xy().unwrap();
+        let tile_in_pz = pt_in_pz.tile(10);
 
-        let filter = TilePrivacyFilter::new(&[zone], &tile, tile_extent).unwrap();
+        let filter = tile_in_pz.privacy_filter(&[pz], tile_size);
 
-        let inside_px = inside.to_tile_pixel(&tile.xy_bounds(), tile_extent as u16);
-        assert!(
-            filter.is_hidden(inside_px.0.x as u32, inside_px.0.y as u32),
-            "point inside zone should be hidden"
-        );
+        let px = pt_in_pz.to_tile_relative_px(&tile_in_pz.xy_bounds(), tile_size as u16);
+        let is_hidden = filter.is_hidden(px.x, px.y);
+
+        assert!(is_hidden, "point inside zone should be hidden");
     }
 
     #[test]
     fn test_privacy_filter_allows_point_outside_zone() {
-        // Berlin, 15km radius
         let zone = PrivacyZone {
             lat: 52.528125,
             lng: 13.3643882,
-            radius_m: 15000.0,
+            size_meters: 15000.0,
         };
 
         // Point outside the circle
-        let outside = LngLat::new(13.8221594, 52.6044458).xy().unwrap();
-        let tile = outside.tile(10);
+        let pt_outside_pz = LngLat::new(13.8221594, 52.6044458).xy().unwrap();
+        let tile = pt_outside_pz.tile(10);
         let tile_extent = 256u32;
 
-        let filter = TilePrivacyFilter::new(&[zone], &tile, tile_extent);
+        let filter = tile.privacy_filter(&[zone], tile_extent);
 
         // Filter may or may not exist for this tile, but if it does, the point should not be hidden
-        if let Some(f) = filter {
-            let outside_px = outside.to_tile_pixel(&tile.xy_bounds(), tile_extent as u16);
-            assert!(
-                !f.is_hidden(outside_px.0.x as u32, outside_px.0.y as u32),
-                "point outside zone should not be hidden"
-            );
-        }
-    }
-
-    #[test]
-    fn test_privacy_filter_no_zones() {
-        let tile = Tile::new(0, 0, 10);
-        assert!(TilePrivacyFilter::new(&[], &tile, 256).is_none());
+        let outside_px = pt_outside_pz.to_tile_relative_px(&tile.xy_bounds(), tile_extent as u16);
+        assert!(
+            !filter.is_hidden(outside_px.x, outside_px.y),
+            "point outside zone should not be hidden"
+        );
     }
 
     #[test]
     fn test_privacy_filter_zone_crosses_tile_boundary() {
-        // Berlin, 15km radius - should span multiple tiles
-        let zone = PrivacyZone {
+        // 15km radius - should span multiple tiles
+        let pz = PrivacyZone {
             lat: 52.528125,
             lng: 13.3643882,
-            radius_m: 15000.0,
+            size_meters: 15000.0,
         };
 
-        let center = LngLat::new(13.3643882, 52.528125).xy().unwrap();
-        let center_tile = center.tile(10);
-
-        assert!(
-            TilePrivacyFilter::new(&[zone.clone()], &center_tile, 256).is_some(),
-            "zone should be in center tile"
-        );
+        let zoom_level = 14;
+        let tile_extent = 4096;
+        let tile = LngLat::new(pz.lng, pz.lat).xy().unwrap().tile(zoom_level);
 
         let adjacent_tiles = [
-            Tile::new(center_tile.x + 1, center_tile.y, 10),
-            Tile::new(center_tile.x.saturating_sub(1), center_tile.y, 10),
-            Tile::new(center_tile.x, center_tile.y + 1, 10),
-            Tile::new(center_tile.x, center_tile.y.saturating_sub(1), 10),
+            Tile::new(tile.x + 1, tile.y, zoom_level),
+            Tile::new(tile.x - 1, tile.y, zoom_level),
+            Tile::new(tile.x, tile.y + 1, zoom_level),
+            Tile::new(tile.x, tile.y - 1, zoom_level),
         ];
 
-        let zones_in_adjacent = adjacent_tiles
-            .iter()
-            .filter(|t| TilePrivacyFilter::new(&[zone.clone()], t, 256).is_some())
-            .count();
-
-        assert!(
-            zones_in_adjacent > 0,
-            "15km zone should span into adjacent tiles at z10"
-        );
-
-        // Point outside the circle should not be hidden even in tiles that have the zone
-        let outside = LngLat::new(13.8221594, 52.6044458).xy().unwrap();
-        let outside_tile = outside.tile(10);
-        if let Some(f) = TilePrivacyFilter::new(&[zone], &outside_tile, 256) {
-            let outside_px = outside.to_tile_pixel(&outside_tile.xy_bounds(), 256);
+        for tile in adjacent_tiles.iter() {
+            let filter = tile.privacy_filter(&[pz.clone()], tile_extent);
             assert!(
-                !f.is_hidden(outside_px.0.x as u32, outside_px.0.y as u32),
-                "point outside zone should not be hidden"
+                !filter.pixel_pz.is_empty(),
+                "privacy zone should spill into adjacent tile: {:?}",
+                tile
             );
         }
     }

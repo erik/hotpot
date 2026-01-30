@@ -12,7 +12,7 @@ use rusqlite::{ToSql, params};
 use serde::{Deserialize, Deserializer};
 
 use crate::WebMercatorViewport;
-use crate::db::{ActivityFilter, Database, PrivacyZone, decode_line};
+use crate::db::{ActivityFilter, Database, decode_line};
 use crate::tile::{Tile, TileBounds, TilePrivacyFilter};
 
 pub static PINKISH: Lazy<LinearGradient> = Lazy::new(|| {
@@ -77,7 +77,7 @@ impl TileRaster {
         &mut self,
         source_tile: &Tile,
         coords: &[Coord<u32>],
-        privacy_filter: Option<&TilePrivacyFilter>,
+        privacy_filter: &TilePrivacyFilter,
     ) {
         debug_assert_eq!(source_tile.z, self.bounds.z);
 
@@ -88,7 +88,7 @@ impl TileRaster {
         let tile_bbox = crate::tile::BBox::square(self.width as f64 - 1.0);
 
         let mut prev = None;
-        for Coord { x, y } in coords {
+        for &Coord { x, y } in coords {
             // Translate (x,y) to location in target tile.
             // [0..(width * STORED_TILE_WIDTH)]
             let x = x + x_offset;
@@ -98,12 +98,11 @@ impl TileRaster {
             let x = x >> self.scale;
             let y = y >> self.scale;
 
-            // Apply privacy filter in target tile space
-            if let Some(filter) = privacy_filter {
-                if filter.is_hidden(x, y) {
-                    prev = None; // Break the line
-                    continue;
-                }
+            // Apply privacy filter in tile pixel space
+            if privacy_filter.is_hidden(x as i32, y as i32) {
+                // Break the line
+                prev = None;
+                continue;
             }
 
             let Some(Coord { x: px, y: py }) = prev else {
@@ -382,16 +381,7 @@ pub fn rasterize_tile(
     filter: &ActivityFilter,
     db: &Database,
 ) -> Result<Option<TileRaster>> {
-    rasterize_tile_with_privacy(tile, width, filter, &db.config.privacy_zones, db)
-}
-
-pub fn rasterize_tile_with_privacy(
-    tile: Tile,
-    width: u32,
-    filter: &ActivityFilter,
-    privacy_zones: &[PrivacyZone],
-    db: &Database,
-) -> Result<Option<TileRaster>> {
+    let privacy_zones = &db.config.privacy_zones;
     let zoom_level = db
         .config
         .source_level(tile.z)
@@ -413,7 +403,7 @@ pub fn rasterize_tile_with_privacy(
         let bytes: Vec<u8> = row.get_unwrap(3);
         let coords = decode_line(&bytes)?;
 
-        raster.add_activity(&source_tile, &coords, privacy_filter.as_ref());
+        raster.add_activity(&source_tile, &coords, &privacy_filter);
 
         have_activity = true;
     }
