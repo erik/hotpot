@@ -260,16 +260,16 @@ impl WebMercator {
         }
     }
 
-    pub fn to_tile_pixel(self, bbox: &BBox, tile_size: i32) -> Coord<i32> {
+    pub fn to_tile_pixel(self, bbox: &BBox, tile_size: i32) -> Coord<f64> {
         let Coord { x, y } = self.0.into();
 
         let width = bbox.right - bbox.left;
         let height = bbox.top - bbox.bot;
 
-        let px = ((x - bbox.left) / width * tile_size as f64).round() as i32;
-        let py = ((y - bbox.bot) / height * tile_size as f64).round() as i32;
+        let px = ((x - bbox.left) / width * tile_size as f64).round();
+        let py = ((y - bbox.bot) / height * tile_size as f64).round();
 
-        (px, tile_size - py).into()
+        (px, tile_size as f64 - py).into()
     }
 }
 
@@ -376,7 +376,7 @@ impl TilePrivacyFilter {
 
                 let pz_tile = pz_merc.to_tile_pixel(&tile_bounds_xyz, tile_extent);
                 let radius_sq = pz_size_px * pz_size_px;
-                Some((pz_tile.x, pz_tile.y, radius_sq as i32))
+                Some((pz_tile.x as i32, pz_tile.y as i32, radius_sq as i32))
             })
             .collect();
 
@@ -520,7 +520,7 @@ mod tests {
         let filter = tile_in_pz.privacy_filter(&[pz], tile_size);
 
         let px = pt_in_pz.to_tile_pixel(&tile_in_pz.xy_bounds(), tile_size as i32);
-        let is_hidden = filter.is_hidden(px.x, px.y);
+        let is_hidden = filter.is_hidden(px.x as i32, px.y as i32);
 
         assert!(is_hidden, "point inside zone should be hidden");
     }
@@ -543,7 +543,7 @@ mod tests {
         // Filter may or may not exist for this tile, but if it does, the point should not be hidden
         let outside_px = pt_outside_pz.to_tile_pixel(&tile.xy_bounds(), tile_extent);
         assert!(
-            !filter.is_hidden(outside_px.x, outside_px.y),
+            !filter.is_hidden(outside_px.x as i32, outside_px.y as i32),
             "point outside zone should not be hidden"
         );
     }
