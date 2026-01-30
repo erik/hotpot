@@ -493,7 +493,7 @@ pub fn upsert(
             .map_coords(|c| {
                 // For reasons I cannot remember, we store tile activity data
                 // with inverted Y coordinates from the pixel data.
-                let flip_y = -(tile_size - c.y as f64);
+                let flip_y = tile_size - c.y as f64;
                 (c.x as f64, flip_y).into()
             })
             .simplify(&4.0);
