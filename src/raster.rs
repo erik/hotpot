@@ -390,7 +390,7 @@ pub fn rasterize_tile(
     let bounds = TileBounds::from(zoom_level, &tile);
     let mut raster = TileRaster::new(tile, bounds, width, db.config.tile_extent);
 
-    let privacy_filter = TilePrivacyFilter::new(privacy_zones, &tile, width);
+    let privacy_filter = tile.privacy_filter(privacy_zones, width as i32);
 
     let mut have_activity = false;
 
