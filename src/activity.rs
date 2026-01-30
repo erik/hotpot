@@ -10,7 +10,7 @@ use csv::StringRecord;
 use fitparser::de::{DecodeOption, from_reader_with_options};
 use fitparser::profile::MesgNum;
 use flate2::read::GzDecoder;
-use geo::{Coord, EuclideanDistance, HasDimensions, MapCoords, Simplify};
+use geo::{EuclideanDistance, HasDimensions, MapCoords, Simplify};
 use geo_types::{LineString, MultiLineString, Point};
 use rayon::iter::{ParallelBridge, ParallelIterator};
 use rusqlite::params;
@@ -23,13 +23,13 @@ use crate::tile::{BBox, LngLat, Tile, WebMercator};
 
 struct TileClipper {
     zoom: u8,
-    tile_extent: u16,
+    tile_extent: i32,
     current: Option<(Tile, BBox)>,
-    tiles: HashMap<Tile, Vec<LineString<u16>>>,
+    tiles: HashMap<Tile, Vec<LineString<f64>>>,
 }
 
 impl TileClipper {
-    fn new(zoom: u8, tile_extent: u16) -> Self {
+    fn new(zoom: u8, tile_extent: i32) -> Self {
         Self {
             zoom,
             tile_extent,
@@ -44,7 +44,7 @@ impl TileClipper {
         (tile, bbox)
     }
 
-    fn last_line(&mut self, tile: &Tile) -> &mut LineString<u16> {
+    fn last_line(&mut self, tile: &Tile) -> &mut LineString<f64> {
         let lines = self.tiles.entry(*tile).or_default();
 
         if lines.is_empty() {
@@ -73,21 +73,13 @@ impl TileClipper {
 
             // [start, end] is at least partially contained within the current tile.
             Some((a, b)) => {
-                let extent = self.tile_extent as i32;
+                let extent = self.tile_extent;
                 let line = self.last_line(&tile);
                 if line.is_empty() {
-                    let Coord { x, y } = a.to_tile_pixel(&bbox, extent);
-                    line.0.push(Coord {
-                        x: x as u16,
-                        y: y as u16,
-                    });
+                    line.0.push(a.to_tile_pixel(&bbox, extent));
                 }
 
-                let Coord { x, y } = b.to_tile_pixel(&bbox, extent);
-                line.0.push(Coord {
-                    x: x as u16,
-                    y: y as u16,
-                });
+                line.0.push(b.to_tile_pixel(&bbox, extent));
 
                 // If we've modified the end point, we've left the current tile.
                 if b != end {
@@ -115,7 +107,7 @@ impl TileClipper {
 pub struct ClippedTiles(Vec<TileClipper>);
 
 impl ClippedTiles {
-    pub fn iter(&self) -> impl Iterator<Item = (&Tile, &LineString<u16>)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&Tile, &LineString<f64>)> {
         self.0
             .iter()
             .flat_map(|clip| clip.tiles.iter())
@@ -149,7 +141,7 @@ impl RawActivity {
     ) -> ClippedTiles {
         let mut clippers: Vec<_> = zoom_levels
             .iter()
-            .map(|z| TileClipper::new(*z, *tile_extent as u16))
+            .map(|z| TileClipper::new(*z, *tile_extent as i32))
             .collect();
 
         for line in self.tracks.iter() {
@@ -493,8 +485,8 @@ pub fn upsert(
             .map_coords(|c| {
                 // For reasons I cannot remember, we store tile activity data
                 // with inverted Y coordinates from the pixel data.
-                let flip_y = tile_size - c.y as f64;
-                (c.x as f64, flip_y).into()
+                let flip_y = tile_size - c.y;
+                (c.x, flip_y).into()
             })
             .simplify(&4.0);
 

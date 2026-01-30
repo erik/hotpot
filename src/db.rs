@@ -11,7 +11,7 @@ use geo_types::Coord;
 use num_traits::AsPrimitive;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{ToSql, params};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime};
 
 const SCHEMA: &str = "\
