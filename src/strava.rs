@@ -427,6 +427,17 @@ async fn receive_webhook(
     let polyline = polyline::decode_polyline(&activity.map.polyline, 5).expect("valid polyline");
     let properties = activity.properties();
 
+    // Filter out virtual activities. In my own data I see both "Virtual Ride"
+    // and "VirtualRide", so be defensive about the matching.
+    if properties
+        .get("activity_type")
+        .and_then(|t| t.as_str())
+        .is_some_and(|ty| ty.starts_with("Virtual"))
+    {
+        tracing::info!("Skipping virtual Strava activity {}", activity.id);
+        return (StatusCode::NO_CONTENT, "skipped");
+    }
+
     if let Err(e) = activity::upsert(
         &mut db.connection().unwrap(),
         &format!("strava:{}", activity.id),

@@ -246,7 +246,7 @@ impl PropertyFilter {
 impl PropExpr {
     fn as_sql<'a>(
         &'a self,
-        key: &'a String,
+        key: &'a dyn ToSql,
         clauses: &mut Vec<Cow<'_, str>>,
         params: &mut Vec<&'a dyn ToSql>,
     ) {
