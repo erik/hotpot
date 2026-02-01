@@ -2,10 +2,11 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use anyhow::{Result, anyhow};
 use csv::StringRecord;
-use fitparser::Value;
 use fitparser::de::{DecodeOption, from_reader_with_options};
 use fitparser::profile::MesgNum;
 use flate2::read::GzDecoder;
@@ -13,8 +14,6 @@ use geo::{EuclideanDistance, MapCoords, Simplify};
 use geo_types::{LineString, MultiLineString, Point};
 use rayon::iter::{ParallelBridge, ParallelIterator};
 use rusqlite::params;
-use std::str::FromStr;
-use std::sync::atomic::{AtomicU32, Ordering};
 use time::OffsetDateTime;
 use walkdir::WalkDir;
 
@@ -243,6 +242,15 @@ pub fn read_file(p: &Path) -> Result<Option<RawActivity>> {
     read(file, media_type, comp)
 }
 
+// Not an exhaustive list, but the most obvious of the FIT "sub_sports" which it
+// doesn't make sense to include in a heatmap.
+const FIT_VIRTUAL_SPORTS: [&str; 4] = [
+    "virtual_activity",
+    "indoor_cycling",
+    "indoor_rowing",
+    "indoor_running",
+];
+
 fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
     const SCALE_FACTOR: f64 = (1u64 << 32) as f64 / 360.0;
 
@@ -252,17 +260,41 @@ fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
     ]
     .into();
 
+    let mut properties = HashMap::new();
     let mut start_time = None;
     let mut points = vec![];
     for data in from_reader_with_options(r, &opts)? {
         match data.kind() {
-            MesgNum::FileId => {
-                for f in data.fields() {
-                    // Skip over virtual rides (not an exhaustive check)
-                    if f.name() == "manufacturer" {
-                        match f.value() {
-                            Value::String(val) if val.as_str() == "zwift" => return Ok(None),
-                            _ => {}
+            // There's one FileId block per file and one or more sessions.
+            // Currently not really supporting the concept of multi-session
+            // files, so don't try to be clever with parsing.
+            MesgNum::FileId | MesgNum::Session => {
+                for f in data.into_vec().into_iter() {
+                    match f.name() {
+                        "sub_sport" => {
+                            // Skip over virtual activity types
+                            if let fitparser::Value::String(ty) = f.value()
+                                && FIT_VIRTUAL_SPORTS.contains(&ty.as_str())
+                            {
+                                return Ok(None);
+                            }
+                        }
+
+                        "start_time" => {
+                            let fitparser::Value::Timestamp(ts) = f.value() else {
+                                continue;
+                            };
+                            start_time = Some(ts.timestamp());
+                        }
+
+                        key if key.starts_with("unknown_field_") => {
+                            // Skip anything the fitparser library doesn't know
+                            // about.
+                        }
+
+                        // Blindly stuff the remaining attributes into properties
+                        key => {
+                            properties.insert(key.to_owned(), serde_json::to_value(f.value())?);
                         }
                     }
                 }
@@ -300,10 +332,10 @@ fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
 
     let line = points.into_iter().collect::<LineString>();
     Ok(Some(RawActivity {
+        properties,
         title: None,
         start_time: start_time.map(|ts| OffsetDateTime::from_unix_timestamp(ts).unwrap()),
         tracks: MultiLineString::from(line),
-        properties: HashMap::new(),
     }))
 }
 
@@ -315,13 +347,27 @@ fn parse_gpx<R: Read>(reader: &mut R) -> Result<Option<RawActivity>> {
         return Ok(None);
     };
 
+    let mut properties = HashMap::new();
+
+    if let Some(ref ty) = track.type_ {
+        // Skip virtual activities. <type> is free form, so this won't be exhaustive.
+        if ty.starts_with("Virtual") {
+            return Ok(None);
+        }
+
+        properties.insert(
+            "activity_type".to_owned(),
+            serde_json::Value::String(ty.to_owned()),
+        );
+    }
+
     let start_time = gpx.metadata.and_then(|m| m.time).map(OffsetDateTime::from);
 
     Ok(Some(RawActivity {
         start_time,
+        properties,
         title: track.name.clone(),
         tracks: track.multilinestring(),
-        properties: HashMap::new(),
     }))
 }
 
