@@ -13,7 +13,7 @@ use serde::{Deserialize, Deserializer};
 
 use crate::WebMercatorViewport;
 use crate::db::{ActivityFilter, Database, decode_line};
-use crate::tile::{Tile, TileBounds, TilePrivacyFilter};
+use crate::tile::{Tile, TileActivityMask, TileBounds};
 
 pub static PINKISH: Lazy<LinearGradient> = Lazy::new(|| {
     LinearGradient::from_stops(&[
@@ -73,12 +73,7 @@ impl TileRaster {
         }
     }
 
-    fn add_activity(
-        &mut self,
-        source_tile: &Tile,
-        coords: &[Coord<u32>],
-        privacy_filter: &TilePrivacyFilter,
-    ) {
+    fn add_activity(&mut self, source_tile: &Tile, coords: &[Coord<u32>], mask: &TileActivityMask) {
         debug_assert_eq!(source_tile.z, self.bounds.z);
 
         // Origin of source tile within target tile
@@ -98,8 +93,8 @@ impl TileRaster {
             let x = x >> self.scale;
             let y = y >> self.scale;
 
-            // Apply privacy filter in tile pixel space
-            if privacy_filter.is_hidden(x as i32, y as i32) {
+            // Apply mask in tile pixel space
+            if mask.is_hidden(x as i32, y as i32) {
                 // Break the line
                 prev = None;
                 continue;
@@ -381,7 +376,7 @@ pub fn rasterize_tile(
     filter: &ActivityFilter,
     db: &Database,
 ) -> Result<Option<TileRaster>> {
-    let privacy_zones = &db.config.privacy_zones;
+    let masks = &db.config.activity_mask;
     let zoom_level = db
         .config
         .source_level(tile.z)
@@ -390,7 +385,7 @@ pub fn rasterize_tile(
     let bounds = TileBounds::from(zoom_level, &tile);
     let mut raster = TileRaster::new(tile, bounds, width, db.config.tile_extent);
 
-    let privacy_filter = tile.privacy_filter(privacy_zones, width as i32);
+    let mask = tile.build_mask(masks, width as i32);
 
     let mut have_activity = false;
 
@@ -403,7 +398,7 @@ pub fn rasterize_tile(
         let bytes: Vec<u8> = row.get_unwrap(3);
         let coords = decode_line(&bytes)?;
 
-        raster.add_activity(&source_tile, &coords, &privacy_filter);
+        raster.add_activity(&source_tile, &coords, &mask);
 
         have_activity = true;
     }

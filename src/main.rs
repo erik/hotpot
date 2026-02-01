@@ -45,6 +45,9 @@ enum Commands {
 
     /// Authenticate with Strava to fetch OAuth tokens for webhook.
     StravaAuth(StravaAuthCmdArgs),
+
+    /// Add or remove areas to hide from rendered heatmaps.
+    Mask(MaskCmdArgs),
 }
 
 #[derive(Args)]
@@ -216,6 +219,35 @@ struct StravaAuthCmdArgs {
 }
 
 #[derive(Args)]
+struct MaskCmdArgs {
+    #[command(subcommand)]
+    action: Option<MaskAction>,
+}
+
+#[derive(Subcommand)]
+enum MaskAction {
+    /// Add a hidden (masked) area
+    Add {
+        /// Name for this area
+        name: String,
+
+        /// Center coordinates as "longitude,latitude" in decimal degrees
+        #[arg(short, long)]
+        lnglat: tile::LngLat,
+
+        /// Radius in meters
+        #[arg(short, long, default_value = "500")]
+        radius: f64,
+    },
+
+    /// Remove a mask by name.
+    Remove {
+        /// Name of the mask to remove
+        name: String,
+    },
+}
+
+#[derive(Args)]
 struct GlobalOpts {
     /// Path to database
     #[arg(
@@ -294,10 +326,11 @@ fn run() -> Result<()> {
     match opts.cmd {
         Commands::Activities(args) => command_activity_info(opts.global, args)?,
         Commands::Import(args) => command_import_activities(opts.global, args)?,
-        Commands::Tile(args) => command_render_tile(opts.global, args)?,
+        Commands::Mask(args) => command_mask(opts.global, args)?,
         Commands::Render(args) => command_render_view(opts.global, args)?,
         Commands::Serve(args) => command_serve(opts.global, args)?,
         Commands::StravaAuth(args) => command_strava_auth(opts.global, args)?,
+        Commands::Tile(args) => command_render_tile(opts.global, args)?,
     };
 
     Ok(())
@@ -459,4 +492,48 @@ fn command_strava_auth(global: GlobalOpts, args: StravaAuthCmdArgs) -> Result<()
         addr
     );
     web::run_blocking(addr, db, config)
+}
+
+fn command_mask(global: GlobalOpts, args: MaskCmdArgs) -> Result<()> {
+    let mut db = global.database()?;
+
+    match args.action {
+        Some(MaskAction::Add {
+            name,
+            lnglat,
+            radius,
+        }) => {
+            db.add_activity_mask(db::ActivityMask {
+                name: name.clone(),
+                lat: lnglat.0.y(),
+                lng: lnglat.0.x(),
+                radius,
+            })?;
+            println!(
+                "Added masked area '{}' at {:.5},{:.5} (radius: {}m)",
+                name,
+                lnglat.0.x(),
+                lnglat.0.y(),
+                radius
+            );
+        }
+        Some(MaskAction::Remove { name }) => {
+            db.remove_mask(&name)?;
+            println!("Removed masked area '{}'", name);
+        }
+        None => {
+            if db.config.activity_mask.is_empty() {
+                println!("No masked areas added yet");
+            }
+
+            for m in db.config.activity_mask.iter() {
+                println!(
+                    "  {} - {:.5},{:.5} (radius: {}m)",
+                    m.name, m.lat, m.lng, m.radius
+                );
+            }
+        }
+    }
+
+    Ok(())
 }

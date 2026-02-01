@@ -219,6 +219,29 @@ export STRAVA_CLIENT_ID=... \
 hotpot serve --strava-webhook
 ```
 
+## Hidden Areas
+
+When running a public server, you may want to hide activity data near sensitive
+locations (home, work, etc.). Privacy masks create circular areas where activity
+data is hidden from rendered tiles.
+
+```bash
+# Create a new hidden area. Radius is given in meters.
+hotpot mask add "home" --lnglat 13.4050,52.5200 --radius 500
+
+# List all hidden areas.
+hotpot mask
+
+hotpot mask remove "home"
+```
+
+Masks are applied dynamically when rendering tiles and can be added or removed at
+any time without re-importing data.
+
+Alternatively, you can use `import --trim N` to permanently remove the first and
+last N meters from all activities during import. Unlike masks, trimming
+destructively modifies the imported data and cannot be changed later.
+
 ## Deployment
 
 To simplify things, a basic `Dockerfile` is included. Mount a volume at

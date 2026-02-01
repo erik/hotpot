@@ -6,7 +6,7 @@ use anyhow::{Result, anyhow};
 use derive_more::{From, Into};
 use geo_types::{Coord, Point};
 
-use crate::db::PrivacyZone;
+use crate::db::ActivityMask;
 
 const EARTH_RADIUS_METERS: f64 = 6_378_137.0;
 const EARTH_CIRCUMFERENCE: f64 = 2.0 * PI * EARTH_RADIUS_METERS;
@@ -273,6 +273,28 @@ impl WebMercator {
     }
 }
 
+impl FromStr for LngLat {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split(',').collect();
+        if parts.len() != 2 {
+            anyhow::bail!("expected format: longitude,latitude");
+        }
+        let lng: f64 = parts[0].trim().parse()?;
+        let lat: f64 = parts[1].trim().parse()?;
+
+        if !(-90.0..=90.0).contains(&lat) {
+            anyhow::bail!("latitude must be between -90 and 90");
+        }
+        if !(-180.0..=180.0).contains(&lng) {
+            anyhow::bail!("longitude must be between -180 and 180");
+        }
+
+        Ok(LngLat::new(lng, lat))
+    }
+}
+
 impl LngLat {
     const LAT_BOUNDS: Range<f64> = -89.99999..90.0;
 
@@ -321,8 +343,8 @@ impl Tile {
         }
     }
 
-    pub fn privacy_filter(&self, zones: &[PrivacyZone], tile_extent: i32) -> TilePrivacyFilter {
-        TilePrivacyFilter::new(zones, self, tile_extent)
+    pub fn build_mask(&self, zones: &[ActivityMask], tile_extent: i32) -> TileActivityMask {
+        TileActivityMask::new(zones, self, tile_extent)
     }
 }
 
@@ -344,13 +366,13 @@ impl FromStr for Tile {
 }
 
 #[derive(Debug)]
-pub struct TilePrivacyFilter {
+pub struct TileActivityMask {
     pixel_pz: Vec<(i32, i32, i32)>,
 }
 
-impl TilePrivacyFilter {
+impl TileActivityMask {
     /// Create a filter for the given tile. Returns None if no zones intersect.
-    pub fn new(zones: &[PrivacyZone], tile: &Tile, tile_extent: i32) -> Self {
+    pub fn new(zones: &[ActivityMask], tile: &Tile, tile_extent: i32) -> Self {
         let tile_bounds_xyz = tile.xy_bounds();
 
         let tile_width_meter = tile_bounds_xyz.right - tile_bounds_xyz.left;
@@ -360,9 +382,9 @@ impl TilePrivacyFilter {
             .iter()
             .filter_map(|pz| {
                 let pz_merc = LngLat::new(pz.lng, pz.lat).xy()?;
-                let pz_size_px = pz.size_meters * pixels_per_meter;
+                let pz_size_px = pz.radius * pixels_per_meter;
 
-                // Check if privacy zone intersects tile (buffered by size of privacy zone)
+                // Check if mask intersects tile (buffered by size of mask)
                 let bbox = BBox {
                     left: tile_bounds_xyz.left - pz_size_px,
                     right: tile_bounds_xyz.right + pz_size_px,
@@ -383,7 +405,7 @@ impl TilePrivacyFilter {
         Self { pixel_pz: zones }
     }
 
-    /// Check if a point should be hidden (is within any privacy zone).
+    /// Check if a point should be hidden (is within any mask).
     #[inline]
     pub fn is_hidden(&self, x: i32, y: i32) -> bool {
         self.pixel_pz.iter().any(|&(px, py, radius_sq)| {
@@ -504,20 +526,21 @@ mod tests {
     }
 
     #[test]
-    fn test_privacy_filter_hides_point_in_zone() {
+    fn test_mask_hides_point_in_zone() {
         let tile_size = 4096;
 
-        let pz = PrivacyZone {
+        let mask = ActivityMask {
+            name: "test".to_string(),
             lat: 52.528125,
             lng: 13.3643882,
-            size_meters: 15000.0,
+            radius: 15000.0,
         };
 
         // Point inside the circle
-        let pt_in_pz = LngLat::new(pz.lng, pz.lat).xy().unwrap();
+        let pt_in_pz = LngLat::new(mask.lng, mask.lat).xy().unwrap();
         let tile_in_pz = pt_in_pz.tile(10);
 
-        let filter = tile_in_pz.privacy_filter(&[pz], tile_size);
+        let filter = tile_in_pz.build_mask(&[mask], tile_size);
 
         let px = pt_in_pz.to_tile_pixel(&tile_in_pz.xy_bounds(), tile_size as i32);
         let is_hidden = filter.is_hidden(px.x as i32, px.y as i32);
@@ -526,11 +549,12 @@ mod tests {
     }
 
     #[test]
-    fn test_privacy_filter_allows_point_outside_zone() {
-        let zone = PrivacyZone {
+    fn test_mask_allows_point_outside_zone() {
+        let zone = ActivityMask {
+            name: "test".to_string(),
             lat: 52.528125,
             lng: 13.3643882,
-            size_meters: 15000.0,
+            radius: 15000.0,
         };
 
         // Point outside the circle
@@ -538,7 +562,7 @@ mod tests {
         let tile = pt_outside_pz.tile(10);
         let tile_extent = 4096;
 
-        let filter = tile.privacy_filter(&[zone], tile_extent);
+        let filter = tile.build_mask(&[zone], tile_extent);
 
         // Filter may or may not exist for this tile, but if it does, the point should not be hidden
         let outside_px = pt_outside_pz.to_tile_pixel(&tile.xy_bounds(), tile_extent);
@@ -549,12 +573,13 @@ mod tests {
     }
 
     #[test]
-    fn test_privacy_filter_zone_crosses_tile_boundary() {
+    fn test_mask_crosses_tile_boundary() {
         // 15km radius - should span multiple tiles
-        let pz = PrivacyZone {
+        let pz = ActivityMask {
+            name: "test".to_string(),
             lat: 52.528125,
             lng: 13.3643882,
-            size_meters: 15000.0,
+            radius: 15000.0,
         };
 
         let zoom_level = 14;
@@ -569,10 +594,10 @@ mod tests {
         ];
 
         for tile in adjacent_tiles.iter() {
-            let filter = tile.privacy_filter(&[pz.clone()], tile_extent);
+            let filter = tile.build_mask(&[pz.clone()], tile_extent);
             assert!(
                 !filter.pixel_pz.is_empty(),
-                "privacy zone should spill into adjacent tile: {:?}",
+                "mask should spill into adjacent tile: {:?}",
                 tile
             );
         }

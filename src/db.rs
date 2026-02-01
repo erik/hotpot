@@ -11,7 +11,7 @@ use geo_types::Coord;
 use num_traits::AsPrimitive;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{ToSql, params};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use time::{Date, OffsetDateTime};
 
 const SCHEMA: &str = "\
@@ -119,6 +119,27 @@ impl Database {
     pub fn shared_pool(&self) -> r2d2::Pool<SqliteConnectionManager> {
         self.pool.clone()
     }
+
+    pub fn add_activity_mask(&mut self, zone: ActivityMask) -> Result<()> {
+        self.config.activity_mask.push(zone);
+        let mut conn = self.connection()?;
+        self.config.save(&mut conn)?;
+        Ok(())
+    }
+
+    pub fn remove_mask(&mut self, name: &str) -> Result<()> {
+        let index = self
+            .config
+            .activity_mask
+            .iter()
+            .position(|z| z.name == name)
+            .ok_or_else(|| anyhow::anyhow!("no such activity mask '{}'", name))?;
+
+        self.config.activity_mask.remove(index);
+        let mut conn = self.connection()?;
+        self.config.save(&mut conn)?;
+        Ok(())
+    }
 }
 
 fn apply_schema(conn: &mut rusqlite::Connection) -> Result<()> {
@@ -143,12 +164,13 @@ const DEFAULT_TILE_EXTENT: u32 = 2048;
 const DEFAULT_ZOOM_LEVELS: [u8; 5] = [2, 6, 10, 14, 16];
 const DEFAULT_TRIM_DIST: f64 = 200.0;
 
-/// A circular privacy zone that hides activity data within its radius.
+/// A circular mask that hides activity data within its radius.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PrivacyZone {
+pub struct ActivityMask {
+    pub name: String,
     pub lat: f64,
     pub lng: f64,
-    pub size_meters: f64,
+    pub radius: f64,
 }
 
 pub struct Config {
@@ -158,8 +180,8 @@ pub struct Config {
     pub tile_extent: u32,
     /// Distance to trim start/end of activities, in meters.
     pub trim_dist: f64,
-    /// Privacy zones where activity data should be hidden.
-    pub privacy_zones: Vec<PrivacyZone>,
+    /// Areas to hide activity data.
+    pub activity_mask: Vec<ActivityMask>,
 }
 
 impl Config {
@@ -177,7 +199,7 @@ impl Config {
                 "zoom_levels" => cfg.zoom_levels = serde_json::from_str(&value)?,
                 "tile_extent" => cfg.tile_extent = value.parse()?,
                 "trim_dist" => cfg.trim_dist = value.parse()?,
-                "privacy_zones" => cfg.privacy_zones = serde_json::from_str(&value)?,
+                "activity_masks" => cfg.activity_mask = serde_json::from_str(&value)?,
                 key => tracing::warn!("Ignoring unknown config key: {}", key),
             }
         }
@@ -187,7 +209,7 @@ impl Config {
 
     fn save(&self, conn: &mut rusqlite::Connection) -> Result<()> {
         let zoom_levels = serde_json::to_string(&self.zoom_levels)?;
-        //let privacy_zones = serde_json::to_string(&self.privacy_zones)?;
+        let activity_masks = serde_json::to_string(&self.activity_mask)?;
 
         let mut stmt = conn.prepare(
             "\
@@ -197,7 +219,7 @@ impl Config {
         stmt.execute(params!["zoom_levels", &zoom_levels])?;
         stmt.execute(params!["tile_extent", &self.tile_extent])?;
         stmt.execute(params!["trim_dist", &self.trim_dist])?;
-        // stmt.execute(params!["privacy_zones", &privacy_zones])?;
+        stmt.execute(params!["activity_masks", &activity_masks])?;
 
         Ok(())
     }
@@ -218,11 +240,7 @@ impl Default for Config {
             zoom_levels: DEFAULT_ZOOM_LEVELS.to_vec(),
             tile_extent: DEFAULT_TILE_EXTENT,
             trim_dist: DEFAULT_TRIM_DIST,
-            privacy_zones: vec![PrivacyZone {
-                lng: -118.2640689,
-                lat: 34.0498589,
-                size_meters: 400.0,
-            }],
+            activity_mask: vec![],
         }
     }
 }
