@@ -62,6 +62,33 @@ fn test_import_and_activities_count() {
 }
 
 #[test]
+fn test_import_fit_file() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("test.sqlite3");
+
+    build_subcommand(
+        &db_path,
+        "import",
+        &[&format!("{}activities/sample.fit", TEST_DATA_DIR)],
+    )
+    .success();
+
+    assert_eq!(get_activity_count(&db_path), 1);
+
+    let filtered_assert = build_subcommand(&db_path, "activities", &[]);
+    let filtered_result = filtered_assert.success();
+    let filtered_output = filtered_result.get_output();
+
+    let filtered_output_str = String::from_utf8_lossy(&filtered_output.stdout);
+    let lines: Vec<&str> = filtered_output_str.lines().collect();
+
+    // Not a great test, but check that we've pulled something out of both the
+    // FileId/Session blocks
+    assert!(lines[0].contains(r#""manufacturer":"garmin","#));
+    assert!(lines[0].contains(r#""total_calories":1188,"#));
+}
+
+#[test]
 fn test_import_deduplication() {
     let temp_dir = tempdir().unwrap();
     let db_path = temp_dir.path().join("test.sqlite3");
