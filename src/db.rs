@@ -11,7 +11,7 @@ use geo_types::Coord;
 use num_traits::AsPrimitive;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{ToSql, params};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use time::{Date, OffsetDateTime};
 
 const SCHEMA: &str = "\
@@ -143,6 +143,14 @@ const DEFAULT_TILE_EXTENT: u32 = 2048;
 const DEFAULT_ZOOM_LEVELS: [u8; 5] = [2, 6, 10, 14, 16];
 const DEFAULT_TRIM_DIST: f64 = 200.0;
 
+/// A circular privacy zone that hides activity data within its radius.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PrivacyZone {
+    pub lat: f64,
+    pub lng: f64,
+    pub size_meters: f64,
+}
+
 pub struct Config {
     /// Zoom levels that we store activity tiles for.
     pub zoom_levels: Vec<u8>,
@@ -150,6 +158,8 @@ pub struct Config {
     pub tile_extent: u32,
     /// Distance to trim start/end of activities, in meters.
     pub trim_dist: f64,
+    /// Privacy zones where activity data should be hidden.
+    pub privacy_zones: Vec<PrivacyZone>,
 }
 
 impl Config {
@@ -167,6 +177,7 @@ impl Config {
                 "zoom_levels" => cfg.zoom_levels = serde_json::from_str(&value)?,
                 "tile_extent" => cfg.tile_extent = value.parse()?,
                 "trim_dist" => cfg.trim_dist = value.parse()?,
+                "privacy_zones" => cfg.privacy_zones = serde_json::from_str(&value)?,
                 key => tracing::warn!("Ignoring unknown config key: {}", key),
             }
         }
@@ -176,6 +187,7 @@ impl Config {
 
     fn save(&self, conn: &mut rusqlite::Connection) -> Result<()> {
         let zoom_levels = serde_json::to_string(&self.zoom_levels)?;
+        //let privacy_zones = serde_json::to_string(&self.privacy_zones)?;
 
         let mut stmt = conn.prepare(
             "\
@@ -185,6 +197,7 @@ impl Config {
         stmt.execute(params!["zoom_levels", &zoom_levels])?;
         stmt.execute(params!["tile_extent", &self.tile_extent])?;
         stmt.execute(params!["trim_dist", &self.trim_dist])?;
+        // stmt.execute(params!["privacy_zones", &privacy_zones])?;
 
         Ok(())
     }
@@ -205,6 +218,11 @@ impl Default for Config {
             zoom_levels: DEFAULT_ZOOM_LEVELS.to_vec(),
             tile_extent: DEFAULT_TILE_EXTENT,
             trim_dist: DEFAULT_TRIM_DIST,
+            privacy_zones: vec![PrivacyZone {
+                lng: -118.2640689,
+                lat: 34.0498589,
+                size_meters: 400.0,
+            }],
         }
     }
 }

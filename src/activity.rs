@@ -136,6 +136,7 @@ impl RawActivity {
             zoom_levels,
             trim_dist,
             tile_extent,
+            ..
         }: &db::Config,
     ) -> ClippedTiles {
         let mut clippers: Vec<_> = zoom_levels
