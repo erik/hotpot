@@ -15,6 +15,14 @@ fn build_subcommand(db_path: &Path, subcommand: &str, args: &[&str]) -> Assert {
         .assert()
 }
 
+fn get_activity_count(db_path: &Path) -> usize {
+    let assert = build_subcommand(db_path, "activities", &["--count"]);
+    let result = assert.success();
+    let output = result.get_output();
+    let count = String::from_utf8_lossy(&output.stdout);
+    count.trim().parse().expect("valid count")
+}
+
 const TEST_DATA_DIR: &str = "tests/fixtures/";
 
 #[test]
@@ -33,12 +41,7 @@ fn test_import_and_activities_count() {
     )
     .success();
 
-    let assert = build_subcommand(&db_path, "activities", &["--count"]);
-    let result = assert.success();
-    let output = result.get_output();
-
-    let count = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(count.trim(), "3");
+    assert_eq!(get_activity_count(&db_path), 3);
 
     let filtered_assert = build_subcommand(
         &db_path,
@@ -67,12 +70,11 @@ fn test_import_deduplication() {
     build_subcommand(&db_path, "import", &[TEST_DATA_DIR]).success();
     build_subcommand(&db_path, "import", &[TEST_DATA_DIR]).success();
 
-    let assert = build_subcommand(&db_path, "activities", &["--count"]);
-    let result = assert.success();
-    let output = result.get_output();
-
-    let count = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(count.trim(), "3", "Should deduplicate identical imports");
+    assert_eq!(
+        get_activity_count(&db_path),
+        3,
+        "Should deduplicate identical imports"
+    );
 }
 
 #[test]
@@ -146,4 +148,25 @@ fn test_filter_by_date_after() {
     let activities = String::from_utf8_lossy(&output.stdout);
     assert_eq!(activities.lines().count(), 1);
     assert!(activities.contains("sample.fit"));
+}
+
+#[test]
+fn test_virtual_activities_skipped() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("test.sqlite3");
+
+    // Import the virtual ride GPX/FIT files
+    build_subcommand(
+        &db_path,
+        "import",
+        &[&format!("{}/activities/virtual/", TEST_DATA_DIR)],
+    )
+    .success();
+
+    // The virtual activity should be skipped, so count should be 0
+    assert_eq!(
+        get_activity_count(&db_path),
+        0,
+        "Virtual GPX activities should be skipped"
+    );
 }

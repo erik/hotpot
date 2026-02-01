@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx creator="Zwift" version="1.1" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>Virtual Morning Ride</name>
+    <time>2025-01-15T08:00:00.000Z</time>
+  </metadata>
+  <trk>
+    <name>Virtual Morning Ride</name>
+    <type>VirtualRide</type>
+    <trkseg>
+      <trkpt lat="52.489478" lon="13.377609">
+        <ele>43.8</ele>
+      </trkpt>
+      <trkpt lat="52.489465" lon="13.377443">
+        <ele>43.9</ele>
+      </trkpt>
+    </trkseg>
+  </trk>
+</gpx>
