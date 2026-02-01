@@ -352,21 +352,25 @@ impl Tile {
             .iter()
             .filter_map(|m| {
                 let center = LngLat::new(m.lng, m.lat).xy()?;
-                let radius_px = m.radius * pixels_per_meter;
 
-                // Check if mask intersects this tile
+                // Check if mask intersects this tile. Mercator units are
+                // "meters"-ish, so we don't need to scale the radius yet
                 let padded = BBox {
-                    left: bbox.left - radius_px,
-                    right: bbox.right + radius_px,
-                    bot: bbox.bot - radius_px,
-                    top: bbox.top + radius_px,
+                    left: bbox.left - m.radius,
+                    right: bbox.right + m.radius,
+                    bot: bbox.bot - m.radius,
+                    top: bbox.top + m.radius,
                 };
 
                 if !padded.contains(center.0.x(), center.0.y()) {
                     return None;
                 }
 
+                // Masking happens in pixel space
                 let center_px = center.to_tile_pixel(&bbox, tile_extent);
+                let radius_px = m.radius * pixels_per_meter;
+
+                // Avoid a sqrt by comparing distance to square of radius.
                 let radius_sq = radius_px * radius_px;
                 Some((center_px.x as i32, center_px.y as i32, radius_sq as i32))
             })
@@ -595,7 +599,7 @@ mod tests {
         ];
 
         for tile in adjacent_tiles.iter() {
-            let tile_mask = tile.build_mask(&[mask.clone()], tile_extent);
+            let tile_mask = tile.build_mask(std::slice::from_ref(&mask), tile_extent);
             assert!(
                 !tile_mask.0.is_empty(),
                 "mask should spill into adjacent tile: {:?}",
