@@ -84,6 +84,26 @@ impl TileBounds {
 #[derive(Copy, Clone, PartialEq, Debug, From, Into)]
 pub struct LngLat(pub Point<f64>);
 
+impl LngLat {
+    pub fn from_latlng_str(value: &str) -> Result<Self> {
+        let parts: Vec<&str> = value.split(',').collect();
+        if parts.len() != 2 {
+            anyhow::bail!("expected format: longitude,latitude");
+        }
+
+        let lat: f64 = parts[0].trim().parse()?;
+        let lng: f64 = parts[1].trim().parse()?;
+        if !(-90.0..=90.0).contains(&lat) {
+            anyhow::bail!("latitude must be between -90 and 90");
+        }
+        if !(-180.0..=180.0).contains(&lng) {
+            anyhow::bail!("longitude must be between -180 and 180");
+        }
+
+        Ok(Self((lng, lat).into()))
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Debug, From, Into)]
 pub struct WebMercator(pub Point<f64>);
 
@@ -149,7 +169,7 @@ impl BBox {
     }
 
     pub fn contains(&self, x: f64, y: f64) -> bool {
-        self.compute_edges(x, y) == Self::INSIDE
+        x >= self.left && y >= self.bot && x <= self.right && y <= self.top
     }
 
     fn compute_edges(&self, x: f64, y: f64) -> u8 {
@@ -273,28 +293,6 @@ impl WebMercator {
     }
 }
 
-impl FromStr for LngLat {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split(',').collect();
-        if parts.len() != 2 {
-            anyhow::bail!("expected format: longitude,latitude");
-        }
-        let lng: f64 = parts[0].trim().parse()?;
-        let lat: f64 = parts[1].trim().parse()?;
-
-        if !(-90.0..=90.0).contains(&lat) {
-            anyhow::bail!("latitude must be between -90 and 90");
-        }
-        if !(-180.0..=180.0).contains(&lng) {
-            anyhow::bail!("longitude must be between -180 and 180");
-        }
-
-        Ok(LngLat::new(lng, lat))
-    }
-}
-
 impl LngLat {
     const LAT_BOUNDS: Range<f64> = -89.99999..90.0;
 
@@ -343,8 +341,38 @@ impl Tile {
         }
     }
 
-    pub fn build_mask(&self, zones: &[ActivityMask], tile_extent: i32) -> TileActivityMask {
-        TileActivityMask::new(zones, self, tile_extent)
+    /// Pre-compute activity masks relevant to this tile.
+    pub fn build_mask(&self, masks: &[ActivityMask], tile_extent: i32) -> TileActivityMask {
+        let bbox = self.xy_bounds();
+
+        let tile_width_meter = bbox.right - bbox.left;
+        let pixels_per_meter = tile_extent as f64 / tile_width_meter;
+
+        let tile_masks = masks
+            .iter()
+            .filter_map(|m| {
+                let center = LngLat::new(m.lng, m.lat).xy()?;
+                let radius_px = m.radius * pixels_per_meter;
+
+                // Check if mask intersects this tile
+                let padded = BBox {
+                    left: bbox.left - radius_px,
+                    right: bbox.right + radius_px,
+                    bot: bbox.bot - radius_px,
+                    top: bbox.top + radius_px,
+                };
+
+                if !padded.contains(center.0.x(), center.0.y()) {
+                    return None;
+                }
+
+                let center_px = center.to_tile_pixel(&bbox, tile_extent);
+                let radius_sq = radius_px * radius_px;
+                Some((center_px.x as i32, center_px.y as i32, radius_sq as i32))
+            })
+            .collect();
+
+        TileActivityMask(tile_masks)
     }
 }
 
@@ -365,50 +393,16 @@ impl FromStr for Tile {
     }
 }
 
-#[derive(Debug)]
-pub struct TileActivityMask {
-    pixel_pz: Vec<(i32, i32, i32)>,
-}
+pub struct TileActivityMask(
+    /// x, y, radius_sq
+    Vec<(i32, i32, i32)>,
+);
 
 impl TileActivityMask {
-    /// Create a filter for the given tile. Returns None if no zones intersect.
-    pub fn new(zones: &[ActivityMask], tile: &Tile, tile_extent: i32) -> Self {
-        let tile_bounds_xyz = tile.xy_bounds();
-
-        let tile_width_meter = tile_bounds_xyz.right - tile_bounds_xyz.left;
-        let pixels_per_meter = tile_extent as f64 / tile_width_meter;
-
-        let zones: Vec<_> = zones
-            .iter()
-            .filter_map(|pz| {
-                let pz_merc = LngLat::new(pz.lng, pz.lat).xy()?;
-                let pz_size_px = pz.radius * pixels_per_meter;
-
-                // Check if mask intersects tile (buffered by size of mask)
-                let bbox = BBox {
-                    left: tile_bounds_xyz.left - pz_size_px,
-                    right: tile_bounds_xyz.right + pz_size_px,
-                    bot: tile_bounds_xyz.bot - pz_size_px,
-                    top: tile_bounds_xyz.top + pz_size_px,
-                };
-
-                if !bbox.contains(pz_merc.0.x(), pz_merc.0.y()) {
-                    return None;
-                }
-
-                let pz_tile = pz_merc.to_tile_pixel(&tile_bounds_xyz, tile_extent);
-                let radius_sq = pz_size_px * pz_size_px;
-                Some((pz_tile.x as i32, pz_tile.y as i32, radius_sq as i32))
-            })
-            .collect();
-
-        Self { pixel_pz: zones }
-    }
-
     /// Check if a point should be hidden (is within any mask).
     #[inline]
     pub fn is_hidden(&self, x: i32, y: i32) -> bool {
-        self.pixel_pz.iter().any(|&(px, py, radius_sq)| {
+        self.0.iter().any(|&(px, py, radius_sq)| {
             let dx = x - px;
             let dy = y - py;
             dx * dx + dy * dy < radius_sq
@@ -537,15 +531,17 @@ mod tests {
         };
 
         // Point inside the circle
-        let pt_in_pz = LngLat::new(mask.lng, mask.lat).xy().unwrap();
-        let tile_in_pz = pt_in_pz.tile(10);
+        let masked_pt = LngLat::new(mask.lng, mask.lat).xy().unwrap();
 
-        let filter = tile_in_pz.build_mask(&[mask], tile_size);
+        let tile = masked_pt.tile(10);
+        let tile_mask = tile.build_mask(&[mask], tile_size);
 
-        let px = pt_in_pz.to_tile_pixel(&tile_in_pz.xy_bounds(), tile_size as i32);
-        let is_hidden = filter.is_hidden(px.x as i32, px.y as i32);
+        let Coord { x, y } = masked_pt.to_tile_pixel(&tile.xy_bounds(), tile_size);
 
-        assert!(is_hidden, "point inside zone should be hidden");
+        assert!(
+            tile_mask.is_hidden(x as i32, y as i32),
+            "point inside zone should be hidden"
+        );
     }
 
     #[test]
@@ -558,16 +554,18 @@ mod tests {
         };
 
         // Point outside the circle
-        let pt_outside_pz = LngLat::new(13.8221594, 52.6044458).xy().unwrap();
-        let tile = pt_outside_pz.tile(10);
+        let unmasked_pt = LngLat::new(13.8221594, 52.6044458).xy().unwrap();
+
+        let tile = unmasked_pt.tile(10);
         let tile_extent = 4096;
 
-        let filter = tile.build_mask(&[zone], tile_extent);
+        let tile_mask = tile.build_mask(&[zone], tile_extent);
 
-        // Filter may or may not exist for this tile, but if it does, the point should not be hidden
-        let outside_px = pt_outside_pz.to_tile_pixel(&tile.xy_bounds(), tile_extent);
+        // Filter may or may not exist for this tile, but if it does, the point
+        // should not be hidden
+        let Coord { x, y } = unmasked_pt.to_tile_pixel(&tile.xy_bounds(), tile_extent);
         assert!(
-            !filter.is_hidden(outside_px.x as i32, outside_px.y as i32),
+            !tile_mask.is_hidden(x as i32, y as i32),
             "point outside zone should not be hidden"
         );
     }
@@ -575,7 +573,7 @@ mod tests {
     #[test]
     fn test_mask_crosses_tile_boundary() {
         // 15km radius - should span multiple tiles
-        let pz = ActivityMask {
+        let mask = ActivityMask {
             name: "test".to_string(),
             lat: 52.528125,
             lng: 13.3643882,
@@ -584,7 +582,10 @@ mod tests {
 
         let zoom_level = 14;
         let tile_extent = 4096;
-        let tile = LngLat::new(pz.lng, pz.lat).xy().unwrap().tile(zoom_level);
+        let tile = LngLat::new(mask.lng, mask.lat)
+            .xy()
+            .unwrap()
+            .tile(zoom_level);
 
         let adjacent_tiles = [
             Tile::new(tile.x + 1, tile.y, zoom_level),
@@ -594,9 +595,9 @@ mod tests {
         ];
 
         for tile in adjacent_tiles.iter() {
-            let filter = tile.build_mask(&[pz.clone()], tile_extent);
+            let tile_mask = tile.build_mask(&[mask.clone()], tile_extent);
             assert!(
-                !filter.pixel_pz.is_empty(),
+                !tile_mask.0.is_empty(),
                 "mask should spill into adjacent tile: {:?}",
                 tile
             );

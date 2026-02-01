@@ -154,6 +154,43 @@ exclude commutes, which gear we used, a minimum elevation gain, etc.
 }
 ```
 
+### Activity Visibility & Privacy
+
+When running a public-facing tile server or rendering heatmaps to share with
+others, you may want to hide activities near sensitive locations (home, work,
+etc.).
+
+The `mask` command can be used to define areas where no activity data should be
+rendered.
+
+```bash
+# Create a new area mask. Radius is given in meters, and coordinates are
+# latitude,longitude.
+hotpot mask add "home" --latlng 52.5200,13.4050 --radius 500
+
+# List all area masks.
+hotpot mask
+
+hotpot mask remove "home"
+```
+
+Area masks are applied when rendering tiles, which means they can be added and
+removed dynamically without needing to re-import data.
+
+Alternatively, the `--trim` argument for the `import` command can be used to
+trim off the first and last `N` meters of an activity. Unlike area masks, this
+changes the activity data stored, which means that changing the value would
+require re-importing data.
+
+The `--trim` value given during the initial `import` will be persisted to the
+database's configuration, and will also appply for activities upload from the
+HTTP API or via the webhook. The value can also be modified directly if
+necessary.
+
+```bash
+sqlite3 hotpot.db "INSERT OR REPLACE INTO config (key, value) VALUES ('trim_dist', '500.0')"
+```
+
 ## Activity Uploads
 
 Hotpot supports two mechanisms for adding new data to the `sqlite3` database
@@ -218,29 +255,6 @@ export STRAVA_CLIENT_ID=... \
 
 hotpot serve --strava-webhook
 ```
-
-## Hidden Areas
-
-When running a public server, you may want to hide activity data near sensitive
-locations (home, work, etc.). Privacy masks create circular areas where activity
-data is hidden from rendered tiles.
-
-```bash
-# Create a new hidden area. Radius is given in meters.
-hotpot mask add "home" --lnglat 13.4050,52.5200 --radius 500
-
-# List all hidden areas.
-hotpot mask
-
-hotpot mask remove "home"
-```
-
-Masks are applied dynamically when rendering tiles and can be added or removed at
-any time without re-importing data.
-
-Alternatively, you can use `import --trim N` to permanently remove the first and
-last N meters from all activities during import. Unlike masks, trimming
-destructively modifies the imported data and cannot be changed later.
 
 ## Deployment
 

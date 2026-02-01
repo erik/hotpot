@@ -111,6 +111,12 @@ impl Database {
         Ok(())
     }
 
+    pub fn save_config(&mut self) -> Result<()> {
+        let mut conn = self.connection()?;
+        self.config.save(&mut conn)?;
+        Ok(())
+    }
+
     pub fn connection(&self) -> Result<r2d2::PooledConnection<SqliteConnectionManager>> {
         let conn = self.pool.get()?;
         Ok(conn)
@@ -122,9 +128,7 @@ impl Database {
 
     pub fn add_activity_mask(&mut self, zone: ActivityMask) -> Result<()> {
         self.config.activity_mask.push(zone);
-        let mut conn = self.connection()?;
-        self.config.save(&mut conn)?;
-        Ok(())
+        self.save_config()
     }
 
     pub fn remove_mask(&mut self, name: &str) -> Result<()> {
@@ -136,9 +140,12 @@ impl Database {
             .ok_or_else(|| anyhow::anyhow!("no such activity mask '{}'", name))?;
 
         self.config.activity_mask.remove(index);
-        let mut conn = self.connection()?;
-        self.config.save(&mut conn)?;
-        Ok(())
+        self.save_config()
+    }
+
+    pub fn set_trim_distance(&mut self, dist: f64) -> Result<()> {
+        self.config.trim_dist = dist;
+        self.save_config()
     }
 }
 
@@ -162,7 +169,7 @@ fn apply_schema(conn: &mut rusqlite::Connection) -> Result<()> {
 
 const DEFAULT_TILE_EXTENT: u32 = 2048;
 const DEFAULT_ZOOM_LEVELS: [u8; 5] = [2, 6, 10, 14, 16];
-const DEFAULT_TRIM_DIST: f64 = 200.0;
+const DEFAULT_TRIM_DIST: f64 = 0.0;
 
 /// A circular mask that hides activity data within its radius.
 #[derive(Clone, Debug, Serialize, Deserialize)]

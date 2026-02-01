@@ -13,7 +13,7 @@ use activity::PropertySource;
 
 use crate::db::{ActivityFilter, Database, PropertyFilter};
 use crate::raster::{LinearGradient, PINKISH};
-use crate::tile::Tile;
+use crate::tile::{LngLat, Tile};
 
 mod activity;
 mod date;
@@ -231,9 +231,9 @@ enum MaskAction {
         /// Name for this area
         name: String,
 
-        /// Center coordinates as "longitude,latitude" in decimal degrees
-        #[arg(short, long)]
-        lnglat: tile::LngLat,
+        /// Center coordinates as "latitude,longitude" in decimal degrees
+        #[arg(short, long, value_parser = LngLat::from_latlng_str)]
+        latlng: LngLat,
 
         /// Radius in meters
         #[arg(short, long, default_value = "500")]
@@ -369,9 +369,8 @@ fn command_import_activities(global: GlobalOpts, args: ImportCmdArgs) -> Result<
     } = args;
     let mut db = global.database()?;
 
-    // TODO: should be persisted to DB
     if let Some(trim) = trim {
-        db.config.trim_dist = trim;
+        db.set_trim_distance(trim)?;
     }
 
     let prop_source = join
@@ -500,20 +499,20 @@ fn command_mask(global: GlobalOpts, args: MaskCmdArgs) -> Result<()> {
     match args.action {
         Some(MaskAction::Add {
             name,
-            lnglat,
+            latlng,
             radius,
         }) => {
             db.add_activity_mask(db::ActivityMask {
                 name: name.clone(),
-                lat: lnglat.0.y(),
-                lng: lnglat.0.x(),
+                lat: latlng.0.y(),
+                lng: latlng.0.x(),
                 radius,
             })?;
             println!(
                 "Added masked area '{}' at {:.5},{:.5} (radius: {}m)",
                 name,
-                lnglat.0.x(),
-                lnglat.0.y(),
+                latlng.0.x(),
+                latlng.0.y(),
                 radius
             );
         }

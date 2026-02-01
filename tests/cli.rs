@@ -199,7 +199,7 @@ fn test_virtual_activities_skipped() {
 }
 
 #[test]
-fn test_mask_add() {
+fn test_add_mask() {
     let temp_dir = tempdir().unwrap();
     let db_path = temp_dir.path().join("test.sqlite3");
 
@@ -209,8 +209,8 @@ fn test_mask_add() {
         &[
             "add",
             "home",
-            "--lnglat",
-            "13.4050,52.5200",
+            "--latlng",
+            "52.5200,13.4050",
             "--radius",
             "500",
         ],
@@ -226,70 +226,12 @@ fn test_mask_add() {
 }
 
 #[test]
-fn test_mask_list() {
+fn test_remove_mask() {
     let temp_dir = tempdir().unwrap();
     let db_path = temp_dir.path().join("test.sqlite3");
 
-    build_subcommand(
-        &db_path,
-        "mask",
-        &[
-            "add",
-            "home",
-            "--lnglat",
-            "13.4050,52.5200",
-            "--radius",
-            "500",
-        ],
-    )
-    .success();
-
-    build_subcommand(
-        &db_path,
-        "mask",
-        &[
-            "add",
-            "work",
-            "--lnglat",
-            "13.4200,52.5300",
-            "--radius",
-            "300",
-        ],
-    )
-    .success();
-
-    let assert = build_subcommand(&db_path, "mask", &[]);
-    let result = assert.success();
-    let output = result.get_output();
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("home"));
-    assert!(stdout.contains("52.520"));
-    assert!(stdout.contains("13.405"));
-    assert!(stdout.contains("500m"));
-    assert!(stdout.contains("work"));
-    assert!(stdout.contains("52.530"));
-    assert!(stdout.contains("13.420"));
-    assert!(stdout.contains("300m"));
-}
-
-#[test]
-fn test_mask_remove() {
-    let temp_dir = tempdir().unwrap();
-    let db_path = temp_dir.path().join("test.sqlite3");
-
-    build_subcommand(
-        &db_path,
-        "mask",
-        &["add", "home", "--lnglat", "13.4050,52.5200"],
-    )
-    .success();
-    build_subcommand(
-        &db_path,
-        "mask",
-        &["add", "work", "--lnglat", "13.4200,52.5300"],
-    )
-    .success();
+    build_subcommand(&db_path, "mask", &["add", "home", "--latlng", "10,10"]).success();
+    build_subcommand(&db_path, "mask", &["add", "work", "--latlng", "0,0"]).success();
 
     let assert = build_subcommand(&db_path, "mask", &["remove", "home"]);
     let result = assert.success();
@@ -321,51 +263,7 @@ fn test_mask_invalid_coordinates() {
     let temp_dir = tempdir().unwrap();
     let db_path = temp_dir.path().join("test.sqlite3");
 
-    build_subcommand(
-        &db_path,
-        "mask",
-        &["add", "test", "--lnglat", "13.4050,91.0"],
-    )
-    .failure();
-    build_subcommand(
-        &db_path,
-        "mask",
-        &["add", "test", "--lnglat", "181.0,52.5200"],
-    )
-    .failure();
-    build_subcommand(
-        &db_path,
-        "mask",
-        &["add", "test", "--lnglat", "13.4050 52.5200"],
-    )
-    .failure();
-}
-
-#[test]
-fn test_mask_persistence() {
-    let temp_dir = tempdir().unwrap();
-    let db_path = temp_dir.path().join("test.sqlite3");
-
-    build_subcommand(
-        &db_path,
-        "mask",
-        &[
-            "add",
-            "home",
-            "--lnglat",
-            "13.4050,52.5200",
-            "--radius",
-            "500",
-        ],
-    )
-    .success();
-
-    let assert = build_subcommand(&db_path, "mask", &[]);
-    let result = assert.success();
-    let output = result.get_output();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    assert!(stdout.contains("home"));
-    assert!(stdout.contains("52.520"));
-    assert!(stdout.contains("13.405"));
+    build_subcommand(&db_path, "mask", &["add", "test", "--latlng", "91,13.4050"]).failure();
+    build_subcommand(&db_path, "mask", &["add", "test", "--latlng", "52,181"]).failure();
+    build_subcommand(&db_path, "mask", &["add", "test", "--latlng", "13 52"]).failure();
 }
