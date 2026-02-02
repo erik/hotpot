@@ -172,6 +172,17 @@ impl BBox {
         x >= self.left && y >= self.bot && x <= self.right && y <= self.top
     }
 
+    pub fn intersects_circle(&self, x: f64, y: f64, radius: f64) -> bool {
+        // Get nearest point on/in bbox
+        let nx = x.clamp(self.left, self.right);
+        let ny = y.clamp(self.bot, self.top);
+
+        // Distance from nearest point to center of circle <= radius
+        let dx = nx - x;
+        let dy = ny - y;
+        dx * dx + dy * dy <= radius * radius
+    }
+
     fn compute_edges(&self, x: f64, y: f64) -> u8 {
         let mut code = 0;
 
@@ -354,15 +365,8 @@ impl Tile {
                 let center = LngLat::new(m.lng, m.lat).xy()?;
 
                 // Check if mask intersects this tile. Mercator units are
-                // "meters"-ish, so we don't need to scale the radius yet
-                let padded = BBox {
-                    left: bbox.left - m.radius,
-                    right: bbox.right + m.radius,
-                    bot: bbox.bot - m.radius,
-                    top: bbox.top + m.radius,
-                };
-
-                if !padded.contains(center.0.x(), center.0.y()) {
+                // "meters"-ish, so we don't need to scale the radius yet.
+                if !bbox.intersects_circle(center.0.x(), center.0.y(), m.radius) {
                     return None;
                 }
 
@@ -397,10 +401,8 @@ impl FromStr for Tile {
     }
 }
 
-pub struct TileActivityMask(
-    /// x, y, radius_sq
-    Vec<(i32, i32, i32)>,
-);
+/// x, y, radius_sq
+pub struct TileActivityMask(Vec<(i32, i32, i32)>);
 
 impl TileActivityMask {
     /// Check if a point should be hidden (is within any mask).
@@ -606,5 +608,47 @@ mod tests {
                 tile
             );
         }
+    }
+
+    #[test]
+    fn test_bbox_intersects_circle_center_inside() {
+        let bbox = BBox {
+            left: 0.0,
+            bot: 0.0,
+            right: 10.0,
+            top: 10.0,
+        };
+
+        // Circle center inside bbox
+        assert!(bbox.intersects_circle(5.0, 5.0, 1.0));
+        assert!(bbox.intersects_circle(5.0, 5.0, 100.0));
+
+        // Circle completely outside, no intersection
+        assert!(!bbox.intersects_circle(20.0, 20.0, 5.0));
+        assert!(!bbox.intersects_circle(-10.0, 5.0, 5.0));
+        assert!(!bbox.intersects_circle(5.0, -10.0, 5.0));
+
+        // Circle center outside but overlaps bbox
+        assert!(bbox.intersects_circle(-5.0, 5.0, 10.0)); // Left side
+        assert!(bbox.intersects_circle(15.0, 5.0, 10.0)); // Right side
+        assert!(bbox.intersects_circle(5.0, -5.0, 10.0)); // Bottom
+        assert!(bbox.intersects_circle(5.0, 15.0, 10.0)); // Top
+
+        // Circle touches corner exactly (diagonal distance)
+        // Distance from (-5, -5) to corner (0, 0) is sqrt(50) ≈ 7.07
+        assert!(bbox.intersects_circle(-5.0, -5.0, 7.1));
+        assert!(!bbox.intersects_circle(-5.0, -5.0, 7.0));
+
+        // All four corners
+        assert!(bbox.intersects_circle(-5.0, -5.0, 7.1)); // Bottom-left
+        assert!(bbox.intersects_circle(15.0, -5.0, 7.1)); // Bottom-right
+        assert!(bbox.intersects_circle(-5.0, 15.0, 7.1)); // Top-left
+        assert!(bbox.intersects_circle(15.0, 15.0, 7.1)); // Top-right
+
+        // Circle tangent to edge (just touching)
+        assert!(bbox.intersects_circle(-5.0, 5.0, 5.0)); // Left edge
+        assert!(bbox.intersects_circle(15.0, 5.0, 5.0)); // Right edge
+        assert!(bbox.intersects_circle(5.0, -5.0, 5.0)); // Bottom edge
+        assert!(bbox.intersects_circle(5.0, 15.0, 5.0)); // Top edge
     }
 }
