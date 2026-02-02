@@ -180,6 +180,16 @@ pub struct ActivityMask {
     pub radius: f64,
 }
 
+impl std::fmt::Display for ActivityMask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} - {:.5},{:.5} (radius: {}m)",
+            self.name, self.lat, self.lng, self.radius
+        )
+    }
+}
+
 pub struct Config {
     /// Zoom levels that we store activity tiles for.
     pub zoom_levels: Vec<u8>,

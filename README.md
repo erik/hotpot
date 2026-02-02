@@ -168,17 +168,14 @@ tiles.
 # Create a new area mask. Radius is given in meters, and coordinates are
 # latitude,longitude.
 hotpot mask add "home" --latlng 52.5200,13.4050 --radius 500
-
-# List all area masks.
-hotpot mask
-
+hotpot mask list
 hotpot mask remove "home"
 ```
 
 Area masks are applied when rendering tiles, which means they can be added and
 removed dynamically without needing to re-import data.
 
-Alternatively, the `--trim` argument for the `import` command can be used to
+Alternatively, the `--trim N` argument for the `import` command can be used to
 trim off the first and last `N` meters of an activity. Unlike area masks, this
 changes the activity data stored, which means that changing the value would
 require re-importing data.

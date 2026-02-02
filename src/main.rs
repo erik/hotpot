@@ -240,6 +240,8 @@ enum MaskAction {
         radius: f64,
     },
 
+    List,
+
     /// Remove a mask by name.
     Remove {
         /// Name of the mask to remove
@@ -494,42 +496,57 @@ fn command_strava_auth(global: GlobalOpts, args: StravaAuthCmdArgs) -> Result<()
 }
 
 fn command_mask(global: GlobalOpts, args: MaskCmdArgs) -> Result<()> {
-    let mut db = global.database()?;
-
-    match args.action {
-        Some(MaskAction::Add {
+    match args.action.unwrap_or(MaskAction::List) {
+        MaskAction::Add {
             name,
             latlng,
             radius,
-        }) => {
-            db.add_activity_mask(db::ActivityMask {
+        } => {
+            let db = global.database()?;
+            let mut config = db.load_config()?;
+
+            let mask = db::ActivityMask {
                 name: name.clone(),
                 lat: latlng.0.y(),
                 lng: latlng.0.x(),
                 radius,
-            })?;
-            println!(
-                "Added masked area '{}' at {:.5},{:.5} (radius: {}m)",
-                name,
-                latlng.0.x(),
-                latlng.0.y(),
-                radius
-            );
+            };
+
+            // Overwrite existing mask with same name if one exists
+            if let Some(existing) = config.activity_mask.iter_mut().find(|m| m.name == name) {
+                println!("Replaced existing mask: {}", existing);
+                *existing = mask.clone();
+            } else {
+                config.activity_mask.push(mask.clone());
+            }
+
+            db.save_config(&config)?;
+            println!("Created masked area: {}", mask);
         }
-        Some(MaskAction::Remove { name }) => {
-            db.remove_mask(&name)?;
+
+        MaskAction::Remove { name } => {
+            let db = global.database()?;
+            let mut config = db.load_config()?;
+            let index = config
+                .activity_mask
+                .iter()
+                .position(|m| m.name == name)
+                .ok_or_else(|| anyhow::anyhow!("no such activity mask '{}'", name))?;
+            config.activity_mask.remove(index);
+            db.save_config(&config)?;
             println!("Removed masked area '{}'", name);
         }
-        None => {
-            if db.config.activity_mask.is_empty() {
+
+        MaskAction::List => {
+            let db = global.database_ro()?;
+            let config = db.load_config()?;
+
+            if config.activity_mask.is_empty() {
                 println!("No masked areas added yet");
             }
 
-            for m in db.config.activity_mask.iter() {
-                println!(
-                    "  {} - {:.5},{:.5} (radius: {}m)",
-                    m.name, m.lat, m.lng, m.radius
-                );
+            for m in config.activity_mask.iter() {
+                println!("  {}", m);
             }
         }
     }
