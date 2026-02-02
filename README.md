@@ -161,7 +161,8 @@ others, you may want to hide activities near sensitive locations (home, work,
 etc.).
 
 The `mask` command can be used to define areas where no activity data should be
-rendered.
+rendered. These are circular areas which are fully removed from the heatmap
+tiles.
 
 ```bash
 # Create a new area mask. Radius is given in meters, and coordinates are
@@ -183,7 +184,7 @@ changes the activity data stored, which means that changing the value would
 require re-importing data.
 
 The `--trim` value given during the initial `import` will be persisted to the
-database's configuration, and will also appply for activities upload from the
+database's configuration, and will also apply for activities uploaded from the
 HTTP API or via the webhook. The value can also be modified directly if
 necessary.
 
