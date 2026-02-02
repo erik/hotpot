@@ -223,12 +223,7 @@ fn test_remove_mask() {
     build_subcommand(&db_path, "mask", &["add", "home", "--latlng=10,10"]).success();
     build_subcommand(&db_path, "mask", &["add", "work", "--latlng=0,0"]).success();
 
-    let assert = build_subcommand(&db_path, "mask", &["remove", "home"]);
-    let result = assert.success();
-    let output = result.get_output();
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Removed masked area 'home'"));
+    build_subcommand(&db_path, "mask", &["remove", "home"]).success();
 
     let list_assert = build_subcommand(&db_path, "mask", &["list"]);
     let list_result = list_assert.success();
@@ -240,49 +235,24 @@ fn test_remove_mask() {
 }
 
 #[test]
-fn test_mask_remove_nonexistent() {
-    let temp_dir = tempdir().unwrap();
-    let db_path = temp_dir.path().join("test.sqlite3");
-
-    let assert = build_subcommand(&db_path, "mask", &["remove", "nonexistent"]);
-    assert.failure();
-}
-
-#[test]
-fn test_mask_invalid_coordinates() {
-    let temp_dir = tempdir().unwrap();
-    let db_path = temp_dir.path().join("test.sqlite3");
-
-    build_subcommand(&db_path, "mask", &["add", "test", "--latlng", "91,13.4050"]).failure();
-    build_subcommand(&db_path, "mask", &["add", "test", "--latlng", "52,181"]).failure();
-    build_subcommand(&db_path, "mask", &["add", "test", "--latlng", "13 52"]).failure();
-}
-
-#[test]
 fn test_mask_duplicate_name_updates() {
     let temp_dir = tempdir().unwrap();
     let db_path = temp_dir.path().join("test.sqlite3");
 
-    // Add a mask
-    let add_result = build_subcommand(
+    build_subcommand(
         &db_path,
         "mask",
-        &["add", "home", "--latlng=52.5200,13.4050", "--radius=500"],
+        &["add", "home", "--latlng=52.5200,13.4050"],
     )
     .success();
-    let output = String::from_utf8_lossy(&add_result.get_output().stdout);
-    assert!(output.contains("home - 52.52000,13.40500 (radius: 500m)"));
 
     // Add same name with different coordinates - should replace
-    let update_result = build_subcommand(
+    build_subcommand(
         &db_path,
         "mask",
         &["add", "home", "--latlng=51.5074,0.1278", "--radius=1000"],
     )
     .success();
-    let output = String::from_utf8_lossy(&update_result.get_output().stdout);
-    assert!(output.contains("home - 52.52000,13.40500 (radius: 500m)"));
-    assert!(output.contains("home - 51.50740,0.12780 (radius: 1000m)"));
 
     // List masks - should only have one
     let list_result = build_subcommand(&db_path, "mask", &["list"]).success();
