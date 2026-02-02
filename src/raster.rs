@@ -12,7 +12,7 @@ use rusqlite::{ToSql, params};
 use serde::{Deserialize, Deserializer};
 
 use crate::WebMercatorViewport;
-use crate::db::{ActivityFilter, Database, decode_line};
+use crate::db::{ActivityFilter, Config, Database, decode_line};
 use crate::tile::{Tile, TileActivityMask, TileBounds};
 
 pub static PINKISH: Lazy<LinearGradient> = Lazy::new(|| {
@@ -294,11 +294,12 @@ pub fn render_view(
     height: u32,
     filter: &ActivityFilter,
     db: &Database,
+    config: &Config,
 ) -> Result<RgbaImage> {
     let tile_size = 256;
     let zoom_range = RangeInclusive::new(
-        *db.config.zoom_levels.iter().min().unwrap() as u32,
-        *db.config.zoom_levels.iter().max().unwrap() as u32,
+        *config.zoom_levels.iter().min().unwrap() as u32,
+        *config.zoom_levels.iter().max().unwrap() as u32,
     );
 
     let tile_bounds = TileBounds::from_viewport(&viewport, width, height, zoom_range);
@@ -348,7 +349,7 @@ pub fn render_view(
             let tile_origin_y = row * tile_size;
             let tile_origin_x = col * tile_size;
 
-            rasterize_tile(tile, tile_size, filter, db)
+            rasterize_tile(tile, tile_size, filter, db, config)
                 .map(|img| img.map(|img| (tile_origin_x, tile_origin_y, img)))
         })
         .collect();
@@ -375,15 +376,15 @@ pub fn rasterize_tile(
     width: u32,
     filter: &ActivityFilter,
     db: &Database,
+    config: &Config,
 ) -> Result<Option<TileRaster>> {
-    let masks = &db.config.activity_mask;
-    let zoom_level = db
-        .config
+    let masks = &config.activity_mask;
+    let zoom_level = config
         .source_level(tile.z)
         .ok_or_else(|| anyhow!("no source level for tile: {:?}", tile))?;
 
     let bounds = TileBounds::from(zoom_level, &tile);
-    let mut raster = TileRaster::new(tile, bounds, width, db.config.tile_extent);
+    let mut raster = TileRaster::new(tile, bounds, width, config.tile_extent);
 
     let mask = tile.build_mask(masks, width as i32);
 

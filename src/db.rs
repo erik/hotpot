@@ -58,7 +58,6 @@ const MIGRATIONS: [&str; 1] = [
 
 pub struct Database {
     pool: r2d2::Pool<SqliteConnectionManager>,
-    pub config: Config,
 }
 
 impl Database {
@@ -88,10 +87,11 @@ impl Database {
 
         apply_schema(&mut conn)?;
 
-        let config = Config::load(&mut conn)?;
+        // Load config to ensure defaults are saved
+        let config = Config::load_from(&mut conn)?;
         config.save(&mut conn)?;
 
-        Ok(Database { pool, config })
+        Ok(Database { pool })
     }
 
     /// Open an existing database, fail if it doesn't exist
@@ -111,10 +111,14 @@ impl Database {
         Ok(())
     }
 
-    pub fn save_config(&mut self) -> Result<()> {
+    pub fn load_config(&self) -> Result<Config> {
         let mut conn = self.connection()?;
-        self.config.save(&mut conn)?;
-        Ok(())
+        Config::load_from(&mut conn)
+    }
+
+    pub fn save_config(&self, config: &Config) -> Result<()> {
+        let mut conn = self.connection()?;
+        config.save(&mut conn)
     }
 
     pub fn connection(&self) -> Result<r2d2::PooledConnection<SqliteConnectionManager>> {
@@ -124,28 +128,6 @@ impl Database {
 
     pub fn shared_pool(&self) -> r2d2::Pool<SqliteConnectionManager> {
         self.pool.clone()
-    }
-
-    pub fn add_activity_mask(&mut self, zone: ActivityMask) -> Result<()> {
-        self.config.activity_mask.push(zone);
-        self.save_config()
-    }
-
-    pub fn remove_mask(&mut self, name: &str) -> Result<()> {
-        let index = self
-            .config
-            .activity_mask
-            .iter()
-            .position(|z| z.name == name)
-            .ok_or_else(|| anyhow::anyhow!("no such activity mask '{}'", name))?;
-
-        self.config.activity_mask.remove(index);
-        self.save_config()
-    }
-
-    pub fn set_trim_distance(&mut self, dist: f64) -> Result<()> {
-        self.config.trim_dist = dist;
-        self.save_config()
     }
 }
 
@@ -202,7 +184,7 @@ pub struct Config {
 }
 
 impl Config {
-    fn load(conn: &mut rusqlite::Connection) -> Result<Self> {
+    fn load_from(conn: &mut rusqlite::Connection) -> Result<Self> {
         let mut cfg = Config::default();
 
         let mut stmt = conn.prepare("SELECT key, value FROM config")?;

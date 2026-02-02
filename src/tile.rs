@@ -411,7 +411,7 @@ impl TileActivityMask {
         self.0.iter().any(|&(px, py, radius_sq)| {
             let dx = x - px;
             let dy = y - py;
-            dx * dx + dy * dy < radius_sq
+            (dx * dx + dy * dy) <= radius_sq
         })
     }
 }

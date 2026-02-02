@@ -369,10 +369,12 @@ fn command_import_activities(global: GlobalOpts, args: ImportCmdArgs) -> Result<
         join,
         trim,
     } = args;
-    let mut db = global.database()?;
+    let db = global.database()?;
+    let mut config = db.load_config()?;
 
     if let Some(trim) = trim {
-        db.set_trim_distance(trim)?;
+        config.trim_dist = trim;
+        db.save_config(&config)?;
     }
 
     let prop_source = join
@@ -389,7 +391,7 @@ fn command_import_activities(global: GlobalOpts, args: ImportCmdArgs) -> Result<
         .canonicalize()
         .map_err(|err| anyhow!("{:?} {}", path, err))?;
 
-    activity::import_path(&path, &db, &prop_source)
+    activity::import_path(&path, &db, &config, &prop_source)
 }
 
 fn command_render_tile(global: GlobalOpts, args: TileCmdArgs) -> Result<()> {
@@ -403,11 +405,12 @@ fn command_render_tile(global: GlobalOpts, args: TileCmdArgs) -> Result<()> {
         gradient,
     } = args;
     let db = global.database_ro()?;
+    let config = db.load_config()?;
     let mut file = BufWriter::new(File::create(output)?);
 
     let filter = ActivityFilter::new(before, after, filter);
     let gradient = gradient.unwrap_or_else(|| PINKISH.clone());
-    let image = raster::rasterize_tile(zxy, width, &filter, &db)?
+    let image = raster::rasterize_tile(zxy, width, &filter, &db, &config)?
         .map(|raster| raster.apply_gradient(&gradient))
         .unwrap_or_else(|| {
             // note: could also just use RgbaImage::default() here if we don't care about size.
@@ -430,11 +433,12 @@ fn command_render_view(global: GlobalOpts, args: RenderCmdArgs) -> Result<()> {
         output,
     } = args;
     let db = global.database_ro()?;
+    let config = db.load_config()?;
     let filter = ActivityFilter::new(before, after, filter);
     let gradient = gradient.unwrap_or_else(|| PINKISH.clone());
     let mut file = BufWriter::new(File::create(output)?);
 
-    let image = raster::render_view(viewport, &gradient, width, height, &filter, &db)?;
+    let image = raster::render_view(viewport, &gradient, width, height, &filter, &db, &config)?;
     image.write_to(&mut file, image::ImageFormat::Png)?;
     Ok(())
 }

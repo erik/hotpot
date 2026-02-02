@@ -404,7 +404,7 @@ struct WebhookBody {
 
 // TODO: look at subscription_id or something to verify request.
 async fn receive_webhook(
-    State(AppState { db, strava, .. }): State<AppState>,
+    State(AppState { db, db_config, strava, .. }): State<AppState>,
     Json(body): Json<WebhookBody>,
 ) -> impl IntoResponse {
     let strava = strava.expect("strava auth creds missing");
@@ -447,7 +447,7 @@ async fn receive_webhook(
             tracks: MultiLineString::from(polyline),
             properties,
         },
-        &db.config,
+        &db_config,
     ) {
         tracing::error!("error writing activity: {}", e);
         return (StatusCode::INTERNAL_SERVER_ERROR, "error writing activity");

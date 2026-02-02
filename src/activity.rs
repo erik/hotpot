@@ -18,7 +18,7 @@ use time::OffsetDateTime;
 use walkdir::WalkDir;
 
 use crate::db;
-use crate::db::{Database, encode_line};
+use crate::db::{Config, Database, encode_line};
 use crate::tile::{BBox, LngLat, Tile, WebMercator};
 
 struct TileClipper {
@@ -574,7 +574,7 @@ impl PropertySource {
     }
 }
 
-pub fn import_path(path: &Path, db: &Database, prop_source: &PropertySource) -> Result<()> {
+pub fn import_path(path: &Path, db: &Database, config: &Config, prop_source: &PropertySource) -> Result<()> {
     let conn = db.connection()?;
 
     // Skip any files that are already in the database.
@@ -638,7 +638,7 @@ pub fn import_path(path: &Path, db: &Database, prop_source: &PropertySource) -> 
                 prop_source.enrich(&path, &mut activity);
 
                 let mut conn = pool.get().expect("db connection pool timed out");
-                upsert(&mut conn, path.to_str().unwrap(), &activity, &db.config)
+                upsert(&mut conn, path.to_str().unwrap(), &activity, config)
                     .expect("insert activity");
 
                 imported.fetch_add(1, Ordering::Relaxed);
