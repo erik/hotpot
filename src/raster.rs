@@ -12,8 +12,8 @@ use rusqlite::{ToSql, params};
 use serde::{Deserialize, Deserializer};
 
 use crate::WebMercatorViewport;
-use crate::db::{ActivityFilter, Database, decode_line};
-use crate::tile::{Tile, TileBounds};
+use crate::db::{ActivityFilter, Config, Database, decode_line};
+use crate::tile::{Tile, TileActivityMask, TileBounds};
 
 pub static PINKISH: Lazy<LinearGradient> = Lazy::new(|| {
     LinearGradient::from_stops(&[
@@ -73,7 +73,7 @@ impl TileRaster {
         }
     }
 
-    fn add_activity(&mut self, source_tile: &Tile, coords: &[Coord<u32>]) {
+    fn add_activity(&mut self, source_tile: &Tile, coords: &[Coord<u32>], mask: &TileActivityMask) {
         debug_assert_eq!(source_tile.z, self.bounds.z);
 
         // Origin of source tile within target tile
@@ -83,7 +83,7 @@ impl TileRaster {
         let tile_bbox = crate::tile::BBox::square(self.width as f64 - 1.0);
 
         let mut prev = None;
-        for Coord { x, y } in coords {
+        for &Coord { x, y } in coords {
             // Translate (x,y) to location in target tile.
             // [0..(width * STORED_TILE_WIDTH)]
             let x = x + x_offset;
@@ -92,6 +92,13 @@ impl TileRaster {
             // Scale the coordinates back down to [0..width]
             let x = x >> self.scale;
             let y = y >> self.scale;
+
+            // Apply mask in tile pixel space
+            if mask.is_hidden(x as i32, y as i32) {
+                // Break the line
+                prev = None;
+                continue;
+            }
 
             let Some(Coord { x: px, y: py }) = prev else {
                 prev = Some(Coord { x, y });
@@ -287,11 +294,12 @@ pub fn render_view(
     height: u32,
     filter: &ActivityFilter,
     db: &Database,
+    config: &Config,
 ) -> Result<RgbaImage> {
     let tile_size = 256;
     let zoom_range = RangeInclusive::new(
-        *db.config.zoom_levels.iter().min().unwrap() as u32,
-        *db.config.zoom_levels.iter().max().unwrap() as u32,
+        *config.zoom_levels.iter().min().unwrap() as u32,
+        *config.zoom_levels.iter().max().unwrap() as u32,
     );
 
     let tile_bounds = TileBounds::from_viewport(&viewport, width, height, zoom_range);
@@ -341,7 +349,7 @@ pub fn render_view(
             let tile_origin_y = row * tile_size;
             let tile_origin_x = col * tile_size;
 
-            rasterize_tile(tile, tile_size, filter, db)
+            rasterize_tile(tile, tile_size, filter, db, config)
                 .map(|img| img.map(|img| (tile_origin_x, tile_origin_y, img)))
         })
         .collect();
@@ -368,14 +376,17 @@ pub fn rasterize_tile(
     width: u32,
     filter: &ActivityFilter,
     db: &Database,
+    config: &Config,
 ) -> Result<Option<TileRaster>> {
-    let zoom_level = db
-        .config
+    let masks = &config.activity_mask;
+    let zoom_level = config
         .source_level(tile.z)
         .ok_or_else(|| anyhow!("no source level for tile: {:?}", tile))?;
 
     let bounds = TileBounds::from(zoom_level, &tile);
-    let mut raster = TileRaster::new(tile, bounds, width, db.config.tile_extent);
+    let mut raster = TileRaster::new(tile, bounds, width, config.tile_extent);
+
+    let mask = tile.build_mask(masks, width as i32);
 
     let mut have_activity = false;
 
@@ -386,7 +397,9 @@ pub fn rasterize_tile(
         let source_tile = Tile::new(row.get_unwrap(0), row.get_unwrap(1), row.get_unwrap(2));
 
         let bytes: Vec<u8> = row.get_unwrap(3);
-        raster.add_activity(&source_tile, &decode_line(&bytes)?);
+        let coords = decode_line(&bytes)?;
+
+        raster.add_activity(&source_tile, &coords, &mask);
 
         have_activity = true;
     }

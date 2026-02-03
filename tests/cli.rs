@@ -197,3 +197,66 @@ fn test_virtual_activities_skipped() {
         "Virtual GPX activities should be skipped"
     );
 }
+
+#[test]
+fn test_add_mask() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("test.sqlite3");
+
+    let assert = build_subcommand(
+        &db_path,
+        "mask",
+        &["add", "home", "--latlng=52.5200,13.4050", "--radius=500"],
+    );
+    let result = assert.success();
+    let output = result.get_output();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("home - 52.52000,13.40500 (radius: 500m)"));
+}
+
+#[test]
+fn test_remove_mask() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("test.sqlite3");
+
+    build_subcommand(&db_path, "mask", &["add", "home", "--latlng=10,10"]).success();
+    build_subcommand(&db_path, "mask", &["add", "work", "--latlng=0,0"]).success();
+
+    build_subcommand(&db_path, "mask", &["remove", "home"]).success();
+
+    let list_assert = build_subcommand(&db_path, "mask", &["list"]);
+    let list_result = list_assert.success();
+    let list_output = list_result.get_output();
+    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+
+    assert!(list_stdout.contains("work"));
+    assert!(!list_stdout.contains("home"));
+}
+
+#[test]
+fn test_mask_duplicate_name_updates() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("test.sqlite3");
+
+    build_subcommand(
+        &db_path,
+        "mask",
+        &["add", "home", "--latlng=52.5200,13.4050"],
+    )
+    .success();
+
+    // Add same name with different coordinates - should replace
+    build_subcommand(
+        &db_path,
+        "mask",
+        &["add", "home", "--latlng=51.5074,0.1278", "--radius=1000"],
+    )
+    .success();
+
+    // List masks - should only have one
+    let list_result = build_subcommand(&db_path, "mask", &["list"]).success();
+    let list_output = String::from_utf8_lossy(&list_result.get_output().stdout);
+    assert_eq!(list_output.matches("home").count(), 1);
+    assert!(list_output.contains("home - 51.50740,0.12780 (radius: 1000m)"));
+}

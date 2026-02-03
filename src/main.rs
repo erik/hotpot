@@ -13,7 +13,7 @@ use activity::PropertySource;
 
 use crate::db::{ActivityFilter, Database, PropertyFilter};
 use crate::raster::{LinearGradient, PINKISH};
-use crate::tile::Tile;
+use crate::tile::{LngLat, Tile};
 
 mod activity;
 mod date;
@@ -45,6 +45,9 @@ enum Commands {
 
     /// Authenticate with Strava to fetch OAuth tokens for webhook.
     StravaAuth(StravaAuthCmdArgs),
+
+    /// Add or remove areas to hide from rendered heatmaps.
+    Mask(MaskCmdArgs),
 }
 
 #[derive(Args)]
@@ -216,6 +219,37 @@ struct StravaAuthCmdArgs {
 }
 
 #[derive(Args)]
+struct MaskCmdArgs {
+    #[command(subcommand)]
+    action: Option<MaskAction>,
+}
+
+#[derive(Subcommand)]
+enum MaskAction {
+    /// Add a hidden (masked) area
+    Add {
+        /// Name for this area
+        name: String,
+
+        /// Center coordinates as "latitude,longitude" in decimal degrees
+        #[arg(short, long, value_parser = LngLat::from_latlng_str)]
+        latlng: LngLat,
+
+        /// Radius in meters
+        #[arg(short, long, default_value = "500")]
+        radius: f64,
+    },
+
+    List,
+
+    /// Remove a mask by name.
+    Remove {
+        /// Name of the mask to remove
+        name: String,
+    },
+}
+
+#[derive(Args)]
 struct GlobalOpts {
     /// Path to database
     #[arg(
@@ -294,10 +328,11 @@ fn run() -> Result<()> {
     match opts.cmd {
         Commands::Activities(args) => command_activity_info(opts.global, args)?,
         Commands::Import(args) => command_import_activities(opts.global, args)?,
-        Commands::Tile(args) => command_render_tile(opts.global, args)?,
+        Commands::Mask(args) => command_mask(opts.global, args)?,
         Commands::Render(args) => command_render_view(opts.global, args)?,
         Commands::Serve(args) => command_serve(opts.global, args)?,
         Commands::StravaAuth(args) => command_strava_auth(opts.global, args)?,
+        Commands::Tile(args) => command_render_tile(opts.global, args)?,
     };
 
     Ok(())
@@ -334,11 +369,12 @@ fn command_import_activities(global: GlobalOpts, args: ImportCmdArgs) -> Result<
         join,
         trim,
     } = args;
-    let mut db = global.database()?;
+    let db = global.database()?;
+    let mut config = db.load_config()?;
 
-    // TODO: should be persisted to DB
     if let Some(trim) = trim {
-        db.config.trim_dist = trim;
+        config.trim_dist = trim;
+        db.save_config(&config)?;
     }
 
     let prop_source = join
@@ -355,7 +391,7 @@ fn command_import_activities(global: GlobalOpts, args: ImportCmdArgs) -> Result<
         .canonicalize()
         .map_err(|err| anyhow!("{:?} {}", path, err))?;
 
-    activity::import_path(&path, &db, &prop_source)
+    activity::import_path(&path, &db, &config, &prop_source)
 }
 
 fn command_render_tile(global: GlobalOpts, args: TileCmdArgs) -> Result<()> {
@@ -369,11 +405,12 @@ fn command_render_tile(global: GlobalOpts, args: TileCmdArgs) -> Result<()> {
         gradient,
     } = args;
     let db = global.database_ro()?;
+    let config = db.load_config()?;
     let mut file = BufWriter::new(File::create(output)?);
 
     let filter = ActivityFilter::new(before, after, filter);
     let gradient = gradient.unwrap_or_else(|| PINKISH.clone());
-    let image = raster::rasterize_tile(zxy, width, &filter, &db)?
+    let image = raster::rasterize_tile(zxy, width, &filter, &db, &config)?
         .map(|raster| raster.apply_gradient(&gradient))
         .unwrap_or_else(|| {
             // note: could also just use RgbaImage::default() here if we don't care about size.
@@ -396,11 +433,12 @@ fn command_render_view(global: GlobalOpts, args: RenderCmdArgs) -> Result<()> {
         output,
     } = args;
     let db = global.database_ro()?;
+    let config = db.load_config()?;
     let filter = ActivityFilter::new(before, after, filter);
     let gradient = gradient.unwrap_or_else(|| PINKISH.clone());
     let mut file = BufWriter::new(File::create(output)?);
 
-    let image = raster::render_view(viewport, &gradient, width, height, &filter, &db)?;
+    let image = raster::render_view(viewport, &gradient, width, height, &filter, &db, &config)?;
     image.write_to(&mut file, image::ImageFormat::Png)?;
     Ok(())
 }
@@ -459,4 +497,63 @@ fn command_strava_auth(global: GlobalOpts, args: StravaAuthCmdArgs) -> Result<()
         addr
     );
     web::run_blocking(addr, db, config)
+}
+
+fn command_mask(global: GlobalOpts, args: MaskCmdArgs) -> Result<()> {
+    match args.action.unwrap_or(MaskAction::List) {
+        MaskAction::Add {
+            name,
+            latlng,
+            radius,
+        } => {
+            let db = global.database()?;
+            let mut config = db.load_config()?;
+
+            let mask = db::ActivityMask {
+                name: name.clone(),
+                lat: latlng.0.y(),
+                lng: latlng.0.x(),
+                radius,
+            };
+
+            // Overwrite existing mask with same name if one exists
+            if let Some(existing) = config.activity_mask.iter_mut().find(|m| m.name == name) {
+                println!("Replaced existing mask: {}", existing);
+                *existing = mask.clone();
+            } else {
+                config.activity_mask.push(mask.clone());
+            }
+
+            db.save_config(&config)?;
+            println!("Created masked area: {}", mask);
+        }
+
+        MaskAction::Remove { name } => {
+            let db = global.database()?;
+            let mut config = db.load_config()?;
+            let index = config
+                .activity_mask
+                .iter()
+                .position(|m| m.name == name)
+                .ok_or_else(|| anyhow::anyhow!("no such activity mask '{}'", name))?;
+            config.activity_mask.remove(index);
+            db.save_config(&config)?;
+            println!("Removed masked area '{}'", name);
+        }
+
+        MaskAction::List => {
+            let db = global.database_ro()?;
+            let config = db.load_config()?;
+
+            if config.activity_mask.is_empty() {
+                println!("No masked areas added yet");
+            }
+
+            for m in config.activity_mask.iter() {
+                println!("  {}", m);
+            }
+        }
+    }
+
+    Ok(())
 }

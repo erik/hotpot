@@ -154,6 +154,41 @@ exclude commutes, which gear we used, a minimum elevation gain, etc.
 }
 ```
 
+### Activity Visibility & Privacy
+
+When running a public-facing tile server or rendering heatmaps to share with
+others, you may want to hide activities near sensitive locations (home, work,
+etc.).
+
+The `mask` command can be used to define areas where no activity data should be
+rendered. These are circular areas which are fully removed from the heatmap
+tiles.
+
+```bash
+# Create a new area mask. Radius is given in meters, and coordinates are
+# latitude,longitude.
+hotpot mask add "home" --latlng 52.5200,13.4050 --radius 500
+hotpot mask list
+hotpot mask remove "home"
+```
+
+Area masks are applied when rendering tiles, which means they can be added and
+removed dynamically without needing to re-import data.
+
+Alternatively, the `--trim N` argument for the `import` command can be used to
+trim off the first and last `N` meters of an activity. Unlike area masks, this
+changes the activity data stored, which means that changing the value would
+require re-importing data.
+
+The `--trim` value given during the initial `import` will be persisted to the
+database's configuration, and will also apply for activities uploaded from the
+HTTP API or via the webhook. The value can also be modified directly if
+necessary.
+
+```bash
+sqlite3 hotpot.db "INSERT OR REPLACE INTO config (key, value) VALUES ('trim_dist', '500.0')"
+```
+
 ## Activity Uploads
 
 Hotpot supports two mechanisms for adding new data to the `sqlite3` database

@@ -6,6 +6,8 @@ use anyhow::{Result, anyhow};
 use derive_more::{From, Into};
 use geo_types::{Coord, Point};
 
+use crate::db::ActivityMask;
+
 const EARTH_RADIUS_METERS: f64 = 6_378_137.0;
 const EARTH_CIRCUMFERENCE: f64 = 2.0 * PI * EARTH_RADIUS_METERS;
 const ORIGIN_OFFSET: f64 = EARTH_CIRCUMFERENCE / 2.0;
@@ -55,12 +57,12 @@ impl TileBounds {
         let min_zoom = *zoom_range.start();
         let max_zoom = *zoom_range.end();
 
-        let sw_px = viewport.sw.to_global_pixel(max_zoom as u8, tile_size);
-        let ne_px = viewport.ne.to_global_pixel(max_zoom as u8, tile_size);
+        let sw_px = viewport.sw.to_mercator_pixel(max_zoom as u8, tile_size);
+        let ne_px = viewport.ne.to_mercator_pixel(max_zoom as u8, tile_size);
 
         let scale = f64::max(
-            (ne_px.x() - sw_px.x()) as f64 / (viewport_width as f64),
-            (sw_px.y() - ne_px.y()) as f64 / (viewport_height as f64),
+            (ne_px.x - sw_px.x) / (viewport_width as f64),
+            (sw_px.y - ne_px.y) / (viewport_height as f64),
         );
 
         // Find the smallest zoom level which will cover our viewport at full
@@ -82,11 +84,28 @@ impl TileBounds {
 #[derive(Copy, Clone, PartialEq, Debug, From, Into)]
 pub struct LngLat(pub Point<f64>);
 
-#[derive(Copy, Clone, PartialEq, Debug, From, Into)]
-pub struct WebMercator(pub Point<f64>);
+impl LngLat {
+    pub fn from_latlng_str(value: &str) -> Result<Self> {
+        let parts: Vec<&str> = value.split(',').collect();
+        if parts.len() != 2 {
+            anyhow::bail!("expected format: latitude,longitude");
+        }
+
+        let lat: f64 = parts[0].trim().parse()?;
+        let lng: f64 = parts[1].trim().parse()?;
+        if !(-90.0..=90.0).contains(&lat) {
+            anyhow::bail!("latitude must be between -90 and 90");
+        }
+        if !(-180.0..=180.0).contains(&lng) {
+            anyhow::bail!("longitude must be between -180 and 180");
+        }
+
+        Ok(Self((lng, lat).into()))
+    }
+}
 
 #[derive(Copy, Clone, PartialEq, Debug, From, Into)]
-pub struct TilePixel(pub Coord<u16>);
+pub struct WebMercator(pub Point<f64>);
 
 #[derive(Debug, Clone)]
 pub struct WebMercatorViewport {
@@ -149,11 +168,19 @@ impl BBox {
         }
     }
 
-    pub fn contains(&self, pt: &WebMercator) -> bool {
-        pt.0.x() >= self.left
-            && pt.0.y() >= self.bot
-            && pt.0.x() <= self.right
-            && pt.0.y() <= self.top
+    pub fn contains(&self, x: f64, y: f64) -> bool {
+        x >= self.left && y >= self.bot && x <= self.right && y <= self.top
+    }
+
+    pub fn intersects_circle(&self, x: f64, y: f64, radius: f64) -> bool {
+        // Get nearest point on/in bbox
+        let nx = x.clamp(self.left, self.right);
+        let ny = y.clamp(self.bot, self.top);
+
+        // Distance from nearest point to center of circle <= radius
+        let dx = nx - x;
+        let dy = ny - y;
+        dx * dx + dy * dy <= radius * radius
     }
 
     fn compute_edges(&self, x: f64, y: f64) -> u8 {
@@ -254,26 +281,26 @@ impl WebMercator {
         Tile::new(x, y, zoom)
     }
 
-    pub fn to_global_pixel(self, zoom: u8, tile_extent: u32) -> Point<u32> {
+    pub fn to_mercator_pixel(self, zoom: u8, tile_extent: u32) -> Coord<f64> {
         let num_tiles = 1u32 << zoom;
         let scale = (num_tiles * tile_extent) as f64 / EARTH_CIRCUMFERENCE;
 
-        Point::from((
-            (scale * (self.0.x() + ORIGIN_OFFSET)) as u32,
-            (scale * (ORIGIN_OFFSET - self.0.y())) as u32,
-        ))
+        Coord {
+            x: (scale * (self.0.x() + ORIGIN_OFFSET)),
+            y: (scale * (ORIGIN_OFFSET - self.0.y())),
+        }
     }
 
-    pub fn to_tile_pixel(self, bbox: &BBox, tile_width: u16) -> TilePixel {
+    pub fn to_tile_pixel(self, bbox: &BBox, tile_size: i32) -> Coord<f64> {
         let Coord { x, y } = self.0.into();
 
         let width = bbox.right - bbox.left;
         let height = bbox.top - bbox.bot;
 
-        let px = ((x - bbox.left) / width * tile_width as f64).round() as u16;
-        let py = ((y - bbox.bot) / height * tile_width as f64).round() as u16;
+        let px = ((x - bbox.left) / width * tile_size as f64).round();
+        let py = ((y - bbox.bot) / height * tile_size as f64).round();
 
-        TilePixel((px, py).into())
+        (px, tile_size as f64 - py).into()
     }
 }
 
@@ -324,6 +351,37 @@ impl Tile {
             right: left + tile_size,
         }
     }
+
+    /// Pre-compute activity masks relevant to this tile.
+    pub fn build_mask(&self, masks: &[ActivityMask], tile_extent: i32) -> TileActivityMask {
+        let bbox = self.xy_bounds();
+
+        let tile_width_meter = bbox.right - bbox.left;
+        let pixels_per_meter = tile_extent as f64 / tile_width_meter;
+
+        let tile_masks = masks
+            .iter()
+            .filter_map(|m| {
+                let center = LngLat::new(m.lng, m.lat).xy()?;
+
+                // Check if mask intersects this tile. Mercator units are
+                // "meters"-ish, so we don't need to scale the radius yet.
+                if !bbox.intersects_circle(center.0.x(), center.0.y(), m.radius) {
+                    return None;
+                }
+
+                // Masking happens in pixel space
+                let center_px = center.to_tile_pixel(&bbox, tile_extent);
+                let radius_px = m.radius * pixels_per_meter;
+
+                // Avoid a sqrt by comparing distance to square of radius.
+                let radius_sq = radius_px * radius_px;
+                Some((center_px.x as i32, center_px.y as i32, radius_sq as i32))
+            })
+            .collect();
+
+        TileActivityMask(tile_masks)
+    }
 }
 
 impl FromStr for Tile {
@@ -340,6 +398,21 @@ impl FromStr for Tile {
         let y = parts[2].parse::<u32>().map_err(|_| "invalid y")?;
 
         Ok(Tile::new(x, y, z))
+    }
+}
+
+/// x, y, radius_sq
+pub struct TileActivityMask(Vec<(i32, i32, i32)>);
+
+impl TileActivityMask {
+    /// Check if a point should be hidden (is within any mask).
+    #[inline]
+    pub fn is_hidden(&self, x: i32, y: i32) -> bool {
+        self.0.iter().any(|&(px, py, radius_sq)| {
+            let dx = x - px;
+            let dy = y - py;
+            (dx * dx + dy * dy) <= radius_sq
+        })
     }
 }
 
@@ -450,5 +523,131 @@ mod tests {
             clipped,
             Some((Point::new(0.0, 0.0).into(), Point::new(10.0, 10.0).into()))
         );
+    }
+
+    #[test]
+    fn test_mask_hides_point_in_zone() {
+        let tile_size = 4096;
+
+        let mask = ActivityMask {
+            name: "test".to_string(),
+            lat: 52.528125,
+            lng: 13.3643882,
+            radius: 15000.0,
+        };
+
+        // Point inside the circle
+        let masked_pt = LngLat::new(mask.lng, mask.lat).xy().unwrap();
+
+        let tile = masked_pt.tile(10);
+        let tile_mask = tile.build_mask(&[mask], tile_size);
+
+        let Coord { x, y } = masked_pt.to_tile_pixel(&tile.xy_bounds(), tile_size);
+
+        assert!(
+            tile_mask.is_hidden(x as i32, y as i32),
+            "point inside zone should be hidden"
+        );
+    }
+
+    #[test]
+    fn test_mask_allows_point_outside_zone() {
+        let zone = ActivityMask {
+            name: "test".to_string(),
+            lat: 52.528125,
+            lng: 13.3643882,
+            radius: 15000.0,
+        };
+
+        // Point outside the circle
+        let unmasked_pt = LngLat::new(13.8221594, 52.6044458).xy().unwrap();
+
+        let tile = unmasked_pt.tile(10);
+        let tile_extent = 4096;
+
+        let tile_mask = tile.build_mask(&[zone], tile_extent);
+
+        // Filter may or may not exist for this tile, but if it does, the point
+        // should not be hidden
+        let Coord { x, y } = unmasked_pt.to_tile_pixel(&tile.xy_bounds(), tile_extent);
+        assert!(
+            !tile_mask.is_hidden(x as i32, y as i32),
+            "point outside zone should not be hidden"
+        );
+    }
+
+    #[test]
+    fn test_mask_crosses_tile_boundary() {
+        // 15km radius - should span multiple tiles
+        let mask = ActivityMask {
+            name: "test".to_string(),
+            lat: 52.528125,
+            lng: 13.3643882,
+            radius: 15000.0,
+        };
+
+        let zoom_level = 14;
+        let tile_extent = 4096;
+        let tile = LngLat::new(mask.lng, mask.lat)
+            .xy()
+            .unwrap()
+            .tile(zoom_level);
+
+        let adjacent_tiles = [
+            Tile::new(tile.x + 1, tile.y, zoom_level),
+            Tile::new(tile.x - 1, tile.y, zoom_level),
+            Tile::new(tile.x, tile.y + 1, zoom_level),
+            Tile::new(tile.x, tile.y - 1, zoom_level),
+        ];
+
+        for tile in adjacent_tiles.iter() {
+            let tile_mask = tile.build_mask(std::slice::from_ref(&mask), tile_extent);
+            assert!(
+                !tile_mask.0.is_empty(),
+                "mask should spill into adjacent tile: {:?}",
+                tile
+            );
+        }
+    }
+
+    #[test]
+    fn test_bbox_intersects_circle() {
+        let bbox = BBox {
+            left: 0.0,
+            bot: 0.0,
+            right: 10.0,
+            top: 10.0,
+        };
+
+        // Circle center inside bbox
+        assert!(bbox.intersects_circle(5.0, 5.0, 1.0));
+        assert!(bbox.intersects_circle(5.0, 5.0, 100.0));
+
+        // Circle completely outside, no intersection
+        assert!(!bbox.intersects_circle(20.0, 20.0, 5.0));
+        assert!(!bbox.intersects_circle(-10.0, 5.0, 5.0));
+        assert!(!bbox.intersects_circle(5.0, -10.0, 5.0));
+
+        // Circle center outside but overlaps bbox
+        assert!(bbox.intersects_circle(-5.0, 5.0, 10.0)); // Left side
+        assert!(bbox.intersects_circle(15.0, 5.0, 10.0)); // Right side
+        assert!(bbox.intersects_circle(5.0, -5.0, 10.0)); // Bottom
+        assert!(bbox.intersects_circle(5.0, 15.0, 10.0)); // Top
+
+        // Circle touches corner exactly (diagonal distance)
+        // Distance from (-5, -5) to corner (0, 0) is sqrt(50) ≈ 7.07
+        assert!(!bbox.intersects_circle(-5.0, -5.0, 7.0));
+
+        // All four corners
+        assert!(bbox.intersects_circle(-5.0, -5.0, 7.1)); // Bottom-left
+        assert!(bbox.intersects_circle(15.0, -5.0, 7.1)); // Bottom-right
+        assert!(bbox.intersects_circle(-5.0, 15.0, 7.1)); // Top-left
+        assert!(bbox.intersects_circle(15.0, 15.0, 7.1)); // Top-right
+
+        // Circle tangent to edge (just touching)
+        assert!(bbox.intersects_circle(-5.0, 5.0, 5.0)); // Left edge
+        assert!(bbox.intersects_circle(15.0, 5.0, 5.0)); // Right edge
+        assert!(bbox.intersects_circle(5.0, -5.0, 5.0)); // Bottom edge
+        assert!(bbox.intersects_circle(5.0, 15.0, 5.0)); // Top edge
     }
 }

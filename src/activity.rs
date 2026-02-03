@@ -10,7 +10,7 @@ use csv::StringRecord;
 use fitparser::de::{DecodeOption, from_reader_with_options};
 use fitparser::profile::MesgNum;
 use flate2::read::GzDecoder;
-use geo::{EuclideanDistance, MapCoords, Simplify};
+use geo::{EuclideanDistance, HasDimensions, MapCoords, Simplify};
 use geo_types::{LineString, MultiLineString, Point};
 use rayon::iter::{ParallelBridge, ParallelIterator};
 use rusqlite::params;
@@ -18,18 +18,18 @@ use time::OffsetDateTime;
 use walkdir::WalkDir;
 
 use crate::db;
-use crate::db::{Database, encode_line};
+use crate::db::{Config, Database, encode_line};
 use crate::tile::{BBox, LngLat, Tile, WebMercator};
 
 struct TileClipper {
     zoom: u8,
-    tile_extent: u16,
+    tile_extent: i32,
     current: Option<(Tile, BBox)>,
-    tiles: HashMap<Tile, Vec<LineString<u16>>>,
+    tiles: HashMap<Tile, Vec<LineString<f64>>>,
 }
 
 impl TileClipper {
-    fn new(zoom: u8, tile_extent: u16) -> Self {
+    fn new(zoom: u8, tile_extent: i32) -> Self {
         Self {
             zoom,
             tile_extent,
@@ -44,7 +44,7 @@ impl TileClipper {
         (tile, bbox)
     }
 
-    fn last_line(&mut self, tile: &Tile) -> &mut LineString<u16> {
+    fn last_line(&mut self, tile: &Tile) -> &mut LineString<f64> {
         let lines = self.tiles.entry(*tile).or_default();
 
         if lines.is_empty() {
@@ -75,11 +75,11 @@ impl TileClipper {
             Some((a, b)) => {
                 let extent = self.tile_extent;
                 let line = self.last_line(&tile);
-                if line.0.is_empty() {
-                    line.0.push(a.to_tile_pixel(&bbox, extent).into());
+                if line.is_empty() {
+                    line.0.push(a.to_tile_pixel(&bbox, extent));
                 }
 
-                line.0.push(b.to_tile_pixel(&bbox, extent).into());
+                line.0.push(b.to_tile_pixel(&bbox, extent));
 
                 // If we've modified the end point, we've left the current tile.
                 if b != end {
@@ -107,7 +107,7 @@ impl TileClipper {
 pub struct ClippedTiles(Vec<TileClipper>);
 
 impl ClippedTiles {
-    pub fn iter(&self) -> impl Iterator<Item = (&Tile, &LineString<u16>)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&Tile, &LineString<f64>)> {
         self.0
             .iter()
             .flat_map(|clip| clip.tiles.iter())
@@ -136,11 +136,12 @@ impl RawActivity {
             zoom_levels,
             trim_dist,
             tile_extent,
+            ..
         }: &db::Config,
     ) -> ClippedTiles {
         let mut clippers: Vec<_> = zoom_levels
             .iter()
-            .map(|z| TileClipper::new(*z, *tile_extent as u16))
+            .map(|z| TileClipper::new(*z, *tile_extent as i32))
             .collect();
 
         for line in self.tracks.iter() {
@@ -476,11 +477,17 @@ pub fn upsert(
         )?;
     }
 
+    let tile_size = config.tile_extent as f64;
     let tiles = activity.clip_to_tiles(config);
     for (tile, line) in tiles.iter() {
         // Have to type-dance a bit because geo::Simplify requires f64
         let simplified_line = line
-            .map_coords(|c| (c.x as f64, c.y as f64).into())
+            .map_coords(|c| {
+                // For reasons I cannot remember, we store tile activity data
+                // with inverted Y coordinates from the pixel data.
+                let flip_y = tile_size - c.y;
+                (c.x, flip_y).into()
+            })
             .simplify(&4.0);
 
         let coords = encode_line(&simplified_line)?;
@@ -567,7 +574,7 @@ impl PropertySource {
     }
 }
 
-pub fn import_path(path: &Path, db: &Database, prop_source: &PropertySource) -> Result<()> {
+pub fn import_path(path: &Path, db: &Database, config: &Config, prop_source: &PropertySource) -> Result<()> {
     let conn = db.connection()?;
 
     // Skip any files that are already in the database.
@@ -631,7 +638,7 @@ pub fn import_path(path: &Path, db: &Database, prop_source: &PropertySource) -> 
                 prop_source.enrich(&path, &mut activity);
 
                 let mut conn = pool.get().expect("db connection pool timed out");
-                upsert(&mut conn, path.to_str().unwrap(), &activity, &db.config)
+                upsert(&mut conn, path.to_str().unwrap(), &activity, config)
                     .expect("insert activity");
 
                 imported.fetch_add(1, Ordering::Relaxed);

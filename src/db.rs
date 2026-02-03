@@ -11,7 +11,7 @@ use geo_types::Coord;
 use num_traits::AsPrimitive;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{ToSql, params};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use time::{Date, OffsetDateTime};
 
 const SCHEMA: &str = "\
@@ -58,7 +58,6 @@ const MIGRATIONS: [&str; 1] = [
 
 pub struct Database {
     pool: r2d2::Pool<SqliteConnectionManager>,
-    pub config: Config,
 }
 
 impl Database {
@@ -88,10 +87,11 @@ impl Database {
 
         apply_schema(&mut conn)?;
 
-        let config = Config::load(&mut conn)?;
+        // Load config to ensure defaults are saved
+        let config = Config::load_from(&mut conn)?;
         config.save(&mut conn)?;
 
-        Ok(Database { pool, config })
+        Ok(Database { pool })
     }
 
     /// Open an existing database, fail if it doesn't exist
@@ -109,6 +109,16 @@ impl Database {
         tracing::info!("database reset");
 
         Ok(())
+    }
+
+    pub fn load_config(&self) -> Result<Config> {
+        let mut conn = self.connection()?;
+        Config::load_from(&mut conn)
+    }
+
+    pub fn save_config(&self, config: &Config) -> Result<()> {
+        let mut conn = self.connection()?;
+        config.save(&mut conn)
     }
 
     pub fn connection(&self) -> Result<r2d2::PooledConnection<SqliteConnectionManager>> {
@@ -141,7 +151,26 @@ fn apply_schema(conn: &mut rusqlite::Connection) -> Result<()> {
 
 const DEFAULT_TILE_EXTENT: u32 = 2048;
 const DEFAULT_ZOOM_LEVELS: [u8; 5] = [2, 6, 10, 14, 16];
-const DEFAULT_TRIM_DIST: f64 = 200.0;
+const DEFAULT_TRIM_DIST: f64 = 0.0;
+
+/// A circular mask that hides activity data within its radius.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ActivityMask {
+    pub name: String,
+    pub lat: f64,
+    pub lng: f64,
+    pub radius: f64,
+}
+
+impl std::fmt::Display for ActivityMask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} - {:.5},{:.5} (radius: {}m)",
+            self.name, self.lat, self.lng, self.radius
+        )
+    }
+}
 
 pub struct Config {
     /// Zoom levels that we store activity tiles for.
@@ -150,10 +179,12 @@ pub struct Config {
     pub tile_extent: u32,
     /// Distance to trim start/end of activities, in meters.
     pub trim_dist: f64,
+    /// Areas to hide activity data.
+    pub activity_mask: Vec<ActivityMask>,
 }
 
 impl Config {
-    fn load(conn: &mut rusqlite::Connection) -> Result<Self> {
+    fn load_from(conn: &mut rusqlite::Connection) -> Result<Self> {
         let mut cfg = Config::default();
 
         let mut stmt = conn.prepare("SELECT key, value FROM config")?;
@@ -167,6 +198,7 @@ impl Config {
                 "zoom_levels" => cfg.zoom_levels = serde_json::from_str(&value)?,
                 "tile_extent" => cfg.tile_extent = value.parse()?,
                 "trim_dist" => cfg.trim_dist = value.parse()?,
+                "activity_masks" => cfg.activity_mask = serde_json::from_str(&value)?,
                 key => tracing::warn!("Ignoring unknown config key: {}", key),
             }
         }
@@ -176,6 +208,7 @@ impl Config {
 
     fn save(&self, conn: &mut rusqlite::Connection) -> Result<()> {
         let zoom_levels = serde_json::to_string(&self.zoom_levels)?;
+        let activity_masks = serde_json::to_string(&self.activity_mask)?;
 
         let mut stmt = conn.prepare(
             "\
@@ -185,6 +218,7 @@ impl Config {
         stmt.execute(params!["zoom_levels", &zoom_levels])?;
         stmt.execute(params!["tile_extent", &self.tile_extent])?;
         stmt.execute(params!["trim_dist", &self.trim_dist])?;
+        stmt.execute(params!["activity_masks", &activity_masks])?;
 
         Ok(())
     }
@@ -205,6 +239,7 @@ impl Default for Config {
             zoom_levels: DEFAULT_ZOOM_LEVELS.to_vec(),
             tile_extent: DEFAULT_TILE_EXTENT,
             trim_dist: DEFAULT_TRIM_DIST,
+            activity_mask: vec![],
         }
     }
 }

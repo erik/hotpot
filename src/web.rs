@@ -25,6 +25,7 @@ use tower_http::trace::{DefaultOnFailure, TraceLayer};
 use tracing::Level;
 
 use crate::db::{ActivityFilter, Database, PropertyFilter};
+use crate::db::Config as DbConfig;
 use crate::raster::LinearGradient;
 use crate::strava;
 use crate::strava::StravaAuth;
@@ -60,6 +61,7 @@ struct StaticAsset;
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Database>,
+    pub db_config: Arc<DbConfig>,
     pub strava: Option<StravaAuth>,
     pub config: Config,
 }
@@ -142,6 +144,8 @@ impl Config {
             None
         };
 
+        let db_config = db.load_config()?;
+
         let router = router
             .layer(axum::middleware::from_fn(store_request_data))
             .layer(trace)
@@ -149,6 +153,7 @@ impl Config {
                 config: self.clone(),
                 strava,
                 db: Arc::new(db),
+                db_config: Arc::new(db_config),
             });
 
         Ok(router)
@@ -293,7 +298,7 @@ async fn get_activity_count(
 }
 
 async fn render_viewport(
-    State(AppState { db, .. }): State<AppState>,
+    State(AppState { db, db_config, .. }): State<AppState>,
     Query(params): Query<RenderViewQueryParams>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
@@ -336,6 +341,7 @@ async fn render_viewport(
         params.height,
         &filter,
         &db,
+        &db_config,
     )
     .and_then(|image| render_image_response(image, image_format, &etag))
     .unwrap_or_else(|err| {
@@ -345,13 +351,13 @@ async fn render_viewport(
 }
 
 async fn render_tile(
-    State(AppState { db, .. }): State<AppState>,
+    State(AppState { db, db_config, .. }): State<AppState>,
     Path((z, x, y_param)): Path<(u8, u32, TileYParam)>,
     Query(params): Query<RenderQueryParams>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
     // Fail fast when tile is higher zoom level than we store data for.
-    if db.config.source_level(z).is_none() {
+    if db_config.source_level(z).is_none() {
         return StatusCode::NOT_FOUND.into_response();
     }
 
@@ -369,7 +375,7 @@ async fn render_tile(
     };
 
     let image_format = get_image_format(&headers);
-    raster::rasterize_tile(tile, y_param.tile_size, &filter, &db)
+    raster::rasterize_tile(tile, y_param.tile_size, &filter, &db, &db_config)
         .and_then(|raster| {
             raster
                 .map(|raster| raster.apply_gradient(gradient))
@@ -510,7 +516,7 @@ fn is_authenticated(
 }
 
 async fn upload_activity(
-    State(AppState { db, config, .. }): State<AppState>,
+    State(AppState { db, db_config, config, .. }): State<AppState>,
     auth_header: Option<TypedHeader<axum::headers::Authorization<Bearer>>>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
@@ -549,7 +555,7 @@ async fn upload_activity(
 
         if let Err(err) = db
             .connection()
-            .and_then(|mut conn| activity::upsert(&mut conn, &activity_id, &activity, &db.config))
+            .and_then(|mut conn| activity::upsert(&mut conn, &activity_id, &activity, &db_config))
         {
             tracing::error!("failed to insert activity: {:?}", err);
             return (StatusCode::INTERNAL_SERVER_ERROR, "something went wrong");
