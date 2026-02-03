@@ -119,6 +119,13 @@ impl SummaryActivity {
             map.insert("gear_id".to_string(), Value::String(gear.id.clone()));
         }
 
+        // Remove the most verbose of the properties (deeply nested JSON that
+        // won't be useful for filtering)
+        map.remove("laps");
+        map.remove("segment_efforts");
+        map.remove("splits_metric");
+        map.remove("splits_standard");
+
         HashMap::from_iter(map)
     }
 }
