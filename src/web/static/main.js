@@ -107,15 +107,7 @@ function encodeQueryString(obj) {
 }
 
 function createUploadModal() {
-  const {
-    "modal-dialog": modal,
-    div,
-    form,
-    input,
-    label,
-    p,
-    code,
-  } = createElement;
+  const { div, form, input, label, p, code } = createElement;
 
   const resultContainer = div({ class: "__results" });
   const progressBar = div({ class: "__progress" });
@@ -180,12 +172,10 @@ function createUploadModal() {
     uploadForm.addEventListener(type, dragHandler),
   );
 
-  const node = modal({}, [
-    div({ slot: "header" }, "Add Files"),
-    div({ slot: "body", class: "drop-area" }, [uploadForm, resultContainer]),
-  ]);
-
-  document.body.appendChild(node);
+  createModal(
+    "Add Files",
+    div({ class: "drop-area" }, [uploadForm, resultContainer]),
+  );
 }
 
 class FileUploader {
@@ -278,32 +268,27 @@ class FileUploader {
   }
 }
 
-customElements.define(
-  "modal-dialog",
-  class extends HTMLElement {
-    constructor() {
-      super()
-        .attachShadow({ mode: "open" })
-        .appendChild(
-          document.getElementById("template-modal").content.cloneNode(true),
-        );
-    }
+function createModal(header, body) {
+  const { dialog, div, button } = createElement;
 
-    connectedCallback() {
-      const dialog = this.shadowRoot.querySelector("dialog");
-      dialog.addEventListener("click", (ev) => {
-        ev.stopPropagation();
+  const closeBtn = button({ class: "__button" }, "Close");
+  const node = dialog({ class: "modal", open: "" }, [
+    div({ class: "__panel" }, [
+      div({ class: "__header" }, header),
+      div({ class: "__body" }, body),
+      div({ class: "__footer" }, [closeBtn]),
+    ]),
+  ]);
 
-        // Only clicks outside the content window should close the dialog
-        if (ev.originalTarget === dialog) {
-          dialog.close();
-        }
-      });
+  // backdrop click or Escape (native <dialog>) closes; close event cleans up
+  node.addEventListener("click", (ev) => {
+    if (ev.target === node) node.close();
+  });
+  node.addEventListener("close", () => node.remove());
+  closeBtn.addEventListener("click", () => node.close());
 
-      dialog.addEventListener("close", () => this.remove());
-    }
-  },
-);
+  document.body.appendChild(node);
+}
 
 class ExportButton {
   constructor(options) {
@@ -447,66 +432,117 @@ class UploadButton {
 }
 
 function createPropertyModal(props) {
-  const { "modal-dialog": modal, div, style } = createElement;
+  const { div, span } = createElement;
 
   const fmt = new Intl.NumberFormat();
+  const entries = Object.entries(props);
 
-  const rows = Object.entries(props)
-    .toSorted()
-    .map(([key, activity_count]) =>
-      div({ class: "__row" }, [
-        div({ class: "__prop", title: key }, key),
-        div({ class: "__count" }, fmt.format(activity_count)),
-      ]),
-    );
+  // null = alphabetical by key; "desc" / "asc" = by count
+  let countSort = null;
 
-  const node = modal({}, [
-    style(
-      {},
-      `
-      .property-table {
-        width: 100%;
-        font-size: small;
+  const body = div({ class: "__body" });
+  const arrow = span({ class: "__sort-arrow" });
+  const countHeader = div({ class: "__sort" }, ["Num Activities", arrow]);
 
-        .__row {
-          display: grid;
-          justify-content: space-between;
-          grid-template-columns: 1fr 25%;
+  countHeader.addEventListener("click", () => {
+    countSort =
+      countSort === null ? "desc" : countSort === "desc" ? "asc" : null;
+    renderRows();
+  });
 
-          &:nth-child(even) {
-            background-color: #fafafa;
-          }
+  function renderRows() {
+    const sorted = countSort
+      ? [...entries].sort((a, b) =>
+          countSort === "desc"
+            ? b[1].count - a[1].count
+            : a[1].count - b[1].count,
+        )
+      : [...entries].sort((a, b) => a[0].localeCompare(b[0]));
 
-          .__prop {
-            font-family: monospace;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            overflow: hidden;
-          }
+    arrow.textContent =
+      countSort === "desc" ? " ↓" : countSort === "asc" ? " ↑" : "";
 
-          .__count {
-            text-align: right;
-          }
-        }
-
-        .__header {
-          font-weight: bold;
-        }
-      }
-    `,
-    ),
-    div({ slot: "header" }, "Filterable Properties"),
-    div({ slot: "body" }, [
-      // TODO: Add docs about how filters work etc.
-      div({ class: "property-table" }, [
-        div({ class: "__header __row" }, [
-          div({}, "Key"),
-          div({}, "Num Activities"),
+    body.replaceChildren(
+      ...sorted.map(([key, { count, types }]) =>
+        div({ class: "__row" }, [
+          div({ class: "__prop", title: key }, key),
+          div(
+            { class: "__types" },
+            types.map((t) => div({ class: "__type" }, t)),
+          ),
+          div({ class: "__count" }, fmt.format(count)),
         ]),
-        div({ class: "__body" }, rows),
-      ]),
-    ]),
-  ]);
+      ),
+    );
+  }
 
-  document.body.appendChild(node);
+  renderRows();
+
+  createModal(
+    "Filterable Properties",
+    div({ class: "property-table" }, [
+      div({ class: "__header __row" }, [
+        div({}, "Key"),
+        div({}, "Types"),
+        countHeader,
+      ]),
+      body,
+    ]),
+  );
+}
+
+// No string escape, make sure it's trusted
+function unsafeHTML(strings, ...values) {
+  const htmlString = strings.reduce(
+    (acc, str, i) => acc + str + (values[i] ?? ""),
+    "",
+  );
+  const template = document.createElement("template");
+  template.innerHTML = htmlString;
+  return template.content;
+}
+
+function createFilterHelpModal() {
+  createModal(
+    "Property Filter Help",
+    unsafeHTML`<div class="filter-help">
+      <p>
+        The filter is a JSON object. Keys are property names; values are objects
+        mapping operators to values. All conditions are ANDed together.
+      </p>
+
+      <div class="__heading">Operators</div>
+      <ul>
+        <li><code>=</code> — exact match (string, number, or boolean)</li>
+        <li><code>!=</code> — not equal</li>
+        <li><code>></code>, <code>>=</code>, <code><</code>, <code><=</code> — numeric comparison</li>
+        <li><code>any_of</code> — value is one of the listed strings</li>
+        <li><code>none_of</code> — value is none of the listed strings</li>
+        <li><code>matches</code> — substring match</li>
+        <li><code>exists</code> — true/false, property present or absent</li>
+      </ul>
+
+      <div class="__heading">Examples</div>
+      <div class="__example">
+        <code>{"type": {"=": "running"}}</code>
+        <div class="__desc">type is "running"</div>
+      </div>
+      <div class="__example">
+        <code>{"elevation": {">": 500, "<": 2000}}</code>
+        <div class="__desc">elevation between 500 and 2000</div>
+      </div>
+      <div class="__example">
+        <code>{"distance": {">": 100}, "duration": {"<": 240}}</code>
+        <div class="__desc">distance > 100 and duration < 240</div>
+      </div>
+      <div class="__example">
+        <code>{"type": {"any_of": ["running", "cycling"]}}</code>
+        <div class="__desc">running or cycling</div>
+      </div>
+      <div class="__example">
+        <code>{"indoor": {"exists": false}}</code>
+        <div class="__desc">indoor property is absent</div>
+      </div>
+    </div>`,
+  );
 }

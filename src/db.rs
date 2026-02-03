@@ -267,6 +267,12 @@ pub fn decode_line(bytes: &[u8]) -> Result<Vec<Coord<u32>>> {
     Ok(coords)
 }
 
+#[derive(Serialize)]
+pub struct PropertyStats {
+    pub count: usize,
+    pub types: Vec<String>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PropertyFilter(HashMap<String, PropExpr>);
 
@@ -486,13 +492,24 @@ impl Database {
         Ok(info)
     }
 
-    pub fn count_properties(&self) -> Result<HashMap<String, usize>> {
+    pub fn count_properties(&self) -> Result<HashMap<String, PropertyStats>> {
         let conn = self.connection()?;
         let mut stmt = conn.prepare(
             "SELECT
                 p.key,
-                COUNT(DISTINCT a.id)
+                COUNT(DISTINCT a.id),
+                GROUP_CONCAT(DISTINCT
+                    CASE p.type
+                        WHEN 'text'    THEN 'string'
+                        WHEN 'integer' THEN 'number'
+                        WHEN 'real'    THEN 'number'
+                        WHEN 'true'    THEN 'bool'
+                        WHEN 'false'   THEN 'bool'
+                    END
+                )
             FROM activities a, json_each(a.properties) p
+            -- exclude types that aren't currently useful for filtering
+            WHERE p.type NOT IN ('null', 'object', 'array')
             GROUP BY 1;",
         )?;
 
@@ -500,7 +517,11 @@ impl Database {
 
         let mut rows = stmt.query([])?;
         while let Some(row) = rows.next()? {
-            properties.insert(row.get_unwrap(0), row.get_unwrap(1));
+            let count: usize = row.get_unwrap(1);
+            let types_raw: String = row.get_unwrap(2);
+            let mut types: Vec<_> = types_raw.split(',').map(String::from).collect();
+            types.sort();
+            properties.insert(row.get_unwrap(0), PropertyStats { count, types });
         }
 
         Ok(properties)

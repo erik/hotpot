@@ -307,9 +307,13 @@
                     </div>
 
                     <div class="__setting">
-                        <label id="settings__filter" class="--clickable" for="filter">Property Filter</label>
+                        <label for="filter">Property Filter</label>
                         <textarea x-debounce key="filter" name="filter"
                             placeholder='{"elevation": {"&gt;": 1000, "&lt;": 3000 }}'></textarea>
+                        <div class="__filter-links">
+                            <span class="--clickable" id="settings__properties">Known properties</span>
+                            <span class="--clickable" id="settings__filter-help">Help</span>
+                        </div>
                     </div>
 
                     <div class="__setting">
@@ -405,9 +409,11 @@
 
         const nodes = {
             gradient: document.getElementById("settings__gradient"),
-            filter: document.getElementById("settings__filter"),
+            properties: document.getElementById("settings__properties"),
+            filterHelp: document.getElementById("settings__filter-help"),
             warnings: document.getElementById("warnings"),
             activityCount: document.getElementById("activity_count"),
+            tileUrl: document.getElementById("tile_url"),
         };
 
         const options = livewire({
@@ -506,18 +512,17 @@
             });
         }
 
-        map.on("load", () =>  updateMapTileSource());
+        map.on("load", () => updateMapTileSource());
         map.addControl(new maplibregl.NavigationControl());
 
         globalThis.UPLOADS_ENABLED &&
             map.addControl(new UploadButton(), "top-right");
 
         globalThis.RENDER_ENABLED &&
-          map.addControl(new ExportButton(options), "top-right");
+            map.addControl(new ExportButton(options), "top-right");
 
-        nodes.filter.addEventListener("click", () => {
-            createPropertyModal(globalThis.ACTIVITY_PROPERTIES);
-        });
+        nodes.properties.addEventListener("click", () => createPropertyModal(globalThis.ACTIVITY_PROPERTIES));
+        nodes.filterHelp.addEventListener("click", () => createFilterHelpModal());
     </script>
 </body>
 
