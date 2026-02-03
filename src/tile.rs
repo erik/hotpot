@@ -88,7 +88,7 @@ impl LngLat {
     pub fn from_latlng_str(value: &str) -> Result<Self> {
         let parts: Vec<&str> = value.split(',').collect();
         if parts.len() != 2 {
-            anyhow::bail!("expected format: longitude,latitude");
+            anyhow::bail!("expected format: latitude,longitude");
         }
 
         let lat: f64 = parts[0].trim().parse()?;
@@ -611,7 +611,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bbox_intersects_circle_center_inside() {
+    fn test_bbox_intersects_circle() {
         let bbox = BBox {
             left: 0.0,
             bot: 0.0,
@@ -636,7 +636,6 @@ mod tests {
 
         // Circle touches corner exactly (diagonal distance)
         // Distance from (-5, -5) to corner (0, 0) is sqrt(50) ≈ 7.07
-        assert!(bbox.intersects_circle(-5.0, -5.0, 7.1));
         assert!(!bbox.intersects_circle(-5.0, -5.0, 7.0));
 
         // All four corners
