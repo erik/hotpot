@@ -288,13 +288,11 @@
     <div id="map"></div>
     <div id="map-overlay">
         <details>
-            <summary>
-                <b>Settings</b>
-            </summary>
+            <summary>Settings</summary>
 
             <form class="settings" autocomplete="off">
                 <fieldset class="__group">
-                    <legend>Activities</legend>
+                    <legend>Filtering</legend>
 
                     <div class="__setting">
                         <label for="after">Start Date</label>
@@ -367,6 +365,13 @@
                             <option value="256">256px</option>
                             <option value="512" selected>512px</option>
                         </select>
+                    </div>
+                </fieldset>
+                <fieldset class="__group">
+                    <legend>Tile URL</legend>
+
+                    <div class="__setting">
+                        <div id="tile_url" class="--clickable" title="Click to copy">• • •</div>
                     </div>
                 </fieldset>
             </form>
@@ -466,7 +471,7 @@
             .watch(["$queryString"], async ({ $queryString }) => {
                 const { div } = createElement;
                 const { count, warnings } = await fetch(
-                  `/api/activity-count?${$queryString}`,
+                    `/api/activity-count?${$queryString}`,
                 )
                     .then(async (res) => [res.status, await res.text()])
                     .catch((err) => [500, err.toString()])
@@ -481,7 +486,18 @@
                 warnings != null
                     ? nodes.warnings.replaceChildren(div({}, warnings))
                     : nodes.warnings.replaceChildren();
+            })
+            .watch(["$tileUrl"], ({ $tileUrl }) => {
+                nodes.tileUrl.innerText = `${$tileUrl}`;
             });
+
+        nodes.tileUrl.addEventListener("click", async () => {
+            const url = window.location.origin + nodes.tileUrl.innerText;
+            await navigator.clipboard.writeText(url);
+            const original = nodes.tileUrl.innerText;
+            nodes.tileUrl.innerText = "Copied!";
+            setTimeout(() => (nodes.tileUrl.innerText = original), 1500);
+        });
 
         // Wire up form to reactive data stuff
         document.querySelectorAll("#map-overlay [key]").forEach((el) => {
