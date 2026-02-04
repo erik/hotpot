@@ -212,7 +212,7 @@ async fn static_file(uri: Uri) -> impl IntoResponse {
         Some(content) => {
             let mime = match path.split_once('.') {
                 Some((_, "js")) => "text/javascript",
-                Some((_, "css")) => "text/plain",
+                Some((_, "css")) => "text/css",
                 _ => "application/octet-stream",
             };
             ([(header::CONTENT_TYPE, mime)], content.data).into_response()

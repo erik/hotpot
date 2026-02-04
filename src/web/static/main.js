@@ -435,32 +435,28 @@ function createPropertyModal(props) {
   const { div, span } = createElement;
 
   const fmt = new Intl.NumberFormat();
-  const entries = Object.entries(props);
 
   // null = alphabetical by key; "desc" / "asc" = by count
-  let countSort = null;
+  let order = null;
 
   const body = div({ class: "__body" });
   const arrow = span({ class: "__sort-arrow" });
-  const countHeader = div({ class: "__sort" }, ["Num Activities", arrow]);
+  const countHeader = div({ class: "__sort" }, ["Activities", arrow]);
 
   countHeader.addEventListener("click", () => {
-    countSort =
-      countSort === null ? "desc" : countSort === "desc" ? "asc" : null;
+    order = order === null ? "desc" : order === "desc" ? "asc" : null;
+    arrow.textContent = order === "desc" ? "↓" : order === "asc" ? "↑" : "";
     renderRows();
   });
 
   function renderRows() {
-    const sorted = countSort
-      ? [...entries].sort((a, b) =>
-          countSort === "desc"
-            ? b[1].count - a[1].count
-            : a[1].count - b[1].count,
-        )
-      : [...entries].sort((a, b) => a[0].localeCompare(b[0]));
-
-    arrow.textContent =
-      countSort === "desc" ? " ↓" : countSort === "asc" ? " ↑" : "";
+    const sorted = Object.entries(props).sort((a, b) =>
+      order === "asc"
+        ? a[1].count - b[1].count
+        : order === "desc"
+          ? b[1].count - a[1].count
+          : a[0].localeCompare(b[0]),
+    );
 
     body.replaceChildren(
       ...sorted.map(([key, { count, types }]) =>

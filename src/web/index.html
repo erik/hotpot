@@ -9,6 +9,7 @@
 
     <script src="https://unpkg.com/maplibre-gl@4.3.2/dist/maplibre-gl.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.3.2/dist/maplibre-gl.css" />
+    <link rel="stylesheet" href="/static/style.css" />
 
     <script src="/static/main.js"></script>
 
@@ -21,309 +22,46 @@
 </head>
 
 <body>
-    <style>
-        html {
-            box-sizing: border-box;
-        }
-
-        *,
-        *:before,
-        *:after {
-            box-sizing: border-box;
-        }
-
-        body {
-            margin: 0;
-            padding: 0;
-            font-family: system-ui, sans-serif;
-        }
-
-        #map {
-            width: 100vw;
-            height: 100vh;
-        }
-
-        #map-overlay {
-            position: absolute;
-            top: 0;
-            left: 0;
-            padding: 0.5em 1em;
-            margin: 1em;
-            background-color: rgba(0, 0, 0, 0.75);
-            color: white;
-            border: 1px solid #d4d6da;
-            border-radius: 0.5em;
-
-            details[open] {
-                width: 30ch;
-            }
-
-            summary {
-                cursor: pointer;
-                user-select: none;
-            }
-
-            select,
-            input,
-            textarea {
-                font-family: system-ui, sans-serif;
-                width: 100%;
-            }
-
-            textarea {
-                resize: vertical;
-                font-size: small;
-            }
-        }
-
-        .settings {
-            color: lightgray;
-
-            .__group {
-                border-style: none;
-                padding: 0;
-                margin: 1em 0;
-
-                label {
-                    font-size: smaller;
-                }
-
-                legend {
-                    font-weight: bold;
-                    padding: 0;
-                }
-
-                .__setting {
-                    display: grid;
-                    grid-template-columns: 1fr 60%;
-                    justify-content: space-between;
-                    grid-gap: 1em;
-                    width: 100%;
-                    margin: 1em 0;
-                    transition:
-                        visibility 300ms,
-                        opacity 300ms;
-
-                    .--clickable {
-                        cursor: pointer;
-
-                        &:hover {
-                            text-decoration: underline;
-                        }
-                    }
-                }
-            }
-        }
-
-        .drop-area {
-            .__target {
-                height: 10ch;
-                border: 1px solid #d4d6da;
-                border-radius: 1em;
-                margin: 1em 0;
-                transition: background-color 300ms;
-
-                &.--highlight {
-                    background-color: lightgrey;
-                }
-
-                label {
-                    text-align: center;
-                    height: 100%;
-                    width: 100%;
-                    color: gray;
-                    cursor: copy;
-                    display: flex;
-                    flex-direction: column;
-                    align-content: center;
-                    justify-content: center;
-                    position: relative;
-                }
-
-                .__progress {
-                    width: 0px;
-                    height: 100%;
-                    background-color: rgba(0, 0, 0, 0.15);
-                    transition: opacity 1s;
-                    position: absolute;
-                    top: 0;
-                    left: 0;
-                    border-radius: 1em;
-                }
-            }
-
-            .__results {
-                color: gray;
-                font-size: small;
-                height: 100px;
-                overflow-y: scroll;
-                display: none;
-
-                .__row {
-                    display: grid;
-
-                    &.--success {
-                        grid-template-columns: 1fr;
-
-                        .__file::before {
-                            content: "✓ ";
-                        }
-                    }
-
-                    &.--error {
-                        grid-template-columns: 30% 1fr;
-                        grid-gap: 1em;
-                        background-color: rgb(255, 0, 0, 0.2);
-
-                        .__file::before {
-                            content: "❌ ";
-                        }
-                    }
-
-                    .__file {
-                        white-space: nowrap;
-                        text-overflow: ellipsis;
-                        overflow: hidden;
-                    }
-                }
-            }
-        }
-
-        #warnings div {
-            padding: 0.5em;
-            font-size: small;
-            border: 1px solid red;
-            border-radius: 0.25em;
-            background-color: #ff05054d;
-        }
-    </style>
-
-    <template id="template-modal">
-        <style>
-            html {
-                box-sizing: border-box;
-            }
-
-            *,
-            *:before,
-            *:after {
-                box-sizing: inherit;
-                border: 0 solid #d4d6da;
-            }
-
-            .modal {
-                width: 100vw;
-                height: 100vh;
-                background-color: rgba(0, 0, 0, 0.75);
-                z-index: 999;
-                position: fixed;
-                top: 0;
-                left: 0;
-                display: flex;
-                flex-direction: column;
-                justify-content: center;
-            }
-
-            .modal__content {
-                background-color: white;
-                margin: 0 auto;
-                width: 45ch;
-                max-width: 100%;
-                border-radius: 0.5em;
-                display: flex;
-                flex-direction: column;
-                padding: 1em 2em;
-            }
-
-            .modal__header {
-                text-align: center;
-            }
-
-            .modal__body {
-                flex-grow: 1;
-                overflow-y: auto;
-                max-height: 50vh;
-            }
-
-            .modal__footer {
-                display: flex;
-                flex-direction: row-reverse;
-                margin-top: 1em;
-            }
-
-            .modal__footer_button {
-                background-color: transparent;
-                padding: 0.5em;
-                border-radius: 0.25em;
-                border-width: 1px;
-                cursor: pointer;
-            }
-
-            .modal__footer_button:hover {
-                background-color: rgba(179, 179, 179, 0.15);
-            }
-        </style>
-
-        <dialog class="modal" open>
-            <div class="modal__content">
-                <div class="modal__header">
-                    <div name="header">
-                        <slot name="header"></slot>
-                    </div>
-                </div>
-                <div class="modal__body">
-                    <div name="body">
-                        <slot name="body"></slot>
-                    </div>
-                </div>
-                <div class="modal__footer">
-                    <form method="dialog">
-                        <button class="modal__footer_button">Close</button>
-                    </form>
-                </div>
-            </div>
-        </dialog>
-    </template>
-
     <div id="map"></div>
     <div id="map-overlay">
         <details>
             <summary>Settings</summary>
 
             <form class="settings" autocomplete="off">
-                <fieldset class="__group">
-                    <legend>Filtering</legend>
+                <fieldset>
+                    <legend>Filters</legend>
 
-                    <div class="__setting">
-                        <label for="after">Start Date</label>
-                        <input key="after" type="date" name="after" id="after" />
-                    </div>
-
-                    <div class="__setting">
-                        <label for="before">End Date</label>
-                        <input key="before" type="date" name="before" id="before" />
-                    </div>
-
-                    <div class="__setting">
-                        <label for="filter">Property Filter</label>
-                        <textarea x-debounce key="filter" name="filter"
-                            placeholder='{"elevation": {"&gt;": 1000, "&lt;": 3000 }}'></textarea>
-                        <div class="__filter-links">
-                            <span class="--clickable" id="settings__properties">Known properties</span>
-                            <span class="--clickable" id="settings__filter-help">Help</span>
+                    <div class="form-row even">
+                        <div class="date-input">
+                            <label for="after">Start Date</label>
+                            <input key="after" type="date" name="after" id="after" />
+                        </div>
+                        <div class="date-input">
+                            <label for="before">End Date</label>
+                            <input key="before" type="date" name="before" id="before" />
                         </div>
                     </div>
 
-                    <div class="__setting">
-                        <label for="activities">Activities Shown</label>
-                        <label id="activity_count">• • •</label>
+                    <div class="form-row">
+                        <div class="filter-label">
+                            <label for="filter">Property Filter</label>
+                            <span class="filter-link" id="property-modal-link">Properties</span>
+                            <span class="filter-link" id="filter-help-modal-link">Help</span>
+                        </div>
+                        <textarea x-debounce key="filter" name="filter"
+                            placeholder='{"elevation": {"&gt;": 1000, "&lt;": 3000 }}'></textarea>
+                    </div>
+
+                    <div class="activity-count-row">
+                        Matched activities
+                        <span id="activity-count">• • •</span>
                     </div>
                 </fieldset>
 
-                <fieldset class="__group">
+                <fieldset>
                     <legend>Heatmap</legend>
 
-                    <div class="__setting">
+                    <div class="form-row simple">
                         <label for="color">Theme</label>
                         <select key="color" name="color">
                             <option value="orange" selected>Orange</option>
@@ -334,16 +72,16 @@
                         </select>
                     </div>
 
-                    <div id="settings__gradient" class="__setting" style="visibility: hidden; opacity: 0">
+                    <div class="form-row simple" id="gradient-input" style="display: none">
                         <label for="gradient">Gradient</label>
                         <input key="gradient" name="gradient" x-debounce placeholder="1:400;10:fff" />
                     </div>
                 </fieldset>
 
-                <fieldset class="__group">
-                    <legend>Map Settings</legend>
+                <fieldset>
+                    <legend>Map</legend>
 
-                    <div class="__setting">
+                    <div class="form-row simple">
                         <label for="map">Base Map</label>
                         <select key="map" name="map">
                             <option value="dark-matter-nolabels" selected>
@@ -359,24 +97,21 @@
                         </select>
                     </div>
 
-                    <div class="__setting">
+                    <div class="form-row simple">
                         <label for="size">Tile Size</label>
                         <select key="size" name="size">
                             <option value="256">256px</option>
                             <option value="512" selected>512px</option>
                         </select>
                     </div>
-                </fieldset>
-                <fieldset class="__group">
-                    <legend>Tile URL</legend>
-
-                    <div class="__setting">
-                        <div id="tile_url" class="--clickable" title="Click to copy">• • •</div>
+                    <div class="form-row simple">
+                        <label>Tile URL</label>
+                        <div id="tile-url" class="value" title="Click to copy">• • •</div>
                     </div>
                 </fieldset>
             </form>
 
-            <div id="warnings"></div>
+            <div id="warnings-container"></div>
         </details>
     </div>
 
@@ -413,12 +148,12 @@
         });
 
         const nodes = {
-            gradient: document.getElementById("settings__gradient"),
-            properties: document.getElementById("settings__properties"),
-            filterHelp: document.getElementById("settings__filter-help"),
-            warnings: document.getElementById("warnings"),
-            activityCount: document.getElementById("activity_count"),
-            tileUrl: document.getElementById("tile_url"),
+            gradient: document.getElementById("gradient-input"),
+            properties: document.getElementById("property-modal-link"),
+            filterHelp: document.getElementById("filter-help-modal-link"),
+            warnings: document.getElementById("warnings-container"),
+            activityCount: document.getElementById("activity-count"),
+            tileUrl: document.getElementById("tile-url"),
         };
 
         const options = livewire({
@@ -455,14 +190,9 @@
             $tileUrl: ({ $queryString }) =>
                 "/tile/{z}/{x}/{y}{ratio}?" + $queryString,
         })
-            .watch(({ color }) => {
-                if (color === "custom") {
-                    nodes.gradient.style.visibility = "visible";
-                    nodes.gradient.style.opacity = "1";
-                } else {
-                    nodes.gradient.style.visibility = "hidden";
-                    nodes.gradient.style.opacity = "0";
-                }
+            .watch(["color"], ({ color }) => {
+                nodes.gradient.style.display =
+                    color === "custom" ? "grid" : "none";
             })
             .watch(["$styleUrl", "$tileUrl", "size"], ({ $styleUrl }) => {
                 map.setStyle($styleUrl);
@@ -493,7 +223,12 @@
 
         nodes.tileUrl.addEventListener("click", async () => {
             const url = window.location.origin + nodes.tileUrl.innerText;
-            await navigator.clipboard.writeText(url);
+            if (navigator.share) {
+                await navigator.share({ url });
+            } else {
+                await navigator.clipboard.writeText(url);
+            }
+
             const original = nodes.tileUrl.innerText;
             nodes.tileUrl.innerText = "Copied!";
             setTimeout(() => (nodes.tileUrl.innerText = original), 1500);
@@ -537,8 +272,12 @@
         globalThis.RENDER_ENABLED &&
             map.addControl(new ExportButton(options), "top-right");
 
-        nodes.properties.addEventListener("click", () => createPropertyModal(globalThis.ACTIVITY_PROPERTIES));
-        nodes.filterHelp.addEventListener("click", () => createFilterHelpModal());
+        nodes.properties.addEventListener("click", () =>
+            createPropertyModal(globalThis.ACTIVITY_PROPERTIES),
+        );
+        nodes.filterHelp.addEventListener("click", () =>
+            createFilterHelpModal(),
+        );
     </script>
 </body>
 
