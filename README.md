@@ -151,7 +151,7 @@ name like "Morning%"
 has? heart_rate
 
 # Combine with &&, ||, !, and parentheses
-elev_gain > 1000 && activity_type = ride
+elev_gain > 1000 && commute = true
 distance > 100 || elev_gain > 2000
 !(activity_type in [walk, hike])
 (elev_gain > 1000 || distance > 50) && activity_type in [ride, run]

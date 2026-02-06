@@ -509,8 +509,7 @@ function createFilterHelpModal() {
 
       <div class="__heading">Comparison Operators</div>
       <ul>
-        <li><code>=</code>, <code>!=</code> — equality</li>
-        <li><code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code> — numeric comparison</li>
+        <li><code>=</code>, <code>!=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code> — comparison operators</li>
         <li><code>in [val1, val2, ...]</code> — value in list</li>
         <li><code>like "pattern%"</code> — pattern match (% is wildcard)</li>
         <li><code>has? property</code> — property exists</li>
@@ -544,6 +543,14 @@ function createFilterHelpModal() {
       <div class="__example">
         <code>(elev_gain > 1000 || distance > 50) && type = ride</code>
         <div class="__desc">complex with grouping</div>
+      </div>
+      <div class="__example">
+        <code>commute = false && elev_gain > 1000</code>
+        <div class="__desc">boolean values (true/false)</div>
+      </div>
+      <div class="__example">
+        <code>"Heart Rate" > 150</code>
+        <div class="__desc">property names with spaces need quotes</div>
       </div>
     </div>`,
   );
