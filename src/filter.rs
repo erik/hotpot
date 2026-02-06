@@ -254,6 +254,10 @@ impl<'a> FilterParser<'a> {
         }
         self.expect("]")?;
 
+        if items.is_empty() {
+            anyhow::bail!("empty list in `in` expression");
+        }
+
         Ok(items)
     }
 
@@ -430,6 +434,7 @@ mod tests {
             "!key = value",
             "key",
             "k in [",
+            "k in []",
             "k in [1 2]",
             "x=y&&",
         ];
@@ -455,7 +460,6 @@ mod tests {
             "key > -1.234",
             // key in [value]
             "key in [val1, 'val2', 1.23, false]",
-            "key in []",
             // has? key
             "has? my_key_1",
             "has? 'my key 2'",
