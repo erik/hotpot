@@ -142,19 +142,18 @@ elev_gain > 1000
 "Total Distance" >= 100
 
 # Match multiple values
-activity_type in [ride, run]
+activity_type in [ride, "gravel ride"]
 
 # Pattern matching (% is wildcard, as with SQL's `LIKE`)
 name like "Morning%"
 
-# Property exists
+# Check if property exists
 has? heart_rate
 
-# Combine with &&, ||, !, and parentheses
-elev_gain > 1000 && commute = true
-distance > 100 || elev_gain > 2000
+# Combine multiple expressions
+distance > 100 && elev_gain > 2000
 !(activity_type in [walk, hike])
-(elev_gain > 1000 || distance > 50) && activity_type in [ride, run]
+(elev_gain > 1000 || distance > 50) && comute = true
 ```
 
 ### Activity Visibility & Privacy

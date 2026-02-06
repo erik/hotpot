@@ -65,11 +65,10 @@ struct ActivitiesCmdArgs {
     /// Filter activities by arbitrary metadata properties
     ///
     /// Examples:
-    ///   - elev_gain > 1000
-    ///   - activity_type in [ride, run]
-    ///   - elev_gain > 1000 && activity_type = ride
-    ///   - (elev_gain > 1000 || distance > 50) && activity_type in [ride, run]
-    #[arg(short = 'f', long = "filter")]
+    ///   activity_type in [ride, "gravel ride"]
+    ///   elev_gain > 1000 || distance > 200
+    ///   "Total Duration" > 240 && has? heart_rate
+    #[arg(short = 'f', long = "filter", verbatim_doc_comment)]
     filter: Option<PropertyFilter>,
 
     /// Print count of matching activities rather than printing them out
@@ -116,11 +115,10 @@ struct TileCmdArgs {
     /// Filter activities by arbitrary metadata properties
     ///
     /// Examples:
-    ///   - elev_gain > 1000
-    ///   - activity_type in [ride, run]
-    ///   - elev_gain > 1000 && activity_type = ride
-    ///   - (elev_gain > 1000 || distance > 50) && activity_type in [ride, run]
-    #[arg(short, long)]
+    ///   activity_type in [ride, "gravel ride"]
+    ///   elev_gain > 1000 || distance > 200
+    ///   "Total Duration" > 240 && has? heart_rate
+    #[arg(short, long, verbatim_doc_comment)]
     filter: Option<PropertyFilter>,
 
     /// Custom color gradient to use for heatmap.
@@ -168,11 +166,10 @@ struct RenderCmdArgs {
     /// Filter activities by arbitrary metadata properties
     ///
     /// Examples:
-    ///   - elev_gain > 1000
-    ///   - activity_type in [ride, run]
-    ///   - elev_gain > 1000 && activity_type = ride
-    ///   - (elev_gain > 1000 || distance > 50) && activity_type in [ride, run]
-    #[arg(short = 'f', long = "filter")]
+    ///   activity_type in [ride, "gravel ride"]
+    ///   elev_gain > 1000 || distance > 200
+    ///   "Total Duration" > 240 && has? heart_rate
+    #[arg(short = 'f', long = "filter", verbatim_doc_comment)]
     filter: Option<PropertyFilter>,
 
     /// Custom color gradient to use for heatmap.

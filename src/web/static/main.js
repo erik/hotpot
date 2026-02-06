@@ -500,57 +500,56 @@ function unsafeHTML(strings, ...values) {
 
 function createFilterHelpModal() {
   createModal(
-    "Property Filter Help",
+    "Filter Syntax",
     unsafeHTML`<div class="filter-help">
       <p>
-        Filter activities using a simple expression language with comparison,
-        logical operators, and grouping.
+        Generate different heatmaps for cycling vs running, exclude commutes,
+        filter by gear, elevation, etc. Any property imported from your activity
+        data can be used.
       </p>
 
-      <div class="__heading">Comparison Operators</div>
+      <div class="__heading">Syntax</div>
       <ul>
-        <li><code>=</code>, <code>!=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code> — comparison operators</li>
-        <li><code>in [val1, val2, ...]</code> — value in list</li>
-        <li><code>like "pattern%"</code> — pattern match (% is wildcard)</li>
-        <li><code>has? property</code> — property exists</li>
-      </ul>
-
-      <div class="__heading">Logical Operators</div>
-      <ul>
-        <li><code>&&</code> — AND</li>
-        <li><code>||</code> — OR</li>
-        <li><code>!</code> — NOT (requires parentheses: <code>!(expr)</code>)</li>
-        <li><code>( )</code> — grouping</li>
+        <li><code>=</code> <code>!=</code> <code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code> — supported comparisons</li>
+        <li><code>key in [a, "b c"]</code> — match multiple string values</li>
+        <li><code>key like "pattern%"</code> — match a pattern, <code>%</code> is a wildcard</li>
+        <li><code>has? "key with spaces"</code> — check if a property exists</li>
       </ul>
 
       <div class="__heading">Examples</div>
-      <div class="__example">
-        <code>type = running</code>
-        <div class="__desc">type is "running"</div>
-      </div>
-      <div class="__example">
-        <code>elevation > 500 && elevation < 2000</code>
-        <div class="__desc">elevation between 500 and 2000</div>
-      </div>
-      <div class="__example">
-        <code>type in [running, cycling]</code>
-        <div class="__desc">running or cycling</div>
-      </div>
-      <div class="__example">
-        <code>!(has? indoor)</code>
-        <div class="__desc">indoor property is absent</div>
-      </div>
-      <div class="__example">
-        <code>(elev_gain > 1000 || distance > 50) && type = ride</code>
-        <div class="__desc">complex with grouping</div>
-      </div>
-      <div class="__example">
-        <code>commute = false && elev_gain > 1000</code>
-        <div class="__desc">boolean values (true/false)</div>
-      </div>
-      <div class="__example">
-        <code>"Heart Rate" > 150</code>
-        <div class="__desc">property names with spaces need quotes</div>
+      <div class="__examples">
+        <div class="__example">
+          <code>elev_gain > 1000</code>
+          <div class="__desc">basic comparison</div>
+        </div>
+        <div class="__example">
+          <code>"Total Duration" > 180</code>
+          <div class="__desc">use quotes for keys with spaces</div>
+        </div>
+        <div class="__example">
+          <code>activity_type in [ride, "gravel ride"]</code>
+          <div class="__desc">match one of multiple values</div>
+        </div>
+        <div class="__example">
+          <code>name like "Morning%"</code>
+          <div class="__desc">wildcard pattern</div>
+        </div>
+        <div class="__example">
+          <code>has? heart_rate</code>
+          <div class="__desc">property exists</div>
+        </div>
+        <div class="__example">
+          <code>distance > 100 && elev_gain > 2000</code>
+          <div class="__desc">combine with &&</div>
+        </div>
+        <div class="__example">
+          <code>!(activity_type in [walk, hike])</code>
+          <div class="__desc">negation</div>
+        </div>
+        <div class="__example">
+          <code>(a > 1 || b > 2) && c = 3</code>
+          <div class="__desc">grouping</div>
+        </div>
       </div>
     </div>`,
   );

@@ -1,3 +1,22 @@
+//! Property filter expression language.
+//!
+//! ```
+//! <expr>   := <expr> || <expr>
+//!           | <expr> && <expr>
+//!           | !(<expr>)
+//!           | (<expr>)
+//!           | <key> <op> <value>
+//!           | <key> in [<value>, ...]
+//!           | <key> like <string>
+//!           | has? <key>
+//!
+//! <op>     := = | != | < | <= | > | >=
+//! <key>    := <word> | <string>
+//! <value>  := <word> | <string> | <number> | true | false
+//! <string> := "..." | '...'
+//! <word>   := [a-zA-Z0-9_]+
+//! ```
+
 use std::str::{Chars, FromStr};
 
 use anyhow::{Result, anyhow};
