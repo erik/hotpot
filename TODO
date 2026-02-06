@@ -6,7 +6,6 @@ More web endpoints
   - UI for filter + gradient creation
 
 Customization
-  - Support AND/OR/NOT for property filters
   - Vary gradient stops based on zoom level / max number of points in tile
 
 Misc

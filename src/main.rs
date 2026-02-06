@@ -11,13 +11,15 @@ use time::Date;
 
 use activity::PropertySource;
 
-use crate::db::{ActivityFilter, Database, PropertyFilter};
+use crate::db::{ActivityFilter, Database};
+use crate::filter::PropertyFilter;
 use crate::raster::{LinearGradient, PINKISH};
 use crate::tile::{LngLat, Tile};
 
 mod activity;
 mod date;
 mod db;
+mod filter;
 mod raster;
 mod strava;
 mod tile;
@@ -62,8 +64,11 @@ struct ActivitiesCmdArgs {
 
     /// Filter activities by arbitrary metadata properties
     ///
-    /// {"elev_gain": { ">": 1000 }}
-    #[arg(short = 'f', long = "filter")]
+    /// Examples:
+    ///   activity_type in [ride, "gravel ride"]
+    ///   elev_gain > 1000 || distance > 200
+    ///   "Total Duration" > 240 && has? heart_rate
+    #[arg(short = 'f', long = "filter", verbatim_doc_comment)]
     filter: Option<PropertyFilter>,
 
     /// Print count of matching activities rather than printing them out
@@ -109,8 +114,11 @@ struct TileCmdArgs {
 
     /// Filter activities by arbitrary metadata properties
     ///
-    /// {"elev_gain": { ">": 1000 }}
-    #[arg(short, long)]
+    /// Examples:
+    ///   activity_type in [ride, "gravel ride"]
+    ///   elev_gain > 1000 || distance > 200
+    ///   "Total Duration" > 240 && has? heart_rate
+    #[arg(short, long, verbatim_doc_comment)]
     filter: Option<PropertyFilter>,
 
     /// Custom color gradient to use for heatmap.
@@ -157,8 +165,11 @@ struct RenderCmdArgs {
 
     /// Filter activities by arbitrary metadata properties
     ///
-    /// {"elev_gain": { ">": 1000 }}
-    #[arg(short = 'f', long = "filter")]
+    /// Examples:
+    ///   activity_type in [ride, "gravel ride"]
+    ///   elev_gain > 1000 || distance > 200
+    ///   "Total Duration" > 240 && has? heart_rate
+    #[arg(short = 'f', long = "filter", verbatim_doc_comment)]
     filter: Option<PropertyFilter>,
 
     /// Custom color gradient to use for heatmap.

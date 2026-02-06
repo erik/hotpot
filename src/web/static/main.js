@@ -500,44 +500,56 @@ function unsafeHTML(strings, ...values) {
 
 function createFilterHelpModal() {
   createModal(
-    "Property Filter Help",
+    "Filter Syntax",
     unsafeHTML`<div class="filter-help">
       <p>
-        The filter is a JSON object. Keys are property names; values are objects
-        mapping operators to values. All conditions are ANDed together.
+        Generate different heatmaps for cycling vs running, exclude commutes,
+        filter by gear, elevation, etc. Any property imported from your activity
+        data can be used.
       </p>
 
-      <div class="__heading">Operators</div>
+      <div class="__heading">Syntax</div>
       <ul>
-        <li><code>=</code> — exact match (string, number, or boolean)</li>
-        <li><code>!=</code> — not equal</li>
-        <li><code>></code>, <code>>=</code>, <code><</code>, <code><=</code> — numeric comparison</li>
-        <li><code>any_of</code> — value is one of the listed strings</li>
-        <li><code>none_of</code> — value is none of the listed strings</li>
-        <li><code>matches</code> — substring match</li>
-        <li><code>exists</code> — true/false, property present or absent</li>
+        <li><code>=</code> <code>!=</code> <code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code> — supported comparisons</li>
+        <li><code>key in [a, "b c"]</code> — match multiple string values</li>
+        <li><code>key like "pattern%"</code> — match a pattern, <code>%</code> is a wildcard</li>
+        <li><code>has? "key with spaces"</code> — check if a property exists</li>
       </ul>
 
       <div class="__heading">Examples</div>
-      <div class="__example">
-        <code>{"type": {"=": "running"}}</code>
-        <div class="__desc">type is "running"</div>
-      </div>
-      <div class="__example">
-        <code>{"elevation": {">": 500, "<": 2000}}</code>
-        <div class="__desc">elevation between 500 and 2000</div>
-      </div>
-      <div class="__example">
-        <code>{"distance": {">": 100}, "duration": {"<": 240}}</code>
-        <div class="__desc">distance > 100 and duration < 240</div>
-      </div>
-      <div class="__example">
-        <code>{"type": {"any_of": ["running", "cycling"]}}</code>
-        <div class="__desc">running or cycling</div>
-      </div>
-      <div class="__example">
-        <code>{"indoor": {"exists": false}}</code>
-        <div class="__desc">indoor property is absent</div>
+      <div class="__examples">
+        <div class="__example">
+          <code>elev_gain > 1000</code>
+          <div class="__desc">basic comparison</div>
+        </div>
+        <div class="__example">
+          <code>"Total Duration" > 180</code>
+          <div class="__desc">use quotes for keys with spaces</div>
+        </div>
+        <div class="__example">
+          <code>activity_type in [ride, "gravel ride"]</code>
+          <div class="__desc">match one of multiple values</div>
+        </div>
+        <div class="__example">
+          <code>name like "Morning%"</code>
+          <div class="__desc">wildcard pattern</div>
+        </div>
+        <div class="__example">
+          <code>has? heart_rate</code>
+          <div class="__desc">property exists</div>
+        </div>
+        <div class="__example">
+          <code>distance > 100 && elev_gain > 2000</code>
+          <div class="__desc">combine with &&</div>
+        </div>
+        <div class="__example">
+          <code>!(activity_type in [walk, hike])</code>
+          <div class="__desc">negation</div>
+        </div>
+        <div class="__example">
+          <code>(a > 1 || b > 2) && c = 3</code>
+          <div class="__desc">grouping</div>
+        </div>
       </div>
     </div>`,
   );

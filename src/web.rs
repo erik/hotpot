@@ -24,8 +24,9 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::{DefaultOnFailure, TraceLayer};
 use tracing::Level;
 
-use crate::db::{ActivityFilter, Database, PropertyFilter};
 use crate::db::Config as DbConfig;
+use crate::db::{ActivityFilter, Database};
+use crate::filter::PropertyFilter;
 use crate::raster::LinearGradient;
 use crate::strava;
 use crate::strava::StravaAuth;
@@ -516,7 +517,12 @@ fn is_authenticated(
 }
 
 async fn upload_activity(
-    State(AppState { db, db_config, config, .. }): State<AppState>,
+    State(AppState {
+        db,
+        db_config,
+        config,
+        ..
+    }): State<AppState>,
     auth_header: Option<TypedHeader<axum::headers::Authorization<Bearer>>>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {

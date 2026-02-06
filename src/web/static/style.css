@@ -83,7 +83,7 @@ body {
         cursor: pointer;
 
         list-style: none;
-        margin-right: 1rem;
+        padding-right: 0.5rem;
         align-items: center;
         display: flex;
         font-size: var(--text-lg);
@@ -414,11 +414,19 @@ body {
         border-radius: var(--radius-sm);
     }
 
+    .__examples {
+        display: grid;
+        gap: 0.5rem;
+
+        @media (min-width: 45rem) {
+            grid-template-columns: repeat(2, 1fr);
+        }
+    }
+
     .__example {
         background-color: var(--input-bg);
         border-radius: var(--radius);
-        padding: 0.25rem;
-        margin-bottom: 0.75rem;
+        padding: 0.5rem 0.75rem;
 
         .__code {
             font-family: var(--font-mono);

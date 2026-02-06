@@ -48,7 +48,7 @@ fn test_import_and_activities_count() {
         "activities",
         &[
             "--filter",
-            r#"{"activity_type": {"any_of": ["ride", "run"]}}"#,
+            "activity_type in [ride, run]",
             "--before=2025-09-01",
         ],
     );
