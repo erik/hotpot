@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
@@ -13,8 +12,7 @@ use rusqlite::{ToSql, params};
 use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime};
 
-pub use crate::filter::PropertyFilter;
-
+use crate::filter::PropertyFilter;
 
 const SCHEMA: &str = "\
 CREATE TABLE IF NOT EXISTS config (
@@ -292,23 +290,27 @@ impl ActivityFilter {
     }
 
     pub fn to_query<'a>(&'a self, params: &mut Vec<&'a dyn ToSql>) -> String {
-        let mut clauses: Vec<Cow<'a, str>> = vec!["true".into()];
+        let mut clauses = String::from("true");
 
         if let Some(ref before) = self.before {
-            clauses.push("start_time < ?".into());
+            clauses.push_str(" AND start_time < ?");
             params.push(before);
         }
 
         if let Some(ref after) = self.after {
-            clauses.push("start_time > ?".into());
+            clauses.push_str(" AND start_time > ?");
             params.push(after);
         }
 
         if let Some(ref props) = self.props {
-            props.to_query(&mut clauses, params);
+            let (prop_sql, prop_params) = props.to_sql();
+
+            clauses.push_str(" AND ");
+            clauses.push_str(&prop_sql);
+            params.extend(prop_params);
         }
 
-        clauses.join(" AND ")
+        clauses
     }
 }
 

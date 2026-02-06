@@ -1,28 +1,30 @@
-#![allow(unused)]
-use std::{borrow::Cow, str::{Chars, FromStr}};
+use std::str::{Chars, FromStr};
 
 use anyhow::{Result, anyhow};
-use ouroboros::self_referencing;
 use rusqlite::ToSql;
+use rusqlite::types::ToSqlOutput;
 use serde::{Deserialize, Deserializer};
 
-#[derive(Debug)]
-enum Value<'a> {
-    String(&'a str),
-    Number(f64),
-    True,
-    False,
+#[derive(Debug, Clone)]
+pub struct PropertyFilter {
+    expr: FilterExpr,
 }
 
-impl<'a> Value<'a> {
-    fn as_sql_param(&'a self) -> &'a dyn ToSql {
-        match self {
-            Value::String(s) => s,
-            Value::Number(n) => n,
-            Value::True => &true,
-            Value::False => &false,
-        }
+impl PropertyFilter {
+    pub fn to_sql(&self) -> (String, Vec<&dyn ToSql>) {
+        let mut str = String::with_capacity(128);
+        let mut params = Vec::new();
+
+        self.expr.to_sql(&mut str, &mut params);
+        (str, params)
     }
+}
+
+#[derive(Debug, Clone)]
+enum Value {
+    String(String),
+    Number(f64),
+    Bool(bool),
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -35,41 +37,48 @@ enum ComparisonOp {
     Neq,
 }
 
-#[derive(Debug)]
-enum FilterExpr<'a> {
-    Comparison(&'a str, ComparisonOp, Value<'a>),
-    OneOf(&'a str, Vec<Value<'a>>),
-    HasKey(&'a str),
-    Like(&'a str, &'a str),
-    And(Box<FilterExpr<'a>>, Box<FilterExpr<'a>>),
-    Or(Box<FilterExpr<'a>>, Box<FilterExpr<'a>>),
-    Not(Box<FilterExpr<'a>>),
+#[derive(Debug, Clone)]
+enum FilterExpr {
+    Comparison(String, ComparisonOp, Value),
+    OneOf(String, Vec<Value>),
+    HasKey(String),
+    Like(String, String),
+    And(Box<FilterExpr>, Box<FilterExpr>),
+    Or(Box<FilterExpr>, Box<FilterExpr>),
+    Not(Box<FilterExpr>),
 }
 
-impl<'a> FilterExpr<'a> {
-    pub fn to_sql(&'a self) -> (String, Vec<&'a dyn ToSql>) {
-        let mut str = String::with_capacity(256);
-        let mut params = Vec::new();
+impl FilterExpr {
+    fn parse(input: &str) -> Result<Self> {
+        let mut parser = FilterParser::new(input);
 
-        self.to_sql_inner(&mut str, &mut params);
-        (str, params)
+        let expr = parser
+            .read_or_expr()
+            .map_err(|err| anyhow!("parse error at position {}: {:?}", parser.pos, err))?;
+
+        if parser.peek().is_some() {
+            anyhow::bail!("unexpected: {:?}", parser.rest());
+        }
+
+        Ok(expr)
     }
-    fn to_sql_inner<'b: 'a>(&'a self, str: &mut String, params: &mut Vec<&'a dyn ToSql>) {
+
+    fn to_sql<'a>(&'a self, str: &mut String, params: &mut Vec<&'a dyn ToSql>) {
         str.push('(');
         match self {
             FilterExpr::And(lhs, rhs) => {
-                lhs.to_sql_inner(str, params);
+                lhs.to_sql(str, params);
                 str.push_str(" AND ");
-                rhs.to_sql_inner(str, params);
+                rhs.to_sql(str, params);
             }
             FilterExpr::Or(lhs, rhs) => {
-                lhs.to_sql_inner(str, params);
+                lhs.to_sql(str, params);
                 str.push_str(" OR ");
-                rhs.to_sql_inner(str, params);
+                rhs.to_sql(str, params);
             }
             FilterExpr::Not(expr) => {
                 str.push_str("NOT ");
-                expr.to_sql_inner(str, params);
+                expr.to_sql(str, params);
             }
             FilterExpr::Comparison(key, op, value) => {
                 let op_str = match op {
@@ -86,7 +95,7 @@ impl<'a> FilterExpr<'a> {
                 str.push_str(" ?");
 
                 params.push(key);
-                params.push(value.as_sql_param());
+                params.push(value);
             }
             FilterExpr::OneOf(key, values) => {
                 str.push_str("properties ->> ? IN (");
@@ -97,7 +106,7 @@ impl<'a> FilterExpr<'a> {
                         str.push_str(", ");
                     }
                     str.push('?');
-                    params.push(value.as_sql_param());
+                    params.push(value);
                 }
                 str.push(')');
             }
@@ -115,24 +124,13 @@ impl<'a> FilterExpr<'a> {
     }
 }
 
-impl<'a> TryFrom<&'a str> for FilterExpr<'a> {
-    type Error = anyhow::Error;
-
-    fn try_from(input: &'a str) -> Result<Self, Self::Error> {
-        let mut parser = FilterParser {
-            chars: input.chars(),
-            pos: 0,
-        };
-
-        let expr = parser
-            .read_clause()
-            .map_err(|err| anyhow!("parse error at position {}: {:?}", parser.pos, err))?;
-
-        if parser.peek().is_some() {
-            anyhow::bail!("unexpected: {:?}", parser.chars.as_str());
-        }
-
-        Ok(expr)
+impl ToSql for Value {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(match self {
+            Value::String(s) => ToSqlOutput::from(s.as_str()),
+            Value::Number(n) => (*n).into(),
+            Value::Bool(b) => (*b).into(),
+        })
     }
 }
 
@@ -143,29 +141,41 @@ struct FilterParser<'a> {
 }
 
 impl<'a> FilterParser<'a> {
-    fn read_clause(&mut self) -> Result<FilterExpr<'a>> {
-        let mut lhs = self.read_unary()?;
+    fn new(input: &'a str) -> Self {
+        FilterParser {
+            chars: input.chars(),
+            pos: 0,
+        }
+    }
 
-        loop {
-            if self.consume("||") {
-                let rhs = self.read_clause()?;
-                lhs = FilterExpr::Or(Box::new(lhs), Box::new(rhs));
-            } else if self.consume("&&") {
-                let rhs = self.read_clause()?;
-                lhs = FilterExpr::And(Box::new(lhs), Box::new(rhs));
-            } else {
-                break;
-            }
+    fn rest(&self) -> &'a str {
+        self.chars.as_str()
+    }
+
+    fn read_or_expr(&mut self) -> Result<FilterExpr> {
+        let mut lhs = self.read_and_expr()?;
+        while self.consume("||") {
+            let rhs = self.read_and_expr()?;
+            lhs = FilterExpr::Or(Box::new(lhs), Box::new(rhs));
         }
         Ok(lhs)
     }
 
-    fn read_unary(&mut self) -> Result<FilterExpr<'a>> {
+    fn read_and_expr(&mut self) -> Result<FilterExpr> {
+        let mut lhs = self.read_unary()?;
+        while self.consume("&&") {
+            let rhs = self.read_unary()?;
+            lhs = FilterExpr::And(Box::new(lhs), Box::new(rhs));
+        }
+        Ok(lhs)
+    }
+
+    fn read_unary(&mut self) -> Result<FilterExpr> {
         self.skip_whitespace();
 
         if self.consume("!") {
             self.expect("(")?;
-            let expr = self.read_clause()?;
+            let expr = self.read_or_expr()?;
             self.expect(")")?;
             Ok(FilterExpr::Not(Box::new(expr)))
         } else if self.consume("has?") {
@@ -176,11 +186,11 @@ impl<'a> FilterParser<'a> {
         }
     }
 
-    fn read_expr(&mut self) -> Result<FilterExpr<'a>> {
+    fn read_expr(&mut self) -> Result<FilterExpr> {
         self.skip_whitespace();
 
         if self.consume("(") {
-            let expr = self.read_clause()?;
+            let expr = self.read_or_expr()?;
             self.expect(")")?;
             return Ok(expr);
         }
@@ -191,8 +201,8 @@ impl<'a> FilterParser<'a> {
             let list = self.read_list()?;
             FilterExpr::OneOf(key, list)
         } else if self.consume("like") {
-            let str = self.read_string()?;
-            FilterExpr::Like(key, str)
+            let pattern = self.read_string()?;
+            FilterExpr::Like(key, pattern)
         } else {
             let op = self.read_binary_op()?;
             let rhs = self.read_value()?;
@@ -202,7 +212,7 @@ impl<'a> FilterParser<'a> {
         Ok(expr)
     }
 
-    fn read_key(&mut self) -> Result<&'a str> {
+    fn read_key(&mut self) -> Result<String> {
         self.skip_whitespace();
         match self.read_value()? {
             Value::String(s) => Ok(s),
@@ -210,7 +220,7 @@ impl<'a> FilterParser<'a> {
         }
     }
 
-    fn read_list(&mut self) -> Result<Vec<Value<'a>>> {
+    fn read_list(&mut self) -> Result<Vec<Value>> {
         self.skip_whitespace();
         self.expect("[")?;
 
@@ -228,17 +238,20 @@ impl<'a> FilterParser<'a> {
         Ok(items)
     }
 
-    fn read_value(&mut self) -> Result<Value<'a>> {
+    fn read_value(&mut self) -> Result<Value> {
         self.skip_whitespace();
 
         Ok(match self.peek() {
             Some(ch) if ch == '"' || ch == '\'' => Value::String(self.read_string()?),
             Some(ch) if ch.is_numeric() || ch == '-' => Value::Number(self.read_number()?),
-            Some(_) => match self.read_word()? {
-                "true" => Value::True,
-                "false" => Value::False,
-                str => Value::String(str),
-            },
+            Some(_) => {
+                let word = self.read_word()?;
+                match word.as_str() {
+                    "true" => Value::Bool(true),
+                    "false" => Value::Bool(false),
+                    _ => Value::String(word),
+                }
+            }
             None => anyhow::bail!("expected value, hit eof"),
         })
     }
@@ -248,15 +261,15 @@ impl<'a> FilterParser<'a> {
 
         match (self.next(), self.peek()) {
             (Some('<'), Some('=')) => {
-                self.skip(1);
+                self.drop(1);
                 Ok(ComparisonOp::Lte)
             }
             (Some('>'), Some('=')) => {
-                self.skip(1);
+                self.drop(1);
                 Ok(ComparisonOp::Gte)
             }
             (Some('!'), Some('=')) => {
-                self.skip(1);
+                self.drop(1);
                 Ok(ComparisonOp::Neq)
             }
             (Some('='), _) => Ok(ComparisonOp::Eq),
@@ -266,37 +279,41 @@ impl<'a> FilterParser<'a> {
         }
     }
 
-    fn read_word(&mut self) -> Result<&'a str> {
+    fn read_word(&mut self) -> Result<String> {
         self.skip_whitespace();
-        let slice = self.chars.as_str();
-        let len = slice
-            .chars()
-            .take_while(|ch| ch.is_alphanumeric() || *ch == '_')
-            .count();
 
-        if len == 0 {
+        let word: String = self
+            .chars
+            .clone()
+            .take_while(|ch| ch.is_alphanumeric() || *ch == '_')
+            .collect();
+
+        if word.is_empty() {
             anyhow::bail!("empty identifier");
         }
 
-        self.skip(len);
-        Ok(&slice[..len])
+        self.drop(word.chars().count());
+        Ok(word)
     }
 
-    fn read_string(&mut self) -> Result<&'a str> {
+    fn read_string(&mut self) -> Result<String> {
         self.skip_whitespace();
-        let delim = self.next().ok_or_else(|| anyhow!("expected str"))?;
-        let slice = self.chars.as_str();
+        let Some(delim) = self.next() else {
+            return Err(anyhow!("expected string"));
+        };
 
-        let len = slice.chars().take_while(|ch| *ch != delim).count();
-        if len > 0 {
-            self.skip(len);
+        let str: String = self.chars.clone().take_while(|ch| *ch != delim).collect();
+
+        if !str.is_empty() {
+            self.drop(str.chars().count());
         }
 
+        // Next char is the delimiter. if not present, we hit end too soon
         if self.next().is_none() {
-            anyhow::bail!("unexpected eof");
+            anyhow::bail!("unterminated string");
         }
 
-        Ok(&slice[..len])
+        Ok(str)
     }
 
     fn read_number(&mut self) -> Result<f64> {
@@ -307,11 +324,14 @@ impl<'a> FilterParser<'a> {
             .chars()
             .take_while(|ch| ch.is_numeric() || *ch == '.' || *ch == '-')
             .count();
-        self.skip(len);
 
+        self.drop(len);
+
+        // This is supposed to take in byte len (rather than chars), but we're
+        // only selecting [0-9.-] here so they'll be equivalent
         slice[..len]
             .parse()
-            .map_err(|e| anyhow!("invalid num: {:?}", e))
+            .map_err(|_| anyhow!("invalid number: {:?}", &slice[..len]))
     }
 
     fn skip_whitespace(&mut self) {
@@ -324,8 +344,7 @@ impl<'a> FilterParser<'a> {
 
     fn expect(&mut self, s: &str) -> Result<()> {
         if !self.consume(s) {
-            let str = self.chars.as_str();
-            anyhow::bail!("expected {:?}, got {:?}", s, str);
+            anyhow::bail!("expected {:?}, got {:?}", s, self.rest());
         }
 
         Ok(())
@@ -333,8 +352,8 @@ impl<'a> FilterParser<'a> {
 
     fn consume(&mut self, s: &str) -> bool {
         self.skip_whitespace();
-        if self.chars.as_str().starts_with(s) {
-            self.skip(s.len());
+        if self.rest().starts_with(s) {
+            self.drop(s.len());
             return true;
         }
 
@@ -349,37 +368,9 @@ impl<'a> FilterParser<'a> {
         self.chars.next().inspect(|_| self.pos += 1)
     }
 
-    fn skip(&mut self, sz: usize) {
+    fn drop(&mut self, sz: usize) {
         self.pos += sz;
         let _ = self.chars.nth(sz - 1);
-    }
-}
-
-#[self_referencing]
-#[derive(Debug)]
-pub struct PropertyFilter {
-    source: String,
-    #[borrows(source)]
-    #[covariant]
-    expr: FilterExpr<'this>,
-}
-
-impl PropertyFilter {
-    fn from_string(s: String) -> Result<Self> {
-        PropertyFilterTryBuilder {
-            source: s,
-            expr_builder: |source: &String| {
-                FilterExpr::try_from(source.as_str())
-            },
-        }.try_build()
-    }
-
-    pub fn to_query<'a>(&'a self, clauses: &mut Vec<Cow<'a, str>>, params: &mut Vec<&'a dyn ToSql>) {
-        self.with_expr(|expr| {
-            let (sql, filter_params) = expr.to_sql();
-            clauses.push(sql.into());
-            params.extend(filter_params);
-        });
     }
 }
 
@@ -387,7 +378,8 @@ impl FromStr for PropertyFilter {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self> {
-        PropertyFilter::from_string(s.to_string())
+        let expr = FilterExpr::parse(s)?;
+        Ok(PropertyFilter { expr })
     }
 }
 
@@ -396,17 +388,9 @@ impl<'de> Deserialize<'de> for PropertyFilter {
     where
         D: Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
-        PropertyFilter::from_string(s).map_err(|err| {
-            serde::de::Error::custom(format!("invalid filter expression: {}", err))
-        })
-    }
-}
-
-impl Clone for PropertyFilter {
-    fn clone(&self) -> Self {
-        let source = self.borrow_source().clone();
-        PropertyFilter::from_string(source).expect("cloning valid PropertyFilter should succeed")
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(|err| serde::de::Error::custom(format!("invalid filter: {:?}", err)))
     }
 }
 
@@ -432,7 +416,7 @@ mod tests {
         ];
 
         for &f in filters.iter() {
-            FilterExpr::try_from(f).expect_err(f);
+            FilterExpr::parse(f).expect_err(f);
         }
     }
 
@@ -472,28 +456,23 @@ mod tests {
         // Just check if they parse, assertions about the AST shape are
         // implicitly tested by the SQL generation tests below
         for &filter in valid_filters.iter() {
-            FilterExpr::try_from(filter).expect(filter);
+            FilterExpr::parse(filter).expect(filter);
         }
-    }
-
-    macro_rules! assert_params {
-        ($params:expr, [$($val:expr),* $(,)?]) => {
-            let expected: Vec<rusqlite::types::ToSqlOutput> = vec![
-                $(rusqlite::types::ToSqlOutput::from($val)),*
-            ];
-            let actual: Vec<_> = $params.iter()
-                .map(|p| p.to_sql().unwrap())
-                .collect();
-            assert_eq!(actual, expected);
-        };
     }
 
     macro_rules! assert_sql {
         ($input:expr, $expected_sql:expr, [$($param:expr),* $(,)?]) => {
-            let expr = FilterExpr::try_from($input).unwrap();
-            let (sql, params) = expr.to_sql();
+            let expr = FilterExpr::parse($input)
+                .expect(&format!("expected valid filter {:?}", $input));
+
+            let mut sql = String::new();
+            let mut params: Vec<&dyn ToSql> = Vec::new();
+            expr.to_sql(&mut sql, &mut params);
             assert_eq!(sql, $expected_sql);
-            assert_params!(params, [$($param),*]);
+
+            let expected = vec![$(ToSqlOutput::from($param)),*];
+            let actual: Vec<_> = params.iter().map(|p| p.to_sql().unwrap()).collect();
+            assert_eq!(actual, expected);
         };
     }
 
@@ -508,6 +487,16 @@ mod tests {
             "activity = ride",
             "(properties ->> ? = ?)",
             ["activity", "ride"]
+        );
+        assert_sql!(
+            r#"city = "東京""#,
+            "(properties ->> ? = ?)",
+            ["city", "東京"]
+        );
+        assert_sql!(
+            "名前 = 'こんにちは'",
+            "(properties ->> ? = ?)",
+            ["名前", "こんにちは"]
         );
         assert_sql!(
             "commute = true",
@@ -548,6 +537,17 @@ mod tests {
             "(avg_speed > 18 && gear = fixed) || commute = true",
             "(((properties ->> ? > ?) AND (properties ->> ? = ?)) OR (properties ->> ? = ?))",
             ["avg_speed", 18.0, "gear", "fixed", "commute", true]
+        );
+        // && binds tighter than ||
+        assert_sql!(
+            "a = 1 && b = 2 || c = 3",
+            "(((properties ->> ? = ?) AND (properties ->> ? = ?)) OR (properties ->> ? = ?))",
+            ["a", 1.0, "b", 2.0, "c", 3.0]
+        );
+        assert_sql!(
+            "a = 1 || b = 2 && c = 3",
+            "((properties ->> ? = ?) OR ((properties ->> ? = ?) AND (properties ->> ? = ?)))",
+            ["a", 1.0, "b", 2.0, "c", 3.0]
         );
     }
 }

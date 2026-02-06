@@ -11,7 +11,8 @@ use time::Date;
 
 use activity::PropertySource;
 
-use crate::db::{ActivityFilter, Database, PropertyFilter};
+use crate::db::{ActivityFilter, Database};
+use crate::filter::PropertyFilter;
 use crate::raster::{LinearGradient, PINKISH};
 use crate::tile::{LngLat, Tile};
 
