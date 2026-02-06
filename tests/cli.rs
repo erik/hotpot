@@ -260,3 +260,42 @@ fn test_mask_duplicate_name_updates() {
     assert_eq!(list_output.matches("home").count(), 1);
     assert!(list_output.contains("home - 51.50740,0.12780 (radius: 1000m)"));
 }
+
+#[test]
+fn test_filter_not_equal() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("test.sqlite3");
+
+    // Import without metadata join - activities won't have activity_type
+    build_subcommand(&db_path, "import", &[TEST_DATA_DIR]).success();
+
+    let assert = build_subcommand(
+        &db_path,
+        "activities",
+        &["--filter", "manufacturer != garmin"],
+    );
+    let result = assert.success();
+    let output = result.get_output();
+
+    let activities = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = activities.lines().collect();
+
+    // Should return gpx and tcx (no manufacturer property), but not fit (manufacturer=garmin)
+    assert_eq!(
+        lines.len(),
+        2,
+        "Should match activities without the property"
+    );
+    assert!(
+        activities.contains("sample.gpx"),
+        "Should contain gpx (no manufacturer)"
+    );
+    assert!(
+        activities.contains("sample.tcx"),
+        "Should contain tcx (no manufacturer)"
+    );
+    assert!(
+        !activities.contains("sample.fit"),
+        "Should not contain fit (manufacturer=garmin)"
+    );
+}

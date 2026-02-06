@@ -106,7 +106,7 @@ impl FilterExpr {
                     ComparisonOp::Gt => ">",
                     ComparisonOp::Gte => ">=",
                     ComparisonOp::Eq => "=",
-                    ComparisonOp::Neq => "!=",
+                    ComparisonOp::Neq => "IS NOT",
                 };
 
                 str.push_str("properties ->> ? ");
@@ -555,6 +555,11 @@ mod tests {
             "!(gear = fixed)",
             "(NOT (properties ->> ? = ?))",
             ["gear", "fixed"]
+        );
+        assert_sql!(
+            "status != deleted",
+            "(properties ->> ? IS NOT ?)",
+            ["status", "deleted"]
         );
         assert_sql!(
             "(avg_speed > 18 && gear = fixed) || commute = true",
