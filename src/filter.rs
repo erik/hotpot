@@ -1,8 +1,10 @@
 #![allow(unused)]
-use std::{borrow::Cow, str::Chars};
+use std::{borrow::Cow, str::{Chars, FromStr}};
 
 use anyhow::{Result, anyhow};
+use ouroboros::self_referencing;
 use rusqlite::ToSql;
+use serde::{Deserialize, Deserializer};
 
 #[derive(Debug)]
 enum Value<'a> {
@@ -34,7 +36,7 @@ enum ComparisonOp {
 }
 
 #[derive(Debug)]
-pub enum FilterExpr<'a> {
+enum FilterExpr<'a> {
     Comparison(&'a str, ComparisonOp, Value<'a>),
     OneOf(&'a str, Vec<Value<'a>>),
     HasKey(&'a str),
@@ -350,6 +352,61 @@ impl<'a> FilterParser<'a> {
     fn skip(&mut self, sz: usize) {
         self.pos += sz;
         let _ = self.chars.nth(sz - 1);
+    }
+}
+
+#[self_referencing]
+#[derive(Debug)]
+pub struct PropertyFilter {
+    source: String,
+    #[borrows(source)]
+    #[covariant]
+    expr: FilterExpr<'this>,
+}
+
+impl PropertyFilter {
+    fn from_string(s: String) -> Result<Self> {
+        PropertyFilterTryBuilder {
+            source: s,
+            expr_builder: |source: &String| {
+                FilterExpr::try_from(source.as_str())
+            },
+        }.try_build()
+    }
+
+    pub fn to_query<'a>(&'a self, clauses: &mut Vec<Cow<'a, str>>, params: &mut Vec<&'a dyn ToSql>) {
+        self.with_expr(|expr| {
+            let (sql, filter_params) = expr.to_sql();
+            clauses.push(sql.into());
+            params.extend(filter_params);
+        });
+    }
+}
+
+impl FromStr for PropertyFilter {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        PropertyFilter::from_string(s.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for PropertyFilter {
+    fn deserialize<D>(deserializer: D) -> Result<PropertyFilter, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        PropertyFilter::from_string(s).map_err(|err| {
+            serde::de::Error::custom(format!("invalid filter expression: {}", err))
+        })
+    }
+}
+
+impl Clone for PropertyFilter {
+    fn clone(&self) -> Self {
+        let source = self.borrow_source().clone();
+        PropertyFilter::from_string(source).expect("cloning valid PropertyFilter should succeed")
     }
 }
 

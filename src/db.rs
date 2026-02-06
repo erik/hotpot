@@ -2,7 +2,6 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
-use std::str::FromStr;
 
 use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -11,8 +10,11 @@ use geo_types::Coord;
 use num_traits::AsPrimitive;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{ToSql, params};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime};
+
+pub use crate::filter::PropertyFilter;
+
 
 const SCHEMA: &str = "\
 CREATE TABLE IF NOT EXISTS config (
@@ -271,117 +273,6 @@ pub fn decode_line(bytes: &[u8]) -> Result<Vec<Coord<u32>>> {
 pub struct PropertyStats {
     pub count: usize,
     pub types: Vec<String>,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct PropertyFilter(HashMap<String, PropExpr>);
-
-impl PropertyFilter {
-    fn to_query<'a>(&'a self, clauses: &mut Vec<Cow<'a, str>>, params: &mut Vec<&'a dyn ToSql>) {
-        for (key, expr) in self.0.iter() {
-            expr.as_sql(key, clauses, params);
-        }
-    }
-}
-
-impl PropExpr {
-    fn as_sql<'a>(
-        &'a self,
-        key: &'a dyn ToSql,
-        clauses: &mut Vec<Cow<'_, str>>,
-        params: &mut Vec<&'a dyn ToSql>,
-    ) {
-        macro_rules! filter_list {
-            ($e:ident, $cmp:expr) => {
-                if let Some(ref values) = self.$e {
-                    params.push(key);
-                    params.extend(values.iter().map(|v| v as &dyn ToSql));
-
-                    let placeholders = vec!["?"; values.len()].join(",");
-                    clauses.push(format!("({} ({}))", $cmp, placeholders).into());
-                }
-            };
-        }
-
-        macro_rules! filter {
-            ($field:ident, $expected:expr, $sql:expr) => {
-                if let Some($expected) = self.$field {
-                    params.push(key);
-                    clauses.push($sql.into());
-                }
-            };
-            ($field:ident, $sql:expr) => {
-                if let Some(ref val) = self.$field {
-                    params.push(key);
-                    params.push(val);
-                    clauses.push($sql.into());
-                }
-            };
-        }
-
-        filter_list!(any_of, "properties ->> ? IN");
-        filter_list!(none_of, "properties ->> ? NOT IN");
-
-        filter!(eq, "(properties ->> ? = ?)");
-        filter!(neq, "(properties ->> ? != ?)");
-        filter!(gt, "(properties ->> ? > ?)");
-        filter!(gte, "(properties ->> ? >= ?)");
-        filter!(lt, "(properties ->> ? < ?)");
-        filter!(lte, "(properties ->> ? <= ?)");
-        filter!(matches, "(instr(properties ->> ?, ?) > 0)");
-
-        filter!(exists, true, "(properties ->> ? IS NOT NULL)");
-        filter!(exists, false, "(properties ->> ? IS NULL)");
-    }
-}
-
-#[derive(Clone, Deserialize, Debug)]
-#[serde(rename_all = "snake_case")]
-pub struct PropExpr {
-    any_of: Option<Vec<String>>,
-    none_of: Option<Vec<String>>,
-    matches: Option<String>,
-    exists: Option<bool>,
-
-    // TODO: support non-string type here as well
-    #[serde(rename = "=")]
-    eq: Option<String>,
-
-    #[serde(rename = "!=")]
-    neq: Option<String>,
-
-    #[serde(rename = ">")]
-    gt: Option<f64>,
-
-    #[serde(rename = ">=")]
-    gte: Option<f64>,
-
-    #[serde(rename = "<")]
-    lt: Option<f64>,
-
-    #[serde(rename = "<=")]
-    lte: Option<f64>,
-}
-
-impl FromStr for PropertyFilter {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self> {
-        let obj = serde_json::from_str(s)?;
-        Ok(PropertyFilter(obj))
-    }
-}
-
-impl<'de> Deserialize<'de> for PropertyFilter {
-    fn deserialize<D>(deserializer: D) -> Result<PropertyFilter, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        PropertyFilter::from_str(&s).map_err(|err| {
-            serde::de::Error::custom(format!("invalid filter expression: {:?}", err))
-        })
-    }
 }
 
 #[derive(Default)]

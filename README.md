@@ -17,6 +17,7 @@ data, [Fly.io]'s smallest instance can render tiles in a few ms.
 ## Installation
 
 ### Build from source
+
 ```bash
 # Build with Cargo (requires Rust toolchain)
 cargo build --release
@@ -28,6 +29,7 @@ hotpot serve
 ```
 
 ### Docker
+
 ```bash
 # Either pull the pre-built container from GitHub Container Registry
 docker pull ghcr.io/erik/hotpot
@@ -134,24 +136,25 @@ will vary based on your data.
 For example, we may want to generate different tiles for cycling vs hiking,
 exclude commutes, which gear we used, a minimum elevation gain, etc.
 
-```json5
-{
-  // Basic numeric comparisons: <, <=, >, >=
-  elevation_gain: { ">": 1000 },
+```python
+# Comparisons: =, !=, <, <=, >, >=
+elev_gain > 1000
+"Total Distance" >= 100
 
-  // Match/exclude multiple values
-  bike: { any_of: ["gravel", "mtb"] },
-  activity_type: { none_of: ["Run"] },
+# Match multiple values
+activity_type in [ride, run]
 
-  // Substring match (e.g. match "morning commute" + "commute #9")
-  title: { matches: "commute" },
+# Pattern matching (% is wildcard, as with SQL's `LIKE`)
+name like "Morning%"
 
-  // Property key exists
-  max_hr: { exists: true },
+# Property exists
+has? heart_rate
 
-  // Multiple expressions can be applied (evaluated as an AND)
-  distance: { ">": 100, "<": 200 },
-}
+# Combine with &&, ||, !, and parentheses
+elev_gain > 1000 && activity_type = ride
+distance > 100 || elev_gain > 2000
+!(activity_type in [walk, hike])
+(elev_gain > 1000 || distance > 50) && activity_type in [ride, run]
 ```
 
 ### Activity Visibility & Privacy

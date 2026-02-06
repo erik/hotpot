@@ -503,41 +503,47 @@ function createFilterHelpModal() {
     "Property Filter Help",
     unsafeHTML`<div class="filter-help">
       <p>
-        The filter is a JSON object. Keys are property names; values are objects
-        mapping operators to values. All conditions are ANDed together.
+        Filter activities using a simple expression language with comparison,
+        logical operators, and grouping.
       </p>
 
-      <div class="__heading">Operators</div>
+      <div class="__heading">Comparison Operators</div>
       <ul>
-        <li><code>=</code> — exact match (string, number, or boolean)</li>
-        <li><code>!=</code> — not equal</li>
-        <li><code>></code>, <code>>=</code>, <code><</code>, <code><=</code> — numeric comparison</li>
-        <li><code>any_of</code> — value is one of the listed strings</li>
-        <li><code>none_of</code> — value is none of the listed strings</li>
-        <li><code>matches</code> — substring match</li>
-        <li><code>exists</code> — true/false, property present or absent</li>
+        <li><code>=</code>, <code>!=</code> — equality</li>
+        <li><code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code> — numeric comparison</li>
+        <li><code>in [val1, val2, ...]</code> — value in list</li>
+        <li><code>like "pattern%"</code> — pattern match (% is wildcard)</li>
+        <li><code>has? property</code> — property exists</li>
+      </ul>
+
+      <div class="__heading">Logical Operators</div>
+      <ul>
+        <li><code>&&</code> — AND</li>
+        <li><code>||</code> — OR</li>
+        <li><code>!</code> — NOT (requires parentheses: <code>!(expr)</code>)</li>
+        <li><code>( )</code> — grouping</li>
       </ul>
 
       <div class="__heading">Examples</div>
       <div class="__example">
-        <code>{"type": {"=": "running"}}</code>
+        <code>type = running</code>
         <div class="__desc">type is "running"</div>
       </div>
       <div class="__example">
-        <code>{"elevation": {">": 500, "<": 2000}}</code>
+        <code>elevation > 500 && elevation < 2000</code>
         <div class="__desc">elevation between 500 and 2000</div>
       </div>
       <div class="__example">
-        <code>{"distance": {">": 100}, "duration": {"<": 240}}</code>
-        <div class="__desc">distance > 100 and duration < 240</div>
-      </div>
-      <div class="__example">
-        <code>{"type": {"any_of": ["running", "cycling"]}}</code>
+        <code>type in [running, cycling]</code>
         <div class="__desc">running or cycling</div>
       </div>
       <div class="__example">
-        <code>{"indoor": {"exists": false}}</code>
+        <code>!(has? indoor)</code>
         <div class="__desc">indoor property is absent</div>
+      </div>
+      <div class="__example">
+        <code>(elev_gain > 1000 || distance > 50) && type = ride</code>
+        <div class="__desc">complex with grouping</div>
       </div>
     </div>`,
   );

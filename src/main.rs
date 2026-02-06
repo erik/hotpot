@@ -18,6 +18,7 @@ use crate::tile::{LngLat, Tile};
 mod activity;
 mod date;
 mod db;
+mod filter;
 mod raster;
 mod strava;
 mod tile;
@@ -62,7 +63,11 @@ struct ActivitiesCmdArgs {
 
     /// Filter activities by arbitrary metadata properties
     ///
-    /// {"elev_gain": { ">": 1000 }}
+    /// Examples:
+    ///   - elev_gain > 1000
+    ///   - activity_type in [ride, run]
+    ///   - elev_gain > 1000 && activity_type = ride
+    ///   - (elev_gain > 1000 || distance > 50) && activity_type in [ride, run]
     #[arg(short = 'f', long = "filter")]
     filter: Option<PropertyFilter>,
 
@@ -109,7 +114,11 @@ struct TileCmdArgs {
 
     /// Filter activities by arbitrary metadata properties
     ///
-    /// {"elev_gain": { ">": 1000 }}
+    /// Examples:
+    ///   - elev_gain > 1000
+    ///   - activity_type in [ride, run]
+    ///   - elev_gain > 1000 && activity_type = ride
+    ///   - (elev_gain > 1000 || distance > 50) && activity_type in [ride, run]
     #[arg(short, long)]
     filter: Option<PropertyFilter>,
 
@@ -157,7 +166,11 @@ struct RenderCmdArgs {
 
     /// Filter activities by arbitrary metadata properties
     ///
-    /// {"elev_gain": { ">": 1000 }}
+    /// Examples:
+    ///   - elev_gain > 1000
+    ///   - activity_type in [ride, run]
+    ///   - elev_gain > 1000 && activity_type = ride
+    ///   - (elev_gain > 1000 || distance > 50) && activity_type in [ride, run]
     #[arg(short = 'f', long = "filter")]
     filter: Option<PropertyFilter>,
 
