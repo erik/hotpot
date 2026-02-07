@@ -192,46 +192,18 @@ impl TrackStats {
     /// Merge derived stats into a properties map, only setting keys that
     /// are not already present (file-provided values take precedence).
     pub fn merge_into(&self, properties: &mut std::collections::HashMap<String, serde_json::Value>) {
-        let round = |v: f64| serde_json::Value::from(v.round() as i64);
-        let round1 = |v: f64| serde_json::Value::from((v * 10.0).round() / 10.0);
+        let f = serde_json::Value::from;
 
         let entries: &[(&str, Option<serde_json::Value>)] = &[
-            (
-                "total_distance",
-                self.total_distance.map(round),
-            ),
-            (
-                "elapsed_time",
-                self.elapsed_time.map(serde_json::Value::from),
-            ),
-            (
-                "moving_time",
-                self.moving_time.map(serde_json::Value::from),
-            ),
-            (
-                "elevation_gain",
-                self.elevation_gain_loss.map(|(g, _)| round(g)),
-            ),
-            (
-                "elevation_loss",
-                self.elevation_gain_loss.map(|(_, l)| round(l)),
-            ),
-            (
-                "min_elevation",
-                self.elevation_range.map(|(min, _)| round(min)),
-            ),
-            (
-                "max_elevation",
-                self.elevation_range.map(|(_, max)| round(max)),
-            ),
-            (
-                "average_speed",
-                self.speed.map(|(avg, _)| round1(avg)),
-            ),
-            (
-                "max_speed",
-                self.speed.map(|(_, max)| round1(max)),
-            ),
+            ("total_distance", self.total_distance.map(f)),
+            ("elapsed_time", self.elapsed_time.map(serde_json::Value::from)),
+            ("moving_time", self.moving_time.map(serde_json::Value::from)),
+            ("elevation_gain", self.elevation_gain_loss.map(|(g, _)| f(g))),
+            ("elevation_loss", self.elevation_gain_loss.map(|(_, l)| f(l))),
+            ("min_elevation", self.elevation_range.map(|(min, _)| f(min))),
+            ("max_elevation", self.elevation_range.map(|(_, max)| f(max))),
+            ("average_speed", self.speed.map(|(avg, _)| f(avg))),
+            ("max_speed", self.speed.map(|(_, max)| f(max))),
         ];
 
         for (key, value) in entries {
@@ -417,13 +389,13 @@ mod tests {
 
         // Existing value should be preserved
         assert_eq!(props["total_distance"], serde_json::json!(9999));
-        // New values should be added
+        // New values should be added (raw f64, rounding happens at serialization)
         assert_eq!(props["elapsed_time"], serde_json::json!(3600));
         assert_eq!(props["moving_time"], serde_json::json!(3000));
-        assert_eq!(props["elevation_gain"], serde_json::json!(100));
-        assert_eq!(props["elevation_loss"], serde_json::json!(80));
-        assert_eq!(props["min_elevation"], serde_json::json!(400));
-        assert_eq!(props["max_elevation"], serde_json::json!(500));
+        assert_eq!(props["elevation_gain"], serde_json::json!(100.0));
+        assert_eq!(props["elevation_loss"], serde_json::json!(80.0));
+        assert_eq!(props["min_elevation"], serde_json::json!(400.0));
+        assert_eq!(props["max_elevation"], serde_json::json!(500.0));
         assert_eq!(props["average_speed"], serde_json::json!(25.0));
         assert_eq!(props["max_speed"], serde_json::json!(45.0));
     }
