@@ -39,7 +39,6 @@ const livewire = (props) => {
         return (...args) => {
           let fn = args[0];
 
-          // Only watch for changes in specific properties
           if (args.length === 2) {
             const [watchedKeys, wrappedFn] = args;
 
@@ -400,6 +399,65 @@ class ExportButton {
         canvasStyle.cursor = originalCursor;
       });
     });
+  }
+}
+
+class ZoomToBoundsButton {
+  constructor({ zoomOnInit }) {
+    this.bounds = null;
+    this.map = null;
+
+    this.btn = createElement.button(
+      {
+        title: "Zoom to fit",
+        click: () => this.fitBounds(),
+        disabled: true,
+      },
+      unsafeHTML`
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M4 8V6C4 4.89543 4.89543 4 6 4H8M4 16V18C4 19.1046 4.89543 20 6 20H8M16 4H18C19.1046 4 20 4.89543 20 6V8M16 20H18C19.1046 20 20 19.1046 20 18V16" stroke="black" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="12" cy="12" r="3" stroke="black" stroke-width="2"/>
+        </svg>`,
+    );
+
+    this.zoomOnInit = zoomOnInit || false;
+  }
+
+  setBounds(bounds) {
+    console.log("bounds", bounds);
+    this.bounds = bounds;
+    this.btn.disabled = bounds == null;
+
+    if (this.zoomOnInit) {
+      this.zoomOnInit = false;
+      this.fitBounds();
+    }
+  }
+
+  fitBounds() {
+    console.log("fitBounds", this.bounds);
+    if (!this.bounds) return;
+
+    this.map?.fitBounds(
+      [
+        [this.bounds.sw.lng, this.bounds.sw.lat],
+        [this.bounds.ne.lng, this.bounds.ne.lat],
+      ],
+      { padding: 50 },
+    );
+  }
+
+  onAdd(map) {
+    const { div } = createElement;
+    this.map = map;
+
+    return div(
+      {
+        class: "maplibregl-ctrl maplibregl-ctrl-group",
+        contextmenu: (ev) => ev.preventDefault(),
+      },
+      this.btn,
+    );
   }
 }
 

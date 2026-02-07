@@ -5,6 +5,7 @@ use std::{f64::consts::PI, ops::RangeInclusive};
 use anyhow::{Result, anyhow};
 use derive_more::{From, Into};
 use geo_types::{Coord, Point};
+use serde::Serialize;
 
 use crate::db::ActivityMask;
 
@@ -111,6 +112,40 @@ pub struct WebMercator(pub Point<f64>);
 pub struct WebMercatorViewport {
     sw: WebMercator,
     ne: WebMercator,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct LngLatPoint {
+    pub lat: f64,
+    pub lng: f64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct LngLatViewport {
+    pub sw: LngLatPoint,
+    pub ne: LngLatPoint,
+}
+
+impl LngLatViewport {
+    pub fn from_tile_range(xmin: u32, xmax: u32, ymin: u32, ymax: u32, zoom: u8) -> Self {
+        // tile Y is inverted from latitude
+        let sw_bounds = Tile::new(xmin, ymax, zoom).xy_bounds();
+        let ne_bounds = Tile::new(xmax, ymin, zoom).xy_bounds();
+
+        let sw = WebMercator((sw_bounds.left, sw_bounds.bot).into()).to_lnglat();
+        let ne = WebMercator((ne_bounds.right, ne_bounds.top).into()).to_lnglat();
+
+        Self {
+            sw: LngLatPoint {
+                lat: sw.0.y(),
+                lng: sw.0.x(),
+            },
+            ne: LngLatPoint {
+                lat: ne.0.y(),
+                lng: ne.0.x(),
+            },
+        }
+    }
 }
 
 impl FromStr for WebMercatorViewport {
@@ -301,6 +336,13 @@ impl WebMercator {
         let py = ((y - bbox.bot) / height * tile_size as f64).round();
 
         (px, tile_size as f64 - py).into()
+    }
+
+    pub fn to_lnglat(&self) -> LngLat {
+        let lng = self.0.x() / EARTH_RADIUS_METERS * 180.0 / PI;
+        let lat = (2.0 * (self.0.y() / EARTH_RADIUS_METERS).exp().atan() - PI / 2.0) * 180.0 / PI;
+
+        LngLat::new(lng, lat)
     }
 }
 

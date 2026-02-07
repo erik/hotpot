@@ -574,7 +574,12 @@ impl PropertySource {
     }
 }
 
-pub fn import_path(path: &Path, db: &Database, config: &Config, prop_source: &PropertySource) -> Result<()> {
+pub fn import_path(
+    path: &Path,
+    db: &Database,
+    config: &Config,
+    prop_source: &PropertySource,
+) -> Result<()> {
     let conn = db.connection()?;
 
     // Skip any files that are already in the database.

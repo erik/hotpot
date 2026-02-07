@@ -287,15 +287,15 @@ impl<'de> Deserialize<'de> for TileYParam {
 }
 
 async fn get_activity_count(
-    State(AppState { db, .. }): State<AppState>,
+    State(AppState { db, db_config, .. }): State<AppState>,
     Query(params): Query<RenderQueryParams>,
 ) -> impl IntoResponse {
     let filter = ActivityFilter::new(params.before, params.after, params.filter);
-    let num_activities = db
-        .activity_count(&filter)
+    let (count, bounds) = db
+        .activity_count(&filter, &db_config)
         .expect("failed to count activities");
 
-    (StatusCode::OK, num_activities.to_string()).into_response()
+    axum::Json(serde_json::json!({ "count": count, "bounds": bounds })).into_response()
 }
 
 async fn render_viewport(
@@ -448,8 +448,8 @@ fn cached_response(status: StatusCode, etag: &str) -> axum::http::response::Buil
 // added. You could trivially come up with a counter-example for this, but why
 // would you want to?
 fn generate_etag(db: &Database) -> Result<String, StatusCode> {
-    let activity_count = db
-        .activity_count(&ActivityFilter::default())
+    let (activity_count, _bounds) = db
+        .activity_count(&ActivityFilter::default(), &DbConfig::default())
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let mut hasher = DefaultHasher::new();

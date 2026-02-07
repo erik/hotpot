@@ -140,6 +140,7 @@
             ],
         };
 
+        const haveMapView = window.location.hash != "";
         const map = new maplibregl.Map({
             container: "map",
             style: "https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json",
@@ -155,6 +156,8 @@
             activityCount: document.getElementById("activity-count"),
             tileUrl: document.getElementById("tile-url"),
         };
+
+        const urlParams = new URLSearchParams(window.location.search);
 
         const options = livewire({
             color: null,
@@ -200,25 +203,47 @@
             })
             .watch(["$queryString"], async ({ $queryString }) => {
                 const { div } = createElement;
-                const { count, warnings } = await fetch(
-                    `/api/activity-count?${$queryString}`,
-                )
-                    .then(async (res) => [res.status, await res.text()])
-                    .catch((err) => [500, err.toString()])
-                    .then(([status, text]) =>
-                        status === 200
-                            ? { count: text, warnings: null }
-                            : { count: null, warnings: text },
-                    );
 
-                if (count != null) nodes.activityCount.innerText = count;
+                async function getActivityCount(qs) {
+                    const res = await fetch(`/api/activity-count?${$queryString}`);
+                    if (!res.ok) {
+                        const err = await res.text();
+                        throw new Error(err);
+                    }
+                    return res.json();
+                }
 
-                warnings != null
-                    ? nodes.warnings.replaceChildren(div({}, warnings))
-                    : nodes.warnings.replaceChildren();
+                try {
+                    const { count, bounds } = await getActivityCount($queryString);
+
+                    if (count != null) nodes.activityCount.innerText = count;
+                    if (bounds != null) zoomControl.setBounds(bounds);
+
+                    nodes.warnings.replaceChildren();
+                } catch (err) {
+                    nodes.warnings.replaceChildren(div({}, err.toString()))
+                }
             })
             .watch(["$tileUrl"], ({ $tileUrl }) => {
                 nodes.tileUrl.innerText = `${$tileUrl}`;
+            })
+            // Sync options to URL
+            .watch((options) => {
+                // TODO: ignore size, map?
+                for (const [key, val] of Object.entries(options)) {
+                    if (key.startsWith('$')) {
+                        // Skip computed keys
+                        continue;
+                    } else if (!!val) {
+                        urlParams.set(key, val);
+                    } else {
+                        urlParams.delete(key);
+                    }
+                }
+
+                const qs = urlParams.toString();
+                history.replaceState(null, "",
+                    window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash);
             });
 
         nodes.tileUrl.addEventListener("click", async () => {
@@ -234,9 +259,17 @@
             setTimeout(() => (nodes.tileUrl.innerText = original), 1500);
         });
 
-        // Wire up form to reactive data stuff
         document.querySelectorAll("#map-overlay [key]").forEach((el) => {
             const key = el.getAttribute("key");
+
+            // Load initial values from URL
+            const value = urlParams.get(key);
+            if (value != null) {
+                el.value = value;
+                options[key] = value;
+            }
+
+            // Wire up form to reactive data stuff
             const handler = (ev) => (options[key] = el.value);
             el.addEventListener(
                 "input",
@@ -265,6 +298,13 @@
 
         map.on("load", () => updateMapTileSource());
         map.addControl(new maplibregl.NavigationControl());
+
+        const zoomControl = new ZoomToBoundsButton({
+            // Don't zoom to activity bounds if we already have a location in
+            // URL
+            zoomOnInit: !haveMapView
+        });
+        map.addControl(zoomControl, "top-right");
 
         globalThis.UPLOADS_ENABLED &&
             map.addControl(new UploadButton(), "top-right");

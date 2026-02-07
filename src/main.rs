@@ -357,10 +357,11 @@ fn command_activity_info(global: GlobalOpts, args: ActivitiesCmdArgs) -> Result<
         print_count,
     } = args;
     let db = global.database_ro()?;
+    let config = db.load_config()?;
     let filter = ActivityFilter::new(before, after, filter);
 
     if print_count {
-        let num_activities = db.activity_count(&filter)?;
+        let (num_activities, _bounds) = db.activity_count(&filter, &config)?;
         println!("{}", num_activities);
     } else {
         for info in db.activity_info(&filter)? {

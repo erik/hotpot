@@ -411,7 +411,12 @@ struct WebhookBody {
 
 // TODO: look at subscription_id or something to verify request.
 async fn receive_webhook(
-    State(AppState { db, db_config, strava, .. }): State<AppState>,
+    State(AppState {
+        db,
+        db_config,
+        strava,
+        ..
+    }): State<AppState>,
     Json(body): Json<WebhookBody>,
 ) -> impl IntoResponse {
     let strava = strava.expect("strava auth creds missing");

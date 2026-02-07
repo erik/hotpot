@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime};
 
 use crate::filter::PropertyFilter;
+use crate::tile::LngLatViewport;
 
 const SCHEMA: &str = "\
 CREATE TABLE IF NOT EXISTS config (
@@ -327,18 +328,49 @@ pub struct ActivityInfo {
 }
 
 impl Database {
-    pub fn activity_count(&self, filter: &ActivityFilter) -> Result<usize, anyhow::Error> {
-        let mut params = vec![];
+    pub fn activity_count(
+        &self,
+        filter: &ActivityFilter,
+        config: &Config,
+    ) -> Result<(usize, Option<LngLatViewport>), anyhow::Error> {
+        let max_zoom = *config
+            .zoom_levels
+            .last()
+            .expect("zoom_levels shouldn't be empty");
 
-        let count = self.connection()?.query_row(
+        let mut params: Vec<&dyn ToSql> = vec![&max_zoom];
+        let filter_sql = filter.to_query(&mut params);
+
+        let conn = self.connection()?;
+        conn.query_row(
             &format!(
-                "SELECT count(*) FROM activities WHERE {};",
-                filter.to_query(&mut params)
+                "SELECT
+                    COUNT(DISTINCT a.id),
+                    MIN(t.x),
+                    MAX(t.x),
+                    MIN(t.y),
+                    MAX(t.y)
+                FROM activities a
+                LEFT JOIN activity_tiles t ON a.id = t.activity_id AND t.z = ?
+                WHERE {};",
+                filter_sql
             ),
             &params[..],
-            |row| row.get(0),
-        )?;
-        Ok(count)
+            |row| {
+                let count = row.get(0)?;
+                let bounds = (|| {
+                    Some(LngLatViewport::from_tile_range(
+                        row.get(1).ok()?,
+                        row.get(2).ok()?,
+                        row.get(3).ok()?,
+                        row.get(4).ok()?,
+                        max_zoom,
+                    ))
+                })();
+                Ok((count, bounds))
+            },
+        )
+        .map_err(Into::into)
     }
 
     pub fn activity_info(
