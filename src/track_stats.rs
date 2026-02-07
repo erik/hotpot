@@ -12,10 +12,10 @@ pub struct TrackStats {
     pub total_distance: Option<f64>,
     pub elapsed_time: Option<i64>,
     pub moving_time: Option<i64>,
-    pub elevation_gain: Option<f64>,
-    pub elevation_loss: Option<f64>,
-    pub max_elevation: Option<f64>,
-    pub min_elevation: Option<f64>,
+    /// (gain, loss) in meters, with threshold-based smoothing
+    pub elevation_gain_loss: Option<(f64, f64)>,
+    /// (min, max) in meters
+    pub elevation_range: Option<(f64, f64)>,
 }
 
 /// Minimum elevation change (in meters) to count as real gain/loss.
@@ -32,17 +32,12 @@ const MAX_SEGMENT_DISTANCE: f64 = 5000.0;
 const MAX_TIME_GAP: i64 = 300;
 
 pub fn compute_stats(points: &[TrackPoint]) -> TrackStats {
-    let (elevation_gain, elevation_loss) = compute_elevation_gain_loss(points);
-    let (min_elevation, max_elevation) = compute_elevation_range(points);
-
     TrackStats {
         total_distance: compute_distance(points),
         elapsed_time: compute_elapsed_time(points),
         moving_time: compute_moving_time(points),
-        elevation_gain,
-        elevation_loss,
-        max_elevation,
-        min_elevation,
+        elevation_gain_loss: compute_elevation_gain_loss(points),
+        elevation_range: compute_elevation_range(points),
     }
 }
 
@@ -110,10 +105,10 @@ fn compute_moving_time(points: &[TrackPoint]) -> Option<i64> {
 }
 
 /// Accumulate elevation gain and loss in a single pass using threshold-based smoothing.
-fn compute_elevation_gain_loss(points: &[TrackPoint]) -> (Option<f64>, Option<f64>) {
+fn compute_elevation_gain_loss(points: &[TrackPoint]) -> Option<(f64, f64)> {
     let elevations: Vec<f64> = points.iter().filter_map(|p| p.elevation).collect();
     if elevations.len() < 2 {
-        return (None, None);
+        return None;
     }
 
     let mut gain = 0.0;
@@ -131,33 +126,31 @@ fn compute_elevation_gain_loss(points: &[TrackPoint]) -> (Option<f64>, Option<f6
         }
     }
 
-    (Some(gain), Some(loss))
+    Some((gain, loss))
 }
 
 /// Find min and max elevation in a single pass.
-fn compute_elevation_range(points: &[TrackPoint]) -> (Option<f64>, Option<f64>) {
+fn compute_elevation_range(points: &[TrackPoint]) -> Option<(f64, f64)> {
     let mut iter = points.iter().filter_map(|p| p.elevation);
-    let first = match iter.next() {
-        Some(v) => v,
-        None => return (None, None),
-    };
+    let first = iter.next()?;
 
     let (min, max) = iter.fold((first, first), |(min, max), v| {
         (min.min(v), max.max(v))
     });
 
-    (Some(min), Some(max))
+    Some((min, max))
 }
 
 impl TrackStats {
     /// Merge derived stats into a properties map, only setting keys that
     /// are not already present (file-provided values take precedence).
     pub fn merge_into(&self, properties: &mut std::collections::HashMap<String, serde_json::Value>) {
+        let round = |v: f64| serde_json::Value::from(v.round() as i64);
+
         let entries: &[(&str, Option<serde_json::Value>)] = &[
             (
                 "total_distance",
-                self.total_distance
-                    .map(|v| serde_json::Value::from(v.round() as i64)),
+                self.total_distance.map(round),
             ),
             (
                 "elapsed_time",
@@ -169,23 +162,19 @@ impl TrackStats {
             ),
             (
                 "elevation_gain",
-                self.elevation_gain
-                    .map(|v| serde_json::Value::from(v.round() as i64)),
+                self.elevation_gain_loss.map(|(g, _)| round(g)),
             ),
             (
                 "elevation_loss",
-                self.elevation_loss
-                    .map(|v| serde_json::Value::from(v.round() as i64)),
-            ),
-            (
-                "max_elevation",
-                self.max_elevation
-                    .map(|v| serde_json::Value::from(v.round() as i64)),
+                self.elevation_gain_loss.map(|(_, l)| round(l)),
             ),
             (
                 "min_elevation",
-                self.min_elevation
-                    .map(|v| serde_json::Value::from(v.round() as i64)),
+                self.elevation_range.map(|(min, _)| round(min)),
+            ),
+            (
+                "max_elevation",
+                self.elevation_range.map(|(_, max)| round(max)),
             ),
         ];
 
@@ -207,7 +196,8 @@ mod tests {
         assert!(stats.total_distance.is_none());
         assert!(stats.elapsed_time.is_none());
         assert!(stats.moving_time.is_none());
-        assert!(stats.elevation_gain.is_none());
+        assert!(stats.elevation_gain_loss.is_none());
+        assert!(stats.elevation_range.is_none());
     }
 
     #[test]
@@ -222,7 +212,9 @@ mod tests {
         assert!(stats.total_distance.is_none());
         assert!(stats.elapsed_time.is_none());
         assert!(stats.moving_time.is_none());
-        assert!(stats.elevation_gain.is_none());
+        assert!(stats.elevation_gain_loss.is_none());
+        // Single point still has a valid elevation range (min == max)
+        assert_eq!(stats.elevation_range, Some((50.0, 50.0)));
     }
 
     #[test]
@@ -294,43 +286,34 @@ mod tests {
     }
 
     #[test]
-    fn test_elevation_gain_with_threshold() {
-        // 50 -> 53 (+3, above threshold) -> 52 (-1, below threshold) -> 55 (+3 from 53)
+    fn test_elevation_gain_loss_with_threshold() {
+        // 50 -> 53 (+3) -> 52 (-1, below threshold) -> 55 (+2) -> 50 (-5)
         let points = vec![
             TrackPoint { lat: 0.0, lng: 0.0, elevation: Some(50.0), timestamp: None },
             TrackPoint { lat: 0.0, lng: 0.0, elevation: Some(53.0), timestamp: None },
             TrackPoint { lat: 0.0, lng: 0.0, elevation: Some(52.0), timestamp: None },
             TrackPoint { lat: 0.0, lng: 0.0, elevation: Some(55.0), timestamp: None },
-        ];
-        let stats = compute_stats(&points);
-        // 50->53 = +3, then reference stays at 53 (52 is <2m drop), 53->55 = +2
-        assert_eq!(stats.elevation_gain.unwrap(), 5.0);
-    }
-
-    #[test]
-    fn test_elevation_loss_with_threshold() {
-        // 55 -> 52 (-3, above threshold) -> 53 (+1, below threshold) -> 50 (-2 from 52)
-        let points = vec![
-            TrackPoint { lat: 0.0, lng: 0.0, elevation: Some(55.0), timestamp: None },
-            TrackPoint { lat: 0.0, lng: 0.0, elevation: Some(52.0), timestamp: None },
-            TrackPoint { lat: 0.0, lng: 0.0, elevation: Some(53.0), timestamp: None },
             TrackPoint { lat: 0.0, lng: 0.0, elevation: Some(50.0), timestamp: None },
         ];
         let stats = compute_stats(&points);
-        // 55->52 = -3, then reference stays at 52 (53 is <2m rise), 52->50 = -2
-        assert_eq!(stats.elevation_loss.unwrap(), 5.0);
+        // gain: 50->53 (+3), 53->55 (+2) = 5
+        // loss: 55->50 (-5) = 5
+        let (gain, loss) = stats.elevation_gain_loss.unwrap();
+        assert_eq!(gain, 5.0);
+        assert_eq!(loss, 5.0);
     }
 
     #[test]
-    fn test_min_max_elevation() {
+    fn test_elevation_range() {
         let points = vec![
             TrackPoint { lat: 0.0, lng: 0.0, elevation: Some(100.0), timestamp: None },
             TrackPoint { lat: 0.0, lng: 0.0, elevation: Some(200.0), timestamp: None },
             TrackPoint { lat: 0.0, lng: 0.0, elevation: Some(50.0), timestamp: None },
         ];
         let stats = compute_stats(&points);
-        assert_eq!(stats.max_elevation.unwrap(), 200.0);
-        assert_eq!(stats.min_elevation.unwrap(), 50.0);
+        let (min, max) = stats.elevation_range.unwrap();
+        assert_eq!(min, 50.0);
+        assert_eq!(max, 200.0);
     }
 
     #[test]
@@ -339,10 +322,8 @@ mod tests {
             total_distance: Some(5000.0),
             elapsed_time: Some(3600),
             moving_time: Some(3000),
-            elevation_gain: Some(100.0),
-            elevation_loss: Some(80.0),
-            max_elevation: Some(500.0),
-            min_elevation: Some(400.0),
+            elevation_gain_loss: Some((100.0, 80.0)),
+            elevation_range: Some((400.0, 500.0)),
         };
         let mut props = std::collections::HashMap::new();
         props.insert("total_distance".to_string(), serde_json::json!(9999));
@@ -355,6 +336,9 @@ mod tests {
         assert_eq!(props["elapsed_time"], serde_json::json!(3600));
         assert_eq!(props["moving_time"], serde_json::json!(3000));
         assert_eq!(props["elevation_gain"], serde_json::json!(100));
+        assert_eq!(props["elevation_loss"], serde_json::json!(80));
+        assert_eq!(props["min_elevation"], serde_json::json!(400));
+        assert_eq!(props["max_elevation"], serde_json::json!(500));
     }
 
     #[test]
@@ -367,9 +351,7 @@ mod tests {
         assert!(stats.total_distance.is_some());
         assert!(stats.elapsed_time.is_some());
         assert!(stats.moving_time.is_some());
-        assert!(stats.elevation_gain.is_none());
-        assert!(stats.elevation_loss.is_none());
-        assert!(stats.max_elevation.is_none());
-        assert!(stats.min_elevation.is_none());
+        assert!(stats.elevation_gain_loss.is_none());
+        assert!(stats.elevation_range.is_none());
     }
 }
