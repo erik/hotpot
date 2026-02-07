@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect};
 use axum::routing::{get, post};
 use axum::{Json, Router, TypedHeader, headers};
-use geo_types::MultiLineString;
+use geo_types::{MultiLineString, Point};
 use reqwest::Response;
 use rusqlite::params;
 use serde::de::DeserializeOwned;
@@ -17,6 +17,7 @@ use time::OffsetDateTime;
 use crate::activity;
 use crate::activity::RawActivity;
 use crate::db::Database;
+use crate::track_stats;
 use crate::web::AppState;
 
 #[derive(Deserialize)]
@@ -432,7 +433,17 @@ async fn receive_webhook(
     };
 
     let polyline = polyline::decode_polyline(&activity.map.polyline, 5).expect("valid polyline");
-    let properties = activity.properties();
+
+    // Compute derived stats from polyline, then let Strava metadata take priority.
+    let track_points: Vec<track_stats::TrackPoint> = polyline.0.iter().map(|c| {
+        track_stats::TrackPoint { point: Point::new(c.x, c.y), elevation: None, timestamp: None }
+    }).collect();
+    let stats = track_stats::compute_stats(&track_points);
+    let mut properties = HashMap::new();
+    stats.merge_into(&mut properties);
+    for (k, v) in activity.properties() {
+        properties.insert(k, v);
+    }
 
     // Filter out virtual activities. In my own data I see both "Virtual Ride"
     // and "VirtualRide", so be defensive about the matching.
