@@ -314,30 +314,13 @@ impl ActivityFilter {
     }
 }
 
-/// Serialize a JSON properties map, rounding float values to 1 decimal place.
-fn serialize_properties<S>(
-    properties: &serde_json::Map<String, serde_json::Value>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    use serde::ser::SerializeMap;
+/// JSON formatter that rounds f64 values to 1 decimal place.
+pub struct RoundedFloats;
 
-    let mut map = serializer.serialize_map(Some(properties.len()))?;
-    for (k, v) in properties {
-        if let serde_json::Value::Number(n) = v {
-            if !n.is_i64() && !n.is_u64() {
-                if let Some(f) = n.as_f64() {
-                    let rounded = (f * 10.0).round() / 10.0;
-                    map.serialize_entry(k, &rounded)?;
-                    continue;
-                }
-            }
-        }
-        map.serialize_entry(k, v)?;
+impl serde_json::ser::Formatter for RoundedFloats {
+    fn write_f64<W: ?Sized + std::io::Write>(&mut self, w: &mut W, value: f64) -> std::io::Result<()> {
+        write!(w, "{:.1}", value)
     }
-    map.end()
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -348,7 +331,6 @@ pub struct ActivityInfo {
     start_time: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339::option")]
     created_at: Option<OffsetDateTime>,
-    #[serde(serialize_with = "serialize_properties")]
     properties: serde_json::Map<String, serde_json::Value>,
     tile_count: usize,
 }
