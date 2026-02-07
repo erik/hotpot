@@ -32,14 +32,17 @@ const MAX_SEGMENT_DISTANCE: f64 = 5000.0;
 const MAX_TIME_GAP: i64 = 300;
 
 pub fn compute_stats(points: &[TrackPoint]) -> TrackStats {
+    let (elevation_gain, elevation_loss) = compute_elevation_gain_loss(points);
+    let (min_elevation, max_elevation) = compute_elevation_range(points);
+
     TrackStats {
         total_distance: compute_distance(points),
         elapsed_time: compute_elapsed_time(points),
         moving_time: compute_moving_time(points),
-        elevation_gain: compute_elevation_gain(points),
-        elevation_loss: compute_elevation_loss(points),
-        max_elevation: compute_max_elevation(points),
-        min_elevation: compute_min_elevation(points),
+        elevation_gain,
+        elevation_loss,
+        max_elevation,
+        min_elevation,
     }
 }
 
@@ -106,14 +109,15 @@ fn compute_moving_time(points: &[TrackPoint]) -> Option<i64> {
     if any { Some(total) } else { None }
 }
 
-/// Accumulate positive elevation changes using threshold-based smoothing.
-fn compute_elevation_gain(points: &[TrackPoint]) -> Option<f64> {
+/// Accumulate elevation gain and loss in a single pass using threshold-based smoothing.
+fn compute_elevation_gain_loss(points: &[TrackPoint]) -> (Option<f64>, Option<f64>) {
     let elevations: Vec<f64> = points.iter().filter_map(|p| p.elevation).collect();
     if elevations.len() < 2 {
-        return None;
+        return (None, None);
     }
 
     let mut gain = 0.0;
+    let mut loss = 0.0;
     let mut reference = elevations[0];
 
     for &elev in &elevations[1..] {
@@ -122,48 +126,27 @@ fn compute_elevation_gain(points: &[TrackPoint]) -> Option<f64> {
             gain += diff;
             reference = elev;
         } else if diff <= -ELEVATION_THRESHOLD {
-            reference = elev;
-        }
-    }
-
-    Some(gain)
-}
-
-/// Accumulate negative elevation changes using threshold-based smoothing.
-fn compute_elevation_loss(points: &[TrackPoint]) -> Option<f64> {
-    let elevations: Vec<f64> = points.iter().filter_map(|p| p.elevation).collect();
-    if elevations.len() < 2 {
-        return None;
-    }
-
-    let mut loss = 0.0;
-    let mut reference = elevations[0];
-
-    for &elev in &elevations[1..] {
-        let diff = elev - reference;
-        if diff <= -ELEVATION_THRESHOLD {
             loss += diff.abs();
             reference = elev;
-        } else if diff >= ELEVATION_THRESHOLD {
-            reference = elev;
         }
     }
 
-    Some(loss)
+    (Some(gain), Some(loss))
 }
 
-fn compute_max_elevation(points: &[TrackPoint]) -> Option<f64> {
-    points
-        .iter()
-        .filter_map(|p| p.elevation)
-        .max_by(|a, b| a.partial_cmp(b).unwrap())
-}
+/// Find min and max elevation in a single pass.
+fn compute_elevation_range(points: &[TrackPoint]) -> (Option<f64>, Option<f64>) {
+    let mut iter = points.iter().filter_map(|p| p.elevation);
+    let first = match iter.next() {
+        Some(v) => v,
+        None => return (None, None),
+    };
 
-fn compute_min_elevation(points: &[TrackPoint]) -> Option<f64> {
-    points
-        .iter()
-        .filter_map(|p| p.elevation)
-        .min_by(|a, b| a.partial_cmp(b).unwrap())
+    let (min, max) = iter.fold((first, first), |(min, max), v| {
+        (min.min(v), max.max(v))
+    });
+
+    (Some(min), Some(max))
 }
 
 impl TrackStats {
