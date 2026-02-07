@@ -30,8 +30,10 @@ const ELEVATION_THRESHOLD: f64 = 2.0;
 const MAX_SEGMENT_DISTANCE: f64 = 5000.0;
 
 /// Maximum time gap (seconds) between consecutive points before we consider
-/// it a pause and exclude it from moving time.
-const MAX_TIME_GAP: i64 = 300;
+/// it a pause and exclude it from moving time. Most GPS devices record every
+/// 1-5s (up to ~30s with smart recording), so 60s comfortably exceeds any
+/// recording interval while catching actual stops.
+const MAX_TIME_GAP: i64 = 60;
 
 /// Meters per second to kilometers per hour.
 const MPS_TO_KMH: f64 = 3.6;
@@ -41,12 +43,12 @@ pub fn compute_stats(points: &[TrackPoint]) -> TrackStats {
     let moving_time = compute_moving_time(points);
     let max_speed = compute_max_speed(points);
 
-    let avg_speed = match (total_distance, moving_time) {
+    let average_speed = match (total_distance, moving_time) {
         (Some(d), Some(t)) if t > 0 => Some(d / t as f64 * MPS_TO_KMH),
         _ => None,
     };
 
-    let speed = match (avg_speed, max_speed) {
+    let speed = match (average_speed, max_speed) {
         (Some(avg), Some(max)) => Some((avg, max)),
         (Some(avg), None) => Some((avg, avg)),
         _ => None,
@@ -222,7 +224,7 @@ impl TrackStats {
                 self.elevation_range.map(|(_, max)| round(max)),
             ),
             (
-                "avg_speed",
+                "average_speed",
                 self.speed.map(|(avg, _)| round1(avg)),
             ),
             (
@@ -310,19 +312,19 @@ mod tests {
 
     #[test]
     fn test_moving_time_excludes_pauses() {
-        // Simulate: ride 60s, pause 600s (>MAX_TIME_GAP), ride 60s
+        // Simulate: ride 10s, pause 120s (>MAX_TIME_GAP), ride 10s
         let points = vec![
             TrackPoint { lat: 52.5200, lng: 13.4050, elevation: None, timestamp: Some(1000) },
-            TrackPoint { lat: 52.5205, lng: 13.4050, elevation: None, timestamp: Some(1060) },
-            // 600 second gap = pause
-            TrackPoint { lat: 52.5210, lng: 13.4050, elevation: None, timestamp: Some(1660) },
-            TrackPoint { lat: 52.5215, lng: 13.4050, elevation: None, timestamp: Some(1720) },
+            TrackPoint { lat: 52.5205, lng: 13.4050, elevation: None, timestamp: Some(1010) },
+            // 120 second gap = pause
+            TrackPoint { lat: 52.5210, lng: 13.4050, elevation: None, timestamp: Some(1130) },
+            TrackPoint { lat: 52.5215, lng: 13.4050, elevation: None, timestamp: Some(1140) },
         ];
         let stats = compute_stats(&points);
-        // Elapsed: 1720 - 1000 = 720s
-        assert_eq!(stats.elapsed_time, Some(720));
-        // Moving: 60s + 60s = 120s (the 600s gap is excluded)
-        assert_eq!(stats.moving_time, Some(120));
+        // Elapsed: 1140 - 1000 = 140s
+        assert_eq!(stats.elapsed_time, Some(140));
+        // Moving: 10s + 10s = 20s (the 120s gap is excluded)
+        assert_eq!(stats.moving_time, Some(20));
     }
 
     #[test]
@@ -330,14 +332,14 @@ mod tests {
         // Simulate: ride nearby, then teleport far away
         let points = vec![
             TrackPoint { lat: 52.5200, lng: 13.4050, elevation: None, timestamp: Some(1000) },
-            TrackPoint { lat: 52.5205, lng: 13.4050, elevation: None, timestamp: Some(1060) },
-            // Jump to a point >5km away with a 120s gap (within time threshold but beyond distance)
-            TrackPoint { lat: 53.5200, lng: 13.4050, elevation: None, timestamp: Some(1180) },
-            TrackPoint { lat: 53.5205, lng: 13.4050, elevation: None, timestamp: Some(1240) },
+            TrackPoint { lat: 52.5205, lng: 13.4050, elevation: None, timestamp: Some(1010) },
+            // Jump to a point >5km away with a 30s gap (within time threshold but beyond distance)
+            TrackPoint { lat: 53.5200, lng: 13.4050, elevation: None, timestamp: Some(1040) },
+            TrackPoint { lat: 53.5205, lng: 13.4050, elevation: None, timestamp: Some(1050) },
         ];
         let stats = compute_stats(&points);
-        // Moving time: 60s + 60s = 120s (the transport jump segment is excluded)
-        assert_eq!(stats.moving_time, Some(120));
+        // Moving time: 10s + 10s = 20s (the transport jump segment is excluded)
+        assert_eq!(stats.moving_time, Some(20));
     }
 
     #[test]
@@ -380,7 +382,7 @@ mod tests {
         ];
         let stats = compute_stats(&points);
         let (avg, max) = stats.speed.unwrap();
-        assert!((avg - 36.0).abs() < 2.0, "avg_speed was {}", avg);
+        assert!((avg - 36.0).abs() < 2.0, "average_speed was {}", avg);
         assert!((max - 36.0).abs() < 2.0, "max_speed was {}", max);
     }
 
@@ -422,7 +424,7 @@ mod tests {
         assert_eq!(props["elevation_loss"], serde_json::json!(80));
         assert_eq!(props["min_elevation"], serde_json::json!(400));
         assert_eq!(props["max_elevation"], serde_json::json!(500));
-        assert_eq!(props["avg_speed"], serde_json::json!(25.0));
+        assert_eq!(props["average_speed"], serde_json::json!(25.0));
         assert_eq!(props["max_speed"], serde_json::json!(45.0));
     }
 
