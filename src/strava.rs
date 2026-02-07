@@ -76,8 +76,22 @@ struct SummaryActivity {
     map: PolyLineMap,
     #[serde(with = "time::serde::iso8601")]
     start_date: OffsetDateTime,
+
+    // Remap Strava field names to match our canonical property names
+    #[serde(rename(serialize = "total_distance"))]
+    distance: f64,
     #[serde(rename(serialize = "elevation_gain"))]
     total_elevation_gain: f64,
+    #[serde(default, rename(serialize = "min_elevation"), skip_serializing_if = "Option::is_none")]
+    elev_low: Option<f64>,
+    #[serde(default, rename(serialize = "max_elevation"), skip_serializing_if = "Option::is_none")]
+    elev_high: Option<f64>,
+    // Speed needs unit conversion (m/s → km/h), handled in properties()
+    #[serde(default, skip_serializing)]
+    average_speed: f64,
+    #[serde(default, skip_serializing)]
+    max_speed: f64,
+
     #[serde(rename(deserialize = "type", serialize = "activity_type"))]
     kind: String,
     // Custom serialization to flatten
@@ -118,6 +132,10 @@ impl SummaryActivity {
             );
             map.insert("gear_id".to_string(), Value::String(gear.id.clone()));
         }
+
+        // Convert speed from m/s to km/h to match our derived stats
+        map.insert("average_speed".to_string(), Value::from(self.average_speed * 3.6));
+        map.insert("max_speed".to_string(), Value::from(self.max_speed * 3.6));
 
         // Remove the most verbose of the properties (deeply nested JSON that
         // won't be useful for filtering)
