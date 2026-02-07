@@ -1,11 +1,14 @@
 use geo::HaversineDistance;
-use geo_types::Point;
+use geo_types::{LineString, Point};
 
 pub struct TrackPoint {
-    pub lat: f64,
-    pub lng: f64,
+    pub point: Point,
     pub elevation: Option<f64>,
     pub timestamp: Option<i64>,
+}
+
+pub fn to_line_string(points: &[TrackPoint]) -> LineString {
+    points.iter().map(|p| p.point).collect()
 }
 
 pub struct TrackStats {
@@ -65,9 +68,7 @@ pub fn compute_stats(points: &[TrackPoint]) -> TrackStats {
 }
 
 fn segment_distance(a: &TrackPoint, b: &TrackPoint) -> f64 {
-    let pa = Point::new(a.lng, a.lat);
-    let pb = Point::new(b.lng, b.lat);
-    pa.haversine_distance(&pb)
+    a.point.haversine_distance(&b.point)
 }
 
 fn compute_distance(points: &[TrackPoint]) -> Option<f64> {
@@ -245,6 +246,10 @@ impl TrackStats {
 mod tests {
     use super::*;
 
+    fn tp(lat: f64, lng: f64, elevation: Option<f64>, timestamp: Option<i64>) -> TrackPoint {
+        TrackPoint { point: Point::new(lng, lat), elevation, timestamp }
+    }
+
     #[test]
     fn test_compute_stats_empty() {
         let stats = compute_stats(&[]);
@@ -258,12 +263,7 @@ mod tests {
 
     #[test]
     fn test_compute_stats_single_point() {
-        let points = vec![TrackPoint {
-            lat: 52.5,
-            lng: 13.4,
-            elevation: Some(50.0),
-            timestamp: Some(1000),
-        }];
+        let points = vec![tp(52.5, 13.4, Some(50.0), Some(1000))];
         let stats = compute_stats(&points);
         assert!(stats.total_distance.is_none());
         assert!(stats.elapsed_time.is_none());
@@ -278,8 +278,8 @@ mod tests {
     fn test_compute_distance() {
         // Two points ~100m apart (close enough to not be filtered)
         let points = vec![
-            TrackPoint { lat: 52.5200, lng: 13.4050, elevation: None, timestamp: None },
-            TrackPoint { lat: 52.5209, lng: 13.4050, elevation: None, timestamp: None },
+            tp(52.5200, 13.4050, None, None),
+            tp(52.5209, 13.4050, None, None),
         ];
         let stats = compute_stats(&points);
         let dist = stats.total_distance.unwrap();
@@ -290,9 +290,9 @@ mod tests {
     fn test_distance_skips_teleport_jumps() {
         // Three points: A -> B (100m) -> C (100km away, should be skipped)
         let points = vec![
-            TrackPoint { lat: 52.5200, lng: 13.4050, elevation: None, timestamp: None },
-            TrackPoint { lat: 52.5209, lng: 13.4050, elevation: None, timestamp: None },
-            TrackPoint { lat: 53.5200, lng: 13.4050, elevation: None, timestamp: None },
+            tp(52.5200, 13.4050, None, None),
+            tp(52.5209, 13.4050, None, None),
+            tp(53.5200, 13.4050, None, None),
         ];
         let stats = compute_stats(&points);
         let dist = stats.total_distance.unwrap();
@@ -303,8 +303,8 @@ mod tests {
     #[test]
     fn test_elapsed_time() {
         let points = vec![
-            TrackPoint { lat: 0.0, lng: 0.0, elevation: None, timestamp: Some(1000) },
-            TrackPoint { lat: 0.0, lng: 0.0, elevation: None, timestamp: Some(1300) },
+            tp(0.0, 0.0, None, Some(1000)),
+            tp(0.0, 0.0, None, Some(1300)),
         ];
         let stats = compute_stats(&points);
         assert_eq!(stats.elapsed_time, Some(300));
@@ -314,11 +314,11 @@ mod tests {
     fn test_moving_time_excludes_pauses() {
         // Simulate: ride 10s, pause 120s (>MAX_TIME_GAP), ride 10s
         let points = vec![
-            TrackPoint { lat: 52.5200, lng: 13.4050, elevation: None, timestamp: Some(1000) },
-            TrackPoint { lat: 52.5205, lng: 13.4050, elevation: None, timestamp: Some(1010) },
+            tp(52.5200, 13.4050, None, Some(1000)),
+            tp(52.5205, 13.4050, None, Some(1010)),
             // 120 second gap = pause
-            TrackPoint { lat: 52.5210, lng: 13.4050, elevation: None, timestamp: Some(1130) },
-            TrackPoint { lat: 52.5215, lng: 13.4050, elevation: None, timestamp: Some(1140) },
+            tp(52.5210, 13.4050, None, Some(1130)),
+            tp(52.5215, 13.4050, None, Some(1140)),
         ];
         let stats = compute_stats(&points);
         // Elapsed: 1140 - 1000 = 140s
@@ -331,11 +331,11 @@ mod tests {
     fn test_moving_time_excludes_transport_jumps() {
         // Simulate: ride nearby, then teleport far away
         let points = vec![
-            TrackPoint { lat: 52.5200, lng: 13.4050, elevation: None, timestamp: Some(1000) },
-            TrackPoint { lat: 52.5205, lng: 13.4050, elevation: None, timestamp: Some(1010) },
+            tp(52.5200, 13.4050, None, Some(1000)),
+            tp(52.5205, 13.4050, None, Some(1010)),
             // Jump to a point >5km away with a 30s gap (within time threshold but beyond distance)
-            TrackPoint { lat: 53.5200, lng: 13.4050, elevation: None, timestamp: Some(1040) },
-            TrackPoint { lat: 53.5205, lng: 13.4050, elevation: None, timestamp: Some(1050) },
+            tp(53.5200, 13.4050, None, Some(1040)),
+            tp(53.5205, 13.4050, None, Some(1050)),
         ];
         let stats = compute_stats(&points);
         // Moving time: 10s + 10s = 20s (the transport jump segment is excluded)
@@ -346,11 +346,11 @@ mod tests {
     fn test_elevation_gain_loss_with_threshold() {
         // 50 -> 53 (+3) -> 52 (-1, below threshold) -> 55 (+2) -> 50 (-5)
         let points = vec![
-            TrackPoint { lat: 0.0, lng: 0.0, elevation: Some(50.0), timestamp: None },
-            TrackPoint { lat: 0.0, lng: 0.0, elevation: Some(53.0), timestamp: None },
-            TrackPoint { lat: 0.0, lng: 0.0, elevation: Some(52.0), timestamp: None },
-            TrackPoint { lat: 0.0, lng: 0.0, elevation: Some(55.0), timestamp: None },
-            TrackPoint { lat: 0.0, lng: 0.0, elevation: Some(50.0), timestamp: None },
+            tp(0.0, 0.0, Some(50.0), None),
+            tp(0.0, 0.0, Some(53.0), None),
+            tp(0.0, 0.0, Some(52.0), None),
+            tp(0.0, 0.0, Some(55.0), None),
+            tp(0.0, 0.0, Some(50.0), None),
         ];
         let stats = compute_stats(&points);
         // gain: 50->53 (+3), 53->55 (+2) = 5
@@ -363,9 +363,9 @@ mod tests {
     #[test]
     fn test_elevation_range() {
         let points = vec![
-            TrackPoint { lat: 0.0, lng: 0.0, elevation: Some(100.0), timestamp: None },
-            TrackPoint { lat: 0.0, lng: 0.0, elevation: Some(200.0), timestamp: None },
-            TrackPoint { lat: 0.0, lng: 0.0, elevation: Some(50.0), timestamp: None },
+            tp(0.0, 0.0, Some(100.0), None),
+            tp(0.0, 0.0, Some(200.0), None),
+            tp(0.0, 0.0, Some(50.0), None),
         ];
         let stats = compute_stats(&points);
         let (min, max) = stats.elevation_range.unwrap();
@@ -377,8 +377,8 @@ mod tests {
     fn test_speed() {
         // Two points ~100m apart, 10s gap => 10 m/s => 36 km/h
         let points = vec![
-            TrackPoint { lat: 52.5200, lng: 13.4050, elevation: None, timestamp: Some(1000) },
-            TrackPoint { lat: 52.5209, lng: 13.4050, elevation: None, timestamp: Some(1010) },
+            tp(52.5200, 13.4050, None, Some(1000)),
+            tp(52.5209, 13.4050, None, Some(1010)),
         ];
         let stats = compute_stats(&points);
         let (avg, max) = stats.speed.unwrap();
@@ -390,10 +390,10 @@ mod tests {
     fn test_max_speed_ignores_jumps() {
         // Normal segment, then a teleport jump that would be absurdly fast
         let points = vec![
-            TrackPoint { lat: 52.5200, lng: 13.4050, elevation: None, timestamp: Some(1000) },
-            TrackPoint { lat: 52.5209, lng: 13.4050, elevation: None, timestamp: Some(1010) },
+            tp(52.5200, 13.4050, None, Some(1000)),
+            tp(52.5209, 13.4050, None, Some(1010)),
             // 100km away in 60s = would be 6000 km/h, but filtered out
-            TrackPoint { lat: 53.5200, lng: 13.4050, elevation: None, timestamp: Some(1070) },
+            tp(53.5200, 13.4050, None, Some(1070)),
         ];
         let stats = compute_stats(&points);
         let (_, max) = stats.speed.unwrap();
@@ -431,8 +431,8 @@ mod tests {
     #[test]
     fn test_no_elevation_data() {
         let points = vec![
-            TrackPoint { lat: 52.5200, lng: 13.4050, elevation: None, timestamp: Some(1000) },
-            TrackPoint { lat: 52.5209, lng: 13.4050, elevation: None, timestamp: Some(1060) },
+            tp(52.5200, 13.4050, None, Some(1000)),
+            tp(52.5209, 13.4050, None, Some(1060)),
         ];
         let stats = compute_stats(&points);
         assert!(stats.total_distance.is_some());

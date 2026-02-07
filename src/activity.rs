@@ -276,7 +276,6 @@ fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
 
     let mut properties = HashMap::new();
     let mut start_time = None;
-    let mut points = vec![];
     let mut track_points = vec![];
     for data in from_reader_with_options(r, &opts)? {
         match data.kind() {
@@ -345,26 +344,24 @@ fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
                 if let (Some(lat), Some(lng)) = (lat, lng) {
                     let pt = Point::new(lng as f64, lat as f64) / SCALE_FACTOR;
                     track_points.push(track_stats::TrackPoint {
-                        lat: pt.y(),
-                        lng: pt.x(),
+                        point: pt,
                         elevation: altitude,
                         timestamp,
                     });
-                    points.push(pt);
                 }
             }
             _ => {}
         }
     }
 
-    if points.is_empty() {
+    if track_points.is_empty() {
         return Ok(None);
     }
 
     let stats = track_stats::compute_stats(&track_points);
     stats.merge_into(&mut properties);
 
-    let line = points.into_iter().collect::<LineString>();
+    let line = track_stats::to_line_string(&track_points);
     Ok(Some(RawActivity {
         properties,
         title: None,
@@ -402,24 +399,22 @@ fn parse_gpx<R: Read>(reader: &mut R) -> Result<Option<RawActivity>> {
     let mut lines = vec![];
 
     for segment in &track.segments {
-        let mut line_points = vec![];
+        let start = track_points.len();
         for pt in &segment.points {
             let coord = pt.point();
-            line_points.push(Point::new(coord.x(), coord.y()));
             track_points.push(track_stats::TrackPoint {
-                lat: coord.y(),
-                lng: coord.x(),
+                point: Point::new(coord.x(), coord.y()),
                 elevation: pt.elevation,
                 timestamp: pt.time.map(|t| OffsetDateTime::from(t).unix_timestamp()),
             });
         }
-        if !line_points.is_empty() {
-            lines.push(line_points.into_iter().collect::<LineString>());
+        let line = track_stats::to_line_string(&track_points[start..]);
+        if !line.0.is_empty() {
+            lines.push(line);
         }
     }
 
-    let tracks = MultiLineString::new(lines);
-    if tracks.0.is_empty() {
+    if track_points.is_empty() {
         return Ok(None);
     }
 
@@ -430,7 +425,7 @@ fn parse_gpx<R: Read>(reader: &mut R) -> Result<Option<RawActivity>> {
         start_time,
         properties,
         title: track.name.clone(),
-        tracks,
+        tracks: MultiLineString::new(lines),
     }))
 }
 
@@ -459,31 +454,27 @@ fn parse_tcx<R: Read>(reader: &mut BufReader<R>) -> Result<Option<RawActivity>> 
         .map(|pt| OffsetDateTime::from_unix_timestamp(pt.time.timestamp()).unwrap());
 
     let mut track_points = vec![];
+    let mut lines = vec![];
 
-    let tracks = activity
-        .laps
-        .iter()
-        .flat_map(|lap| &lap.tracks)
-        .map(|track| &track.trackpoints)
-        .map(|points| {
-            points
-                .iter()
-                .filter_map(|pt| {
-                    let pos = pt.position.as_ref()?;
-                    track_points.push(track_stats::TrackPoint {
-                        lat: pos.latitude,
-                        lng: pos.longitude,
-                        elevation: pt.altitude_meters,
-                        timestamp: Some(pt.time.timestamp()),
-                    });
-                    Some(Point::new(pos.longitude, pos.latitude))
-                })
-                .collect::<LineString>()
-        })
-        .filter(|line| !line.0.is_empty())
-        .collect::<MultiLineString>();
+    for lap in &activity.laps {
+        for track in &lap.tracks {
+            let start = track_points.len();
+            for pt in &track.trackpoints {
+                let Some(pos) = pt.position.as_ref() else { continue };
+                track_points.push(track_stats::TrackPoint {
+                    point: Point::new(pos.longitude, pos.latitude),
+                    elevation: pt.altitude_meters,
+                    timestamp: Some(pt.time.timestamp()),
+                });
+            }
+            let line = track_stats::to_line_string(&track_points[start..]);
+            if !line.0.is_empty() {
+                lines.push(line);
+            }
+        }
+    }
 
-    if tracks.0.is_empty() {
+    if track_points.is_empty() {
         return Ok(None);
     }
 
@@ -493,7 +484,7 @@ fn parse_tcx<R: Read>(reader: &mut BufReader<R>) -> Result<Option<RawActivity>> 
 
     Ok(Some(RawActivity {
         start_time,
-        tracks,
+        tracks: MultiLineString::new(lines),
         title: None,
         properties,
     }))
