@@ -16,6 +16,8 @@ pub struct TrackStats {
     pub elevation_gain_loss: Option<(f64, f64)>,
     /// (min, max) in meters
     pub elevation_range: Option<(f64, f64)>,
+    /// (avg, max) in km/h
+    pub speed: Option<(f64, f64)>,
 }
 
 /// Minimum elevation change (in meters) to count as real gain/loss.
@@ -31,13 +33,32 @@ const MAX_SEGMENT_DISTANCE: f64 = 5000.0;
 /// it a pause and exclude it from moving time.
 const MAX_TIME_GAP: i64 = 300;
 
+/// Meters per second to kilometers per hour.
+const MPS_TO_KMH: f64 = 3.6;
+
 pub fn compute_stats(points: &[TrackPoint]) -> TrackStats {
+    let total_distance = compute_distance(points);
+    let moving_time = compute_moving_time(points);
+    let max_speed = compute_max_speed(points);
+
+    let avg_speed = match (total_distance, moving_time) {
+        (Some(d), Some(t)) if t > 0 => Some(d / t as f64 * MPS_TO_KMH),
+        _ => None,
+    };
+
+    let speed = match (avg_speed, max_speed) {
+        (Some(avg), Some(max)) => Some((avg, max)),
+        (Some(avg), None) => Some((avg, avg)),
+        _ => None,
+    };
+
     TrackStats {
-        total_distance: compute_distance(points),
+        total_distance,
         elapsed_time: compute_elapsed_time(points),
-        moving_time: compute_moving_time(points),
+        moving_time,
         elevation_gain_loss: compute_elevation_gain_loss(points),
         elevation_range: compute_elevation_range(points),
+        speed,
     }
 }
 
@@ -104,6 +125,29 @@ fn compute_moving_time(points: &[TrackPoint]) -> Option<i64> {
     if any { Some(total) } else { None }
 }
 
+/// Highest instantaneous speed (km/h) across valid segments.
+fn compute_max_speed(points: &[TrackPoint]) -> Option<f64> {
+    let mut max: f64 = 0.0;
+
+    for w in points.windows(2) {
+        let (Some(t0), Some(t1)) = (w[0].timestamp, w[1].timestamp) else {
+            continue;
+        };
+        let gap = t1 - t0;
+        if gap <= 0 || gap > MAX_TIME_GAP {
+            continue;
+        }
+        let dist = segment_distance(&w[0], &w[1]);
+        if dist > MAX_SEGMENT_DISTANCE {
+            continue;
+        }
+        let speed = dist / gap as f64 * MPS_TO_KMH;
+        max = max.max(speed);
+    }
+
+    if max > 0.0 { Some(max) } else { None }
+}
+
 /// Accumulate elevation gain and loss in a single pass using threshold-based smoothing.
 fn compute_elevation_gain_loss(points: &[TrackPoint]) -> Option<(f64, f64)> {
     let elevations: Vec<f64> = points.iter().filter_map(|p| p.elevation).collect();
@@ -146,6 +190,7 @@ impl TrackStats {
     /// are not already present (file-provided values take precedence).
     pub fn merge_into(&self, properties: &mut std::collections::HashMap<String, serde_json::Value>) {
         let round = |v: f64| serde_json::Value::from(v.round() as i64);
+        let round1 = |v: f64| serde_json::Value::from((v * 10.0).round() / 10.0);
 
         let entries: &[(&str, Option<serde_json::Value>)] = &[
             (
@@ -176,6 +221,14 @@ impl TrackStats {
                 "max_elevation",
                 self.elevation_range.map(|(_, max)| round(max)),
             ),
+            (
+                "avg_speed",
+                self.speed.map(|(avg, _)| round1(avg)),
+            ),
+            (
+                "max_speed",
+                self.speed.map(|(_, max)| round1(max)),
+            ),
         ];
 
         for (key, value) in entries {
@@ -198,6 +251,7 @@ mod tests {
         assert!(stats.moving_time.is_none());
         assert!(stats.elevation_gain_loss.is_none());
         assert!(stats.elevation_range.is_none());
+        assert!(stats.speed.is_none());
     }
 
     #[test]
@@ -215,6 +269,7 @@ mod tests {
         assert!(stats.elevation_gain_loss.is_none());
         // Single point still has a valid elevation range (min == max)
         assert_eq!(stats.elevation_range, Some((50.0, 50.0)));
+        assert!(stats.speed.is_none());
     }
 
     #[test]
@@ -317,6 +372,33 @@ mod tests {
     }
 
     #[test]
+    fn test_speed() {
+        // Two points ~100m apart, 10s gap => 10 m/s => 36 km/h
+        let points = vec![
+            TrackPoint { lat: 52.5200, lng: 13.4050, elevation: None, timestamp: Some(1000) },
+            TrackPoint { lat: 52.5209, lng: 13.4050, elevation: None, timestamp: Some(1010) },
+        ];
+        let stats = compute_stats(&points);
+        let (avg, max) = stats.speed.unwrap();
+        assert!((avg - 36.0).abs() < 2.0, "avg_speed was {}", avg);
+        assert!((max - 36.0).abs() < 2.0, "max_speed was {}", max);
+    }
+
+    #[test]
+    fn test_max_speed_ignores_jumps() {
+        // Normal segment, then a teleport jump that would be absurdly fast
+        let points = vec![
+            TrackPoint { lat: 52.5200, lng: 13.4050, elevation: None, timestamp: Some(1000) },
+            TrackPoint { lat: 52.5209, lng: 13.4050, elevation: None, timestamp: Some(1010) },
+            // 100km away in 60s = would be 6000 km/h, but filtered out
+            TrackPoint { lat: 53.5200, lng: 13.4050, elevation: None, timestamp: Some(1070) },
+        ];
+        let stats = compute_stats(&points);
+        let (_, max) = stats.speed.unwrap();
+        assert!(max < 100.0, "max_speed should exclude teleport, was {}", max);
+    }
+
+    #[test]
     fn test_merge_does_not_overwrite() {
         let stats = TrackStats {
             total_distance: Some(5000.0),
@@ -324,6 +406,7 @@ mod tests {
             moving_time: Some(3000),
             elevation_gain_loss: Some((100.0, 80.0)),
             elevation_range: Some((400.0, 500.0)),
+            speed: Some((25.0, 45.0)),
         };
         let mut props = std::collections::HashMap::new();
         props.insert("total_distance".to_string(), serde_json::json!(9999));
@@ -339,6 +422,8 @@ mod tests {
         assert_eq!(props["elevation_loss"], serde_json::json!(80));
         assert_eq!(props["min_elevation"], serde_json::json!(400));
         assert_eq!(props["max_elevation"], serde_json::json!(500));
+        assert_eq!(props["avg_speed"], serde_json::json!(25.0));
+        assert_eq!(props["max_speed"], serde_json::json!(45.0));
     }
 
     #[test]
