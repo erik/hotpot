@@ -19,7 +19,7 @@ use crate::tile::{LngLat, Tile};
 mod activity;
 mod date;
 mod db;
-mod derived;
+mod track_stats;
 mod filter;
 mod raster;
 mod strava;

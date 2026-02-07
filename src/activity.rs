@@ -19,7 +19,7 @@ use walkdir::WalkDir;
 
 use crate::db;
 use crate::db::{Config, Database, encode_line};
-use crate::derived;
+use crate::track_stats;
 use crate::tile::{BBox, LngLat, Tile, WebMercator};
 
 struct TileClipper {
@@ -344,7 +344,7 @@ fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
 
                 if let (Some(lat), Some(lng)) = (lat, lng) {
                     let pt = Point::new(lng as f64, lat as f64) / SCALE_FACTOR;
-                    track_points.push(derived::TrackPoint {
+                    track_points.push(track_stats::TrackPoint {
                         lat: pt.y(),
                         lng: pt.x(),
                         elevation: altitude,
@@ -361,7 +361,7 @@ fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
         return Ok(None);
     }
 
-    let stats = derived::compute_stats(&track_points);
+    let stats = track_stats::compute_stats(&track_points);
     stats.merge_into(&mut properties);
 
     let line = points.into_iter().collect::<LineString>();
@@ -406,7 +406,7 @@ fn parse_gpx<R: Read>(reader: &mut R) -> Result<Option<RawActivity>> {
         for pt in &segment.points {
             let coord = pt.point();
             line_points.push(Point::new(coord.x(), coord.y()));
-            track_points.push(derived::TrackPoint {
+            track_points.push(track_stats::TrackPoint {
                 lat: coord.y(),
                 lng: coord.x(),
                 elevation: pt.elevation,
@@ -423,7 +423,7 @@ fn parse_gpx<R: Read>(reader: &mut R) -> Result<Option<RawActivity>> {
         return Ok(None);
     }
 
-    let stats = derived::compute_stats(&track_points);
+    let stats = track_stats::compute_stats(&track_points);
     stats.merge_into(&mut properties);
 
     Ok(Some(RawActivity {
@@ -470,7 +470,7 @@ fn parse_tcx<R: Read>(reader: &mut BufReader<R>) -> Result<Option<RawActivity>> 
                 .iter()
                 .filter_map(|pt| {
                     let pos = pt.position.as_ref()?;
-                    track_points.push(derived::TrackPoint {
+                    track_points.push(track_stats::TrackPoint {
                         lat: pos.latitude,
                         lng: pos.longitude,
                         elevation: pt.altitude_meters,
@@ -488,7 +488,7 @@ fn parse_tcx<R: Read>(reader: &mut BufReader<R>) -> Result<Option<RawActivity>> 
     }
 
     let mut properties = HashMap::new();
-    let stats = derived::compute_stats(&track_points);
+    let stats = track_stats::compute_stats(&track_points);
     stats.merge_into(&mut properties);
 
     Ok(Some(RawActivity {
