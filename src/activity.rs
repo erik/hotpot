@@ -20,21 +20,7 @@ use walkdir::WalkDir;
 use crate::db;
 use crate::db::{Config, Database, encode_line};
 use crate::tile::{BBox, LngLat, Tile, WebMercator};
-use crate::track_stats::{self, TrackPoint, TrackStats};
-
-/// Round floats in a JSON value to reduce storage precision noise
-fn truncate_floats(value: &mut HashMap<String, serde_json::Value>, decimals: u32) {
-    let multiplier = 10f64.powi(decimals as i32);
-    for v in value.values_mut() {
-        if let Some(n) = v.as_f64()
-            && !v.is_i64()
-            && !v.is_u64()
-        {
-            let rounded = (n * multiplier).round() / multiplier;
-            *v = serde_json::Value::from(rounded);
-        }
-    }
-}
+use crate::track_stats::{TrackPoint, TrackStats};
 
 struct TileClipper {
     zoom: u8,
@@ -341,7 +327,7 @@ fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
 
                 if let (Some(lat), Some(lng)) = (lat, lng) {
                     let pt = Point::new(lng as f64, lat as f64) / SCALE_FACTOR;
-                    track_points.push(track_stats::TrackPoint {
+                    track_points.push(TrackPoint {
                         point: pt,
                         elevation,
                         timestamp,
@@ -356,7 +342,7 @@ fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
         return Ok(None);
     }
 
-    let stats = track_stats::TrackStats::from_points(&track_points);
+    let stats = TrackStats::from_points(&track_points);
     stats.merge_into(&mut properties);
 
     let line: Vec<_> = track_points.iter().map(|pt| pt.point).collect();
@@ -392,7 +378,6 @@ fn parse_gpx<R: Read>(reader: &mut R) -> Result<Option<RawActivity>> {
 
     let start_time = gpx.metadata.and_then(|m| m.time).map(OffsetDateTime::from);
 
-    // Iterate segments manually to extract elevation and time data
     let mut track_points = vec![];
     let mut lines = vec![];
 
@@ -404,7 +389,10 @@ fn parse_gpx<R: Read>(reader: &mut R) -> Result<Option<RawActivity>> {
             track_points.push(TrackPoint {
                 point,
                 elevation: pt.elevation,
-                timestamp: pt.time.map(|t| OffsetDateTime::from(t).unix_timestamp()),
+                timestamp: pt
+                    .time
+                    .map(OffsetDateTime::from)
+                    .map(OffsetDateTime::unix_timestamp),
             });
         }
 
@@ -524,7 +512,16 @@ pub fn upsert(
         VALUES (?, ?, ?, ?, ?)",
     )?;
 
-    truncate_floats(&mut activity.properties, 4);
+    // Round floats in a JSON value to reduce storage precision noise
+    for val in activity.properties.values_mut() {
+        if let Some(n) = val.as_f64()
+            && !val.is_i64()
+            && !val.is_u64()
+        {
+            let mult = 10_000.0;
+            *val = ((n * mult).round() / mult).into();
+        }
+    }
 
     let num_rows = conn.execute(
         "\
