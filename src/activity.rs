@@ -466,7 +466,7 @@ fn parse_tcx<R: Read>(reader: &mut BufReader<R>) -> Result<Option<RawActivity>> 
         }
     }
 
-    if track_points.is_empty() {
+    if lines.is_empty() {
         return Ok(None);
     }
 

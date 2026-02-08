@@ -17,16 +17,15 @@ impl TrackPoint {
 }
 
 pub struct TrackStats {
-    // TODO: meters, convert to km?
-    pub total_distance: Option<f64>,
-    pub elapsed_time: Option<i64>,
-    pub moving_time: Option<i64>,
-    pub elevation_gain: Option<f64>,
-    pub elevation_loss: Option<f64>,
-    pub min_elevation: Option<f64>,
-    pub max_elevation: Option<f64>,
-    pub average_speed: Option<f64>,
-    pub max_speed: Option<f64>,
+    pub total_distance: Option<f64>, // km
+    pub elapsed_time: Option<i64>,   // seconds
+    pub moving_time: Option<i64>,    // seconds
+    pub elevation_gain: Option<f64>, // meters
+    pub elevation_loss: Option<f64>, // meters
+    pub min_elevation: Option<f64>,  // meters
+    pub max_elevation: Option<f64>,  // meters
+    pub average_speed: Option<f64>,  // km/h
+    pub max_speed: Option<f64>,      // km/h
 }
 
 impl TrackStats {
@@ -36,7 +35,7 @@ impl TrackStats {
         let distance = compute_distance(points);
 
         TrackStats {
-            total_distance: distance,
+            total_distance: distance.map(|d| d / 1000.0),
             elapsed_time: speed_time.map(|f| f.elapsed_time),
             moving_time: speed_time.map(|f| f.moving_time),
             elevation_gain: elevation.map(|t| t.gain),

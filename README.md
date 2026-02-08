@@ -160,7 +160,7 @@ for all activities (imported, uploaded, or from Strava):
 
 | Property         | Unit    | Description                 |
 | ---------------- | ------- | --------------------------- |
-| `total_distance` | meters  | Total activity distance     |
+| `total_distance` | km      | Total activity distance     |
 | `elapsed_time`   | seconds | Total time including pauses |
 | `moving_time`    | seconds | Time spent moving           |
 | `elevation_gain` | meters  | Total ascent                |

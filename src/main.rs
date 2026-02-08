@@ -365,8 +365,10 @@ fn command_activity_info(global: GlobalOpts, args: ActivitiesCmdArgs) -> Result<
         println!("{}", num_activities);
     } else {
         for info in db.activity_info(&filter)? {
-            let str = serde_json::to_string(&info).expect("ActivityInfo should serialize to JSON");
-            println!("{}", str);
+            println!(
+                "{}",
+                serde_json::to_string(&info).expect("ActivityStat should serialize to JSON")
+            );
         }
     }
     Ok(())

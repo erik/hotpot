@@ -500,7 +500,7 @@ function unsafeHTML(strings, ...values) {
 
 function createFilterHelpModal() {
   createModal(
-    "Filter Syntax",
+    "Property Filter Help",
     unsafeHTML`<div class="filter-help">
       <p>
         Generate different heatmaps for cycling vs running, exclude commutes,
@@ -518,7 +518,7 @@ function createFilterHelpModal() {
         <li><code>max_speed</code> — fastest instantaneous speed (km/h)</li>
         <li><code>min_elevation</code> — lowest elevation (meters)</li>
         <li><code>moving_time</code> — time spent moving (seconds)</li>
-        <li><code>total_distance</code> — total distance (meters)</li>
+        <li><code>total_distance</code> — total distance (km)</li>
       </ul>
 
       <div class="__heading">Syntax</div>
