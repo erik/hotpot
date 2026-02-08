@@ -23,6 +23,7 @@ mod filter;
 mod raster;
 mod strava;
 mod tile;
+mod track_stats;
 mod web;
 
 #[derive(Subcommand)]

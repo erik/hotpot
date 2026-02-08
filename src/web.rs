@@ -561,7 +561,7 @@ async fn upload_activity(
 
         if let Err(err) = db
             .connection()
-            .and_then(|mut conn| activity::upsert(&mut conn, &activity_id, &activity, &db_config))
+            .and_then(|mut conn| activity::upsert(&mut conn, &activity_id, activity, &db_config))
         {
             tracing::error!("failed to insert activity: {:?}", err);
             return (StatusCode::INTERNAL_SERVER_ERROR, "something went wrong");

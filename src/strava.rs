@@ -17,6 +17,7 @@ use time::OffsetDateTime;
 use crate::activity;
 use crate::activity::RawActivity;
 use crate::db::Database;
+use crate::track_stats::METERS_PER_SEC_TO_KMH;
 use crate::web::AppState;
 
 #[derive(Deserialize)]
@@ -76,25 +77,29 @@ struct SummaryActivity {
     map: PolyLineMap,
     #[serde(with = "time::serde::iso8601")]
     start_date: OffsetDateTime,
-    #[serde(rename(serialize = "elevation_gain"))]
+
+    // Remap Strava field names to match our canonical property names
+    #[serde(default, rename(serialize = "elevation_gain"))]
     total_elevation_gain: f64,
+    #[serde(default, rename(serialize = "min_elevation"))]
+    elev_low: f64,
+    #[serde(default, rename(serialize = "max_elevation"))]
+    elev_high: f64,
     #[serde(rename(deserialize = "type", serialize = "activity_type"))]
     kind: String,
+
+    // Properties that will need conversion to match internally calculated
+    // units.
+    #[serde(skip_serializing)]
+    distance: f64, // meters
+    #[serde(skip_serializing)]
+    average_speed: f64, // meters/sec
+    #[serde(skip_serializing)]
+    max_speed: f64, // meters/sec
+
     // Custom serialization to flatten
     #[serde(skip_serializing)]
     gear: Option<ActivityGear>,
-
-    // Skip the useless properties
-    #[serde(skip)]
-    segment_efforts: Vec<Value>,
-    #[serde(skip)]
-    splits_metric: Vec<Value>,
-    #[serde(skip)]
-    laps: Vec<Value>,
-    #[serde(skip)]
-    photos: Vec<Value>,
-    #[serde(skip)]
-    highlighted_kudosers: Vec<Value>,
 
     // Catch all for everything else
     #[serde(flatten)]
@@ -119,12 +124,33 @@ impl SummaryActivity {
             map.insert("gear_id".to_string(), Value::String(gear.id.clone()));
         }
 
+        // Convert units to match internally computed metrics
+        map.insert(
+            "total_distance".to_string(),
+            (self.distance / 1000.0).into(),
+        );
+        map.insert(
+            "average_speed".to_string(),
+            (self.average_speed * METERS_PER_SEC_TO_KMH).into(),
+        );
+        map.insert(
+            "max_speed".to_string(),
+            (self.max_speed * METERS_PER_SEC_TO_KMH).into(),
+        );
+
         // Remove the most verbose of the properties (deeply nested JSON that
         // won't be useful for filtering)
-        map.remove("laps");
-        map.remove("segment_efforts");
-        map.remove("splits_metric");
-        map.remove("splits_standard");
+        let noisy_props = &[
+            "laps",
+            "segment_efforts",
+            "splits_metric",
+            "splits_standard",
+            "photos",
+            "highlighted_kudosers",
+        ];
+        for &prop in noisy_props {
+            map.remove(prop);
+        }
 
         HashMap::from_iter(map)
     }
@@ -411,7 +437,12 @@ struct WebhookBody {
 
 // TODO: look at subscription_id or something to verify request.
 async fn receive_webhook(
-    State(AppState { db, db_config, strava, .. }): State<AppState>,
+    State(AppState {
+        db,
+        db_config,
+        strava,
+        ..
+    }): State<AppState>,
     Json(body): Json<WebhookBody>,
 ) -> impl IntoResponse {
     let strava = strava.expect("strava auth creds missing");
@@ -448,7 +479,7 @@ async fn receive_webhook(
     if let Err(e) = activity::upsert(
         &mut db.connection().unwrap(),
         &format!("strava:{}", activity.id),
-        &RawActivity {
+        RawActivity {
             title: Some(activity.name),
             start_time: Some(activity.start_date),
             tracks: MultiLineString::from(polyline),

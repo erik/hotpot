@@ -155,6 +155,11 @@ body {
         font-size: var(--text-xs);
         resize: vertical;
         min-height: 3rem;
+
+        &::placeholder {
+            font-style: italic;
+            opacity: 0.5;
+        }
     }
 
     label {
@@ -412,6 +417,10 @@ body {
         background-color: var(--input-bg);
         color: var(--text-primary);
         border-radius: var(--radius-sm);
+    }
+
+    .__properties {
+        margin: 0.5rem 0;
     }
 
     .__examples {

@@ -1,0 +1,271 @@
+use std::collections::HashMap;
+
+use geo::HaversineDistance;
+use geo_types::Point;
+
+use crate::activity::MAX_POINT_DISTANCE;
+
+pub struct TrackPoint {
+    pub point: Point,
+    pub elevation: Option<f64>,
+    pub timestamp: Option<i64>,
+}
+
+impl TrackPoint {
+    /// Distance (meters) between this point and another
+    fn distance(&self, other: &TrackPoint) -> f64 {
+        self.point.haversine_distance(&other.point)
+    }
+}
+
+pub struct TrackStats {
+    pub total_distance: Option<f64>, // km
+    pub elapsed_time: Option<i64>,   // seconds
+    pub moving_time: Option<i64>,    // seconds
+    pub elevation_gain: Option<f64>, // meters
+    pub elevation_loss: Option<f64>, // meters
+    pub min_elevation: Option<f64>,  // meters
+    pub max_elevation: Option<f64>,  // meters
+    pub average_speed: Option<f64>,  // km/h
+    pub max_speed: Option<f64>,      // km/h
+}
+
+impl TrackStats {
+    pub fn from_points(points: &[TrackPoint]) -> Self {
+        let speed_time = TimeSpeedStats::from_points(points);
+        let elevation = ElevationStats::from_points(points);
+        let distance = compute_distance(points);
+
+        TrackStats {
+            total_distance: distance.map(|d| d / 1000.0),
+            elapsed_time: speed_time.map(|f| f.elapsed_time),
+            moving_time: speed_time.map(|f| f.moving_time),
+            elevation_gain: elevation.map(|t| t.gain),
+            elevation_loss: elevation.map(|t| t.loss),
+            min_elevation: elevation.map(|t| t.min_val),
+            max_elevation: elevation.map(|t| t.max_val),
+            average_speed: speed_time
+                .zip(distance)
+                .map(|(t, dist)| (dist / t.moving_time as f64) * METERS_PER_SEC_TO_KMH),
+            max_speed: speed_time.map(|t| t.max_speed),
+        }
+    }
+
+    /// Merge derived stats into a properties map, overwriting existing keys so
+    /// that we have have a consistent set of units. e.g. Strava activity export
+    /// will have a "total_distance" in meters
+    pub fn merge_into(&self, properties: &mut HashMap<String, serde_json::Value>) {
+        let entries: [(&str, serde_json::Value); 9] = [
+            ("total_distance", self.total_distance.into()),
+            ("elapsed_time", self.elapsed_time.into()),
+            ("moving_time", self.moving_time.into()),
+            ("elevation_gain", self.elevation_gain.into()),
+            ("elevation_loss", self.elevation_loss.into()),
+            ("min_elevation", self.min_elevation.into()),
+            ("max_elevation", self.max_elevation.into()),
+            ("average_speed", self.average_speed.into()),
+            ("max_speed", self.max_speed.into()),
+        ];
+
+        for (key, value) in entries.into_iter() {
+            if !value.is_null() {
+                properties.insert(key.to_string(), value);
+            }
+        }
+    }
+}
+
+/// Minimum elevation change (in meters) to count as real gain/loss.
+/// Filters GPS elevation noise.
+const ELEVATION_CHANGE_THRESHOLD: f64 = 2.0;
+
+/// Max time (seconds) between two GPS points before we consider it a pause in
+/// the recording
+const PAUSE_THRESHOLD_SECS: i64 = 60;
+
+/// Meters per second to kilometers per hour.
+pub const METERS_PER_SEC_TO_KMH: f64 = 3.6;
+
+fn compute_distance(points: &[TrackPoint]) -> Option<f64> {
+    if points.len() < 2 {
+        return None;
+    }
+
+    let total: f64 = points
+        .windows(2)
+        .map(|w| w[0].distance(&w[1]))
+        .filter(|d| *d <= MAX_POINT_DISTANCE)
+        .sum();
+
+    Some(total)
+}
+
+#[derive(Copy, Clone)]
+struct TimeSpeedStats {
+    max_speed: f64,
+    moving_time: i64,
+    elapsed_time: i64,
+}
+
+impl TimeSpeedStats {
+    fn from_points(points: &[TrackPoint]) -> Option<Self> {
+        if points.len() < 2 {
+            return None;
+        }
+
+        let first = points.iter().find_map(|p| p.timestamp)?;
+        let last = points.iter().rev().find_map(|p| p.timestamp)?;
+
+        let elapsed_time = last - first;
+        let mut max_speed: f64 = 0.0;
+        let mut moving_time: i64 = 0;
+
+        for w in points.windows(2) {
+            let (Some(start_time), Some(end_time)) = (w[0].timestamp, w[1].timestamp) else {
+                continue;
+            };
+
+            let time_diff = end_time - start_time;
+            if time_diff <= 0 || time_diff > PAUSE_THRESHOLD_SECS {
+                continue;
+            }
+
+            let dist_diff = w[0].distance(&w[1]);
+            if dist_diff > MAX_POINT_DISTANCE {
+                continue;
+            }
+
+            let speed = dist_diff / time_diff as f64 * METERS_PER_SEC_TO_KMH;
+            max_speed = max_speed.max(speed);
+            moving_time += time_diff;
+        }
+
+        Some(TimeSpeedStats {
+            max_speed,
+            moving_time,
+            elapsed_time,
+        })
+    }
+}
+
+#[derive(Copy, Clone)]
+struct ElevationStats {
+    gain: f64,
+    loss: f64,
+    min_val: f64,
+    max_val: f64,
+}
+
+impl ElevationStats {
+    fn from_points(points: &[TrackPoint]) -> Option<Self> {
+        let elevations: Vec<f64> = points.iter().filter_map(|p| p.elevation).collect();
+        if elevations.len() < 2 {
+            return None;
+        }
+
+        let mut base = elevations[0];
+        let mut gain = 0.0;
+        let mut loss = 0.0;
+        let mut min_val = base;
+        let mut max_val = base;
+
+        for &elev in &elevations[1..] {
+            min_val = min_val.min(elev);
+            max_val = max_val.max(elev);
+
+            let diff = elev - base;
+            if diff >= ELEVATION_CHANGE_THRESHOLD {
+                gain += diff;
+                base = elev;
+            } else if diff <= -ELEVATION_CHANGE_THRESHOLD {
+                loss += diff.abs();
+                base = elev;
+            }
+        }
+
+        Some(ElevationStats {
+            gain,
+            loss,
+            min_val,
+            max_val,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn trackpoint(
+        lat: f64,
+        lng: f64,
+        elevation: Option<f64>,
+        timestamp: Option<i64>,
+    ) -> TrackPoint {
+        TrackPoint {
+            point: Point::new(lng, lat),
+            elevation,
+            timestamp,
+        }
+    }
+
+    #[test]
+    fn test_compute_distance() {
+        let points = vec![
+            // Two points ~100m apart
+            trackpoint(52.0, 13.0, None, None),
+            trackpoint(52.0009, 13.0, None, None),
+            // Point far away, should be skipped
+            trackpoint(53.0, 13.0, None, None),
+        ];
+        let stats = TrackStats::from_points(&points);
+        let dist = stats.total_distance.unwrap();
+        assert!((dist - 0.100).abs() < 0.005, "distance was {}", dist);
+    }
+
+    #[test]
+    fn test_elapsed_time() {
+        let points = vec![
+            trackpoint(0.0, 0.0, None, Some(1000)),
+            trackpoint(0.0, 0.0, None, Some(1005)),
+            // big gap pause
+            trackpoint(0.0, 0.0, None, Some(1300)),
+        ];
+        let stats = TrackStats::from_points(&points);
+        assert_eq!(stats.elapsed_time, Some(300));
+        assert_eq!(stats.moving_time, Some(5));
+    }
+
+    #[test]
+    fn test_elevation_gain_loss_with_threshold() {
+        // 50 -> 53 (+3) -> 52 (-1, below threshold) -> 55 (+2) -> 50 (-5)
+        let points = vec![
+            trackpoint(0.0, 0.0, Some(50.0), None),
+            trackpoint(0.0, 0.0, Some(53.0), None),
+            trackpoint(0.0, 0.0, Some(52.0), None),
+            trackpoint(0.0, 0.0, Some(55.0), None),
+            trackpoint(0.0, 0.0, Some(50.0), None),
+        ];
+        let stats = TrackStats::from_points(&points);
+        // gain: 50->53 (+3), 53->55 (+2) = 5
+        // loss: 55->50 (-5) = 5
+        assert_eq!(stats.elevation_gain.unwrap(), 5.0);
+        assert_eq!(stats.elevation_loss.unwrap(), 5.0);
+        assert_eq!(stats.min_elevation.unwrap(), 50.0);
+        assert_eq!(stats.max_elevation.unwrap(), 55.0);
+    }
+
+    #[test]
+    fn test_speed() {
+        // Two points ~100m apart, 10s gap => 10 m/s => 36 km/h
+        let points = vec![
+            trackpoint(52.5200, 13.4050, None, Some(1000)),
+            trackpoint(52.5209, 13.4050, None, Some(1010)),
+        ];
+        let stats = TrackStats::from_points(&points);
+        let avg = stats.average_speed.unwrap();
+        let max = stats.max_speed.unwrap();
+        assert!((avg - 36.0).abs() < 2.0, "average_speed was {}", avg);
+        assert!((max - 36.0).abs() < 2.0, "max_speed was {}", max);
+    }
+}

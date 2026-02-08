@@ -20,6 +20,7 @@ use walkdir::WalkDir;
 use crate::db;
 use crate::db::{Config, Database, encode_line};
 use crate::tile::{BBox, LngLat, Tile, WebMercator};
+use crate::track_stats::{TrackPoint, TrackStats};
 
 struct TileClipper {
     zoom: u8,
@@ -124,12 +125,11 @@ pub struct RawActivity {
     pub properties: HashMap<String, serde_json::Value>,
 }
 
-impl RawActivity {
-    /// How far apart two points can be before we consider them to be
-    /// a separate line segment.
-    ///
-    const MAX_POINT_DISTANCE: f64 = 5000.0;
+/// How far apart two points can be (meters) before we consider them to be a
+/// separate line segment.
+pub const MAX_POINT_DISTANCE: f64 = 5000.0;
 
+impl RawActivity {
     pub fn clip_to_tiles(
         &self,
         db::Config {
@@ -181,7 +181,7 @@ impl RawActivity {
                 while let Some(&[p0, p1]) = pairs.next() {
                     // Skip over large jumps
                     let len = p0.0.euclidean_distance(&p1.0);
-                    if len > Self::MAX_POINT_DISTANCE {
+                    if len > MAX_POINT_DISTANCE {
                         continue;
                     }
 
@@ -263,7 +263,7 @@ fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
 
     let mut properties = HashMap::new();
     let mut start_time = None;
-    let mut points = vec![];
+    let mut track_points = vec![];
     for data in from_reader_with_options(r, &opts)? {
         match data.kind() {
             // There's one FileId block per file and one or more sessions.
@@ -303,15 +303,22 @@ fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
             MesgNum::Record => {
                 let mut lat: Option<i64> = None;
                 let mut lng: Option<i64> = None;
+                let mut elevation: Option<f64> = None;
+                let mut timestamp: Option<i64> = None;
 
-                for f in data.fields() {
+                for f in data.into_vec().into_iter() {
                     match f.name() {
                         "position_lat" => lat = f.value().try_into().ok(),
                         "position_long" => lng = f.value().try_into().ok(),
+                        // Prefer enhanced_altitude over altitude
+                        "altitude" if elevation.is_none() => {
+                            elevation = f.into_value().try_into().ok()
+                        }
+                        "enhanced_altitude" => elevation = f.into_value().try_into().ok(),
                         "timestamp" => {
-                            if start_time.is_none() {
-                                let ts: i64 = f.value().try_into()?;
-                                start_time = Some(ts);
+                            timestamp = f.value().try_into().ok();
+                            if timestamp.is_some() && start_time.is_none() {
+                                start_time = timestamp;
                             }
                         }
                         _ => {}
@@ -320,18 +327,25 @@ fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
 
                 if let (Some(lat), Some(lng)) = (lat, lng) {
                     let pt = Point::new(lng as f64, lat as f64) / SCALE_FACTOR;
-                    points.push(pt);
+                    track_points.push(TrackPoint {
+                        point: pt,
+                        elevation,
+                        timestamp,
+                    });
                 }
             }
             _ => {}
         }
     }
 
-    if points.is_empty() {
+    if track_points.is_empty() {
         return Ok(None);
     }
 
-    let line = points.into_iter().collect::<LineString>();
+    let stats = TrackStats::from_points(&track_points);
+    stats.merge_into(&mut properties);
+
+    let line: Vec<_> = track_points.iter().map(|pt| pt.point).collect();
     Ok(Some(RawActivity {
         properties,
         title: None,
@@ -364,11 +378,41 @@ fn parse_gpx<R: Read>(reader: &mut R) -> Result<Option<RawActivity>> {
 
     let start_time = gpx.metadata.and_then(|m| m.time).map(OffsetDateTime::from);
 
+    let mut track_points = vec![];
+    let mut lines = vec![];
+
+    for segment in &track.segments {
+        let mut line = vec![];
+        for pt in &segment.points {
+            let point = pt.point();
+            line.push(point);
+            track_points.push(TrackPoint {
+                point,
+                elevation: pt.elevation,
+                timestamp: pt
+                    .time
+                    .map(OffsetDateTime::from)
+                    .map(OffsetDateTime::unix_timestamp),
+            });
+        }
+
+        if !line.is_empty() {
+            lines.push(LineString::from(line));
+        }
+    }
+
+    if track_points.is_empty() {
+        return Ok(None);
+    }
+
+    let stats = TrackStats::from_points(&track_points);
+    stats.merge_into(&mut properties);
+
     Ok(Some(RawActivity {
         start_time,
         properties,
         title: track.name.clone(),
-        tracks: track.multilinestring(),
+        tracks: MultiLineString::new(lines),
     }))
 }
 
@@ -396,30 +440,46 @@ fn parse_tcx<R: Read>(reader: &mut BufReader<R>) -> Result<Option<RawActivity>> 
         .and_then(|track| track.trackpoints.first())
         .map(|pt| OffsetDateTime::from_unix_timestamp(pt.time.timestamp()).unwrap());
 
-    let tracks = activity
-        .laps
-        .iter()
-        .flat_map(|lap| &lap.tracks)
-        .map(|track| &track.trackpoints)
-        .map(|points| {
-            points
-                .iter()
-                .filter_map(|pt| pt.position.as_ref())
-                .map(|pt| Point::new(pt.longitude, pt.latitude))
-                .collect::<LineString>()
-        })
-        .filter(|line| !line.0.is_empty())
-        .collect::<MultiLineString>();
+    let mut track_points = vec![];
+    let mut lines = vec![];
 
-    if tracks.0.is_empty() {
+    for lap in &activity.laps {
+        for track in &lap.tracks {
+            let mut line = vec![];
+            for pt in &track.trackpoints {
+                let Some(pos) = pt.position.as_ref() else {
+                    continue;
+                };
+
+                let point = Point::new(pos.longitude, pos.latitude);
+                line.push(point);
+
+                track_points.push(TrackPoint {
+                    point,
+                    elevation: pt.altitude_meters,
+                    timestamp: Some(pt.time.timestamp()),
+                });
+            }
+
+            if !line.is_empty() {
+                lines.push(LineString::from(line));
+            }
+        }
+    }
+
+    if lines.is_empty() {
         return Ok(None);
     }
 
+    let mut properties = HashMap::new();
+    let stats = TrackStats::from_points(&track_points);
+    stats.merge_into(&mut properties);
+
     Ok(Some(RawActivity {
         start_time,
-        tracks,
+        tracks: MultiLineString::new(lines),
         title: None,
-        properties: HashMap::new(),
+        properties,
     }))
 }
 
@@ -443,7 +503,7 @@ pub fn get_file_type(file_name: &str) -> Option<(MediaType, Compression)> {
 pub fn upsert(
     conn: &mut rusqlite::Connection,
     name: &str,
-    activity: &RawActivity,
+    mut activity: RawActivity,
     config: &db::Config,
 ) -> Result<i64> {
     let mut insert_tile = conn.prepare_cached(
@@ -451,6 +511,17 @@ pub fn upsert(
         INSERT INTO activity_tiles (activity_id, z, x, y, coords) \
         VALUES (?, ?, ?, ?, ?)",
     )?;
+
+    // Round floats in a JSON value to reduce storage precision noise
+    for val in activity.properties.values_mut() {
+        if let Some(n) = val.as_f64()
+            && !val.is_i64()
+            && !val.is_u64()
+        {
+            let mult = 10_000.0;
+            *val = ((n * mult).round() / mult).into();
+        }
+    }
 
     let num_rows = conn.execute(
         "\
@@ -574,7 +645,12 @@ impl PropertySource {
     }
 }
 
-pub fn import_path(path: &Path, db: &Database, config: &Config, prop_source: &PropertySource) -> Result<()> {
+pub fn import_path(
+    path: &Path,
+    db: &Database,
+    config: &Config,
+    prop_source: &PropertySource,
+) -> Result<()> {
     let conn = db.connection()?;
 
     // Skip any files that are already in the database.
@@ -638,7 +714,7 @@ pub fn import_path(path: &Path, db: &Database, config: &Config, prop_source: &Pr
                 prop_source.enrich(&path, &mut activity);
 
                 let mut conn = pool.get().expect("db connection pool timed out");
-                upsert(&mut conn, path.to_str().unwrap(), &activity, config)
+                upsert(&mut conn, path.to_str().unwrap(), activity, config)
                     .expect("insert activity");
 
                 imported.fetch_add(1, Ordering::Relaxed);
