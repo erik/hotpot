@@ -51,8 +51,9 @@ impl TrackStats {
         }
     }
 
-    /// Merge derived stats into a properties map, only setting keys that
-    /// are not already present (file-provided values take precedence).
+    /// Merge derived stats into a properties map, overwriting existing keys so
+    /// that we have have a consistent set of units. e.g. Strava activity export
+    /// will have a "total_distance" in meters
     pub fn merge_into(&self, properties: &mut HashMap<String, serde_json::Value>) {
         let entries: [(&str, serde_json::Value); 9] = [
             ("total_distance", self.total_distance.into()),
@@ -68,7 +69,7 @@ impl TrackStats {
 
         for (key, value) in entries.into_iter() {
             if !value.is_null() {
-                properties.entry(key.to_string()).or_insert(value);
+                properties.insert(key.to_string(), value);
             }
         }
     }

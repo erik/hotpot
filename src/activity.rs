@@ -22,6 +22,28 @@ use crate::db::{Config, Database, encode_line};
 use crate::tile::{BBox, LngLat, Tile, WebMercator};
 use crate::track_stats::{self, TrackPoint, TrackStats};
 
+/// Round floats in a JSON value to reduce storage precision noise
+fn truncate_floats<'a>(
+    value: &'a HashMap<String, serde_json::Value>,
+    decimals: u32,
+) -> HashMap<&'a String, serde_json::Value> {
+    let multiplier = 10f64.powi(decimals as i32);
+    value
+        .iter()
+        .map(|(k, v)| {
+            if let Some(n) = v.as_f64()
+                && !v.is_i64()
+                && !v.is_u64()
+            {
+                let rounded = (n * multiplier).round() / multiplier;
+                (k, serde_json::Value::from(rounded))
+            } else {
+                (k, v.clone())
+            }
+        })
+        .collect()
+}
+
 struct TileClipper {
     zoom: u8,
     tile_extent: i32,
@@ -510,6 +532,8 @@ pub fn upsert(
         VALUES (?, ?, ?, ?, ?)",
     )?;
 
+    let properties = truncate_floats(&activity.properties, 4);
+
     let num_rows = conn.execute(
         "\
         INSERT OR REPLACE \
@@ -519,7 +543,7 @@ pub fn upsert(
             name,
             activity.title,
             activity.start_time,
-            serde_json::to_string(&activity.properties)?,
+            serde_json::to_string(&properties)?,
             OffsetDateTime::now_utc(),
         ],
     )?;
