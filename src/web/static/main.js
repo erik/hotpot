@@ -507,7 +507,6 @@ function createFilterHelpModal() {
         filter by gear, elevation, etc. Any property imported from your activity
         data can be used, as well as the following properties which are computed
         for each activity on import.
-
       </p>
 
       <ul class="__properties">
@@ -537,8 +536,8 @@ function createFilterHelpModal() {
           <div class="__desc">basic comparison</div>
         </div>
         <div class="__example">
-          <code>total_distance > 100000</code>
-          <div class="__desc">distance in meters</div>
+          <code>"Average Temperature" < 5</code>
+          <div class="__desc">keys with spaces need quotes</div>
         </div>
         <div class="__example">
           <code>activity_type in [ride, "gravel ride"]</code>
@@ -553,7 +552,7 @@ function createFilterHelpModal() {
           <div class="__desc">property exists</div>
         </div>
         <div class="__example">
-          <code>total_distance > 100000 && elevation_gain > 2000</code>
+          <code>elpased_time < 3600 && elevation_gain > 300</code>
           <div class="__desc">combine with &&</div>
         </div>
         <div class="__example">
@@ -561,7 +560,7 @@ function createFilterHelpModal() {
           <div class="__desc">negation</div>
         </div>
         <div class="__example">
-          <code>(elevation_gain > 1000 || average_speed > 25) && moving_time > 3600</code>
+          <code>elevation_gain > 1000 || (moving_speed > 30 && commute = true)</code>
           <div class="__desc">grouping</div>
         </div>
       </div>

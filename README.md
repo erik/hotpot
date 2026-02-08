@@ -126,30 +126,10 @@ opaque).
 
 ### Filters
 
-We can also choose which activities we're interested in visualizing
-dynamically through the `?filter={...}` parameter.
-
-Any properties available when the activity was added (either via webhook
-or bulk import) can be used in the filter expression, but the exact names
-will vary based on your data.
-
-The following properties are automatically computed from GPS track data
-for all activities (imported, uploaded, or from Strava):
-
-| Property         | Unit    | Description                 |
-| ---------------- | ------- | --------------------------- |
-| `total_distance` | meters  | Total distance              |
-| `elapsed_time`   | seconds | Total time including pauses |
-| `moving_time`    | seconds | Time spent moving           |
-| `elevation_gain` | meters  | Total ascent                |
-| `elevation_loss` | meters  | Total descent               |
-| `min_elevation`  | meters  | Lowest elevation            |
-| `max_elevation`  | meters  | Highest elevation           |
-| `average_speed`  | km/h    | Average moving speed        |
-| `max_speed`      | km/h    | Peak speed                  |
-
-For example, we may want to generate different tiles for cycling vs hiking,
-exclude commutes, which gear we used, a minimum elevation gain, etc.
+We can choose which activities we're interested in visualizing dynamically with
+the `filter` query parameter. For example, we may want to generate different
+tiles for cycling vs hiking, exclude commutes, which gear we used, a minimum
+elevation gain, etc.
 
 ```python
 # Comparisons: =, !=, <, <=, >, >=
@@ -168,10 +148,27 @@ name like "Morning%"
 has? heart_rate
 
 # Combine multiple expressions
-total_distance > 100000 && elevation_gain > 2000
-!(activity_type in [walk, hike])
-(elevation_gain > 1000 || total_distance > 50000) && commute = true
+elpased_time < 3600 && elevation_gain > 300
+elevation_gain > 1000 || (moving_speed > 30 && commute = true)
 ```
+
+Any properties available when the activity was imported can be used in the filter
+expression, but the exact names will vary based on your data.
+
+The following properties are automatically computed from GPS track data
+for all activities (imported, uploaded, or from Strava):
+
+| Property         | Unit    | Description                 |
+| ---------------- | ------- | --------------------------- |
+| `total_distance` | meters  | Total activity distance     |
+| `elapsed_time`   | seconds | Total time including pauses |
+| `moving_time`    | seconds | Time spent moving           |
+| `elevation_gain` | meters  | Total ascent                |
+| `elevation_loss` | meters  | Total descent               |
+| `min_elevation`  | meters  | Lowest elevation            |
+| `max_elevation`  | meters  | Highest elevation           |
+| `average_speed`  | km/h    | Average speed while moving  |
+| `max_speed`      | km/h    | Maximum instantanous speed  |
 
 ### Activity Visibility & Privacy
 
