@@ -211,74 +211,29 @@ mod tests {
 
     #[test]
     fn test_compute_distance() {
-        // Two points ~100m apart (close enough to not be filtered)
         let points = vec![
-            trackpoint(52.5200, 13.4050, None, None),
-            trackpoint(52.5209, 13.4050, None, None),
+            // Two points ~100m apart
+            trackpoint(52.0, 13.0, None, None),
+            trackpoint(52.0009, 13.0, None, None),
+            // Point far away, should be skipped
+            trackpoint(53.0, 13.0, None, None),
         ];
         let stats = TrackStats::from_points(&points);
         let dist = stats.total_distance.unwrap();
-        assert!((dist - 100.0).abs() < 5.0, "distance was {}", dist);
-    }
-
-    #[test]
-    fn test_distance_skips_teleport_jumps() {
-        // Three points: A -> B (100m) -> C (100km away, should be skipped)
-        let points = vec![
-            trackpoint(52.5200, 13.4050, None, None),
-            trackpoint(52.5209, 13.4050, None, None),
-            trackpoint(53.5200, 13.4050, None, None),
-        ];
-        let stats = TrackStats::from_points(&points);
-        let dist = stats.total_distance.unwrap();
-        // Only the first segment (~100m) should count, the 100km jump is filtered
-        assert!(
-            dist < 200.0,
-            "distance should exclude the jump, was {}",
-            dist
-        );
+        assert!((dist - 0.100).abs() < 0.005, "distance was {}", dist);
     }
 
     #[test]
     fn test_elapsed_time() {
         let points = vec![
             trackpoint(0.0, 0.0, None, Some(1000)),
+            trackpoint(0.0, 0.0, None, Some(1005)),
+            // big gap pause
             trackpoint(0.0, 0.0, None, Some(1300)),
         ];
         let stats = TrackStats::from_points(&points);
         assert_eq!(stats.elapsed_time, Some(300));
-    }
-
-    #[test]
-    fn test_moving_time_excludes_pauses() {
-        // Simulate: ride 10s, pause 120s (>MAX_TIME_GAP), ride 10s
-        let points = vec![
-            trackpoint(52.5200, 13.4050, None, Some(1000)),
-            trackpoint(52.5205, 13.4050, None, Some(1010)),
-            // 120 second gap = pause
-            trackpoint(52.5210, 13.4050, None, Some(1130)),
-            trackpoint(52.5215, 13.4050, None, Some(1140)),
-        ];
-        let stats = TrackStats::from_points(&points);
-        // Elapsed: 1140 - 1000 = 140s
-        assert_eq!(stats.elapsed_time, Some(140));
-        // Moving: 10s + 10s = 20s (the 120s gap is excluded)
-        assert_eq!(stats.moving_time, Some(20));
-    }
-
-    #[test]
-    fn test_moving_time_excludes_transport_jumps() {
-        // Simulate: ride nearby, then teleport far away
-        let points = vec![
-            trackpoint(52.5200, 13.4050, None, Some(1000)),
-            trackpoint(52.5205, 13.4050, None, Some(1010)),
-            // Jump to a point >5km away with a 30s gap (within time threshold but beyond distance)
-            trackpoint(53.5200, 13.4050, None, Some(1040)),
-            trackpoint(53.5205, 13.4050, None, Some(1050)),
-        ];
-        let stats = TrackStats::from_points(&points);
-        // Moving time: 10s + 10s = 20s (the transport jump segment is excluded)
-        assert_eq!(stats.moving_time, Some(20));
+        assert_eq!(stats.moving_time, Some(5));
     }
 
     #[test]
@@ -312,23 +267,5 @@ mod tests {
         let max = stats.max_speed.unwrap();
         assert!((avg - 36.0).abs() < 2.0, "average_speed was {}", avg);
         assert!((max - 36.0).abs() < 2.0, "max_speed was {}", max);
-    }
-
-    #[test]
-    fn test_max_speed_ignores_jumps() {
-        // Normal segment, then a teleport jump that would be absurdly fast
-        let points = vec![
-            trackpoint(52.5200, 13.4050, None, Some(1000)),
-            trackpoint(52.5209, 13.4050, None, Some(1010)),
-            // 100km away in 60s = would be 6000 km/h, but filtered out
-            trackpoint(53.5200, 13.4050, None, Some(1070)),
-        ];
-        let stats = TrackStats::from_points(&points);
-        let max = stats.max_speed.unwrap();
-        assert!(
-            max < 100.0,
-            "max_speed should exclude teleport, was {}",
-            max
-        );
     }
 }

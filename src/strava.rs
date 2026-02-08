@@ -479,7 +479,7 @@ async fn receive_webhook(
     if let Err(e) = activity::upsert(
         &mut db.connection().unwrap(),
         &format!("strava:{}", activity.id),
-        &RawActivity {
+        RawActivity {
             title: Some(activity.name),
             start_time: Some(activity.start_date),
             tracks: MultiLineString::from(polyline),

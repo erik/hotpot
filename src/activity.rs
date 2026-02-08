@@ -23,25 +23,17 @@ use crate::tile::{BBox, LngLat, Tile, WebMercator};
 use crate::track_stats::{self, TrackPoint, TrackStats};
 
 /// Round floats in a JSON value to reduce storage precision noise
-fn truncate_floats<'a>(
-    value: &'a HashMap<String, serde_json::Value>,
-    decimals: u32,
-) -> HashMap<&'a String, serde_json::Value> {
+fn truncate_floats(value: &mut HashMap<String, serde_json::Value>, decimals: u32) {
     let multiplier = 10f64.powi(decimals as i32);
-    value
-        .iter()
-        .map(|(k, v)| {
-            if let Some(n) = v.as_f64()
-                && !v.is_i64()
-                && !v.is_u64()
-            {
-                let rounded = (n * multiplier).round() / multiplier;
-                (k, serde_json::Value::from(rounded))
-            } else {
-                (k, v.clone())
-            }
-        })
-        .collect()
+    for v in value.values_mut() {
+        if let Some(n) = v.as_f64()
+            && !v.is_i64()
+            && !v.is_u64()
+        {
+            let rounded = (n * multiplier).round() / multiplier;
+            *v = serde_json::Value::from(rounded);
+        }
+    }
 }
 
 struct TileClipper {
@@ -523,7 +515,7 @@ pub fn get_file_type(file_name: &str) -> Option<(MediaType, Compression)> {
 pub fn upsert(
     conn: &mut rusqlite::Connection,
     name: &str,
-    activity: &RawActivity,
+    mut activity: RawActivity,
     config: &db::Config,
 ) -> Result<i64> {
     let mut insert_tile = conn.prepare_cached(
@@ -532,7 +524,7 @@ pub fn upsert(
         VALUES (?, ?, ?, ?, ?)",
     )?;
 
-    let properties = truncate_floats(&activity.properties, 4);
+    truncate_floats(&mut activity.properties, 4);
 
     let num_rows = conn.execute(
         "\
@@ -543,7 +535,7 @@ pub fn upsert(
             name,
             activity.title,
             activity.start_time,
-            serde_json::to_string(&properties)?,
+            serde_json::to_string(&activity.properties)?,
             OffsetDateTime::now_utc(),
         ],
     )?;
@@ -725,7 +717,7 @@ pub fn import_path(
                 prop_source.enrich(&path, &mut activity);
 
                 let mut conn = pool.get().expect("db connection pool timed out");
-                upsert(&mut conn, path.to_str().unwrap(), &activity, config)
+                upsert(&mut conn, path.to_str().unwrap(), activity, config)
                     .expect("insert activity");
 
                 imported.fetch_add(1, Ordering::Relaxed);
