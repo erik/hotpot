@@ -19,8 +19,8 @@ use walkdir::WalkDir;
 
 use crate::db;
 use crate::db::{Config, Database, encode_line};
-use crate::track_stats;
 use crate::tile::{BBox, LngLat, Tile, WebMercator};
+use crate::track_stats::{self, TrackPoint, TrackStats};
 
 struct TileClipper {
     zoom: u8,
@@ -125,12 +125,12 @@ pub struct RawActivity {
     pub properties: HashMap<String, serde_json::Value>,
 }
 
-impl RawActivity {
-    /// How far apart two points can be before we consider them to be
-    /// a separate line segment.
-    ///
-    const MAX_POINT_DISTANCE: f64 = 5000.0;
+/// How far apart two points can be before we consider them to be
+/// a separate line segment.
+///
+pub const MAX_POINT_DISTANCE: f64 = 5000.0;
 
+impl RawActivity {
     pub fn clip_to_tiles(
         &self,
         db::Config {
@@ -182,7 +182,7 @@ impl RawActivity {
                 while let Some(&[p0, p1]) = pairs.next() {
                     // Skip over large jumps
                     let len = p0.0.euclidean_distance(&p1.0);
-                    if len > Self::MAX_POINT_DISTANCE {
+                    if len > MAX_POINT_DISTANCE {
                         continue;
                     }
 
@@ -253,18 +253,6 @@ const FIT_VIRTUAL_SPORTS: [&str; 4] = [
     "indoor_running",
 ];
 
-fn fit_value_as_f64(value: &fitparser::Value) -> Option<f64> {
-    match value {
-        fitparser::Value::Float64(v) => Some(*v),
-        fitparser::Value::Float32(v) => Some(*v as f64),
-        fitparser::Value::SInt32(v) => Some(*v as f64),
-        fitparser::Value::UInt32(v) => Some(*v as f64),
-        fitparser::Value::SInt16(v) => Some(*v as f64),
-        fitparser::Value::UInt16(v) => Some(*v as f64),
-        _ => None,
-    }
-}
-
 fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
     const SCALE_FACTOR: f64 = (1u64 << 32) as f64 / 360.0;
 
@@ -316,25 +304,22 @@ fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
             MesgNum::Record => {
                 let mut lat: Option<i64> = None;
                 let mut lng: Option<i64> = None;
-                let mut altitude: Option<f64> = None;
+                let mut elevation: Option<f64> = None;
                 let mut timestamp: Option<i64> = None;
 
-                for f in data.fields() {
+                for f in data.into_vec().into_iter() {
                     match f.name() {
                         "position_lat" => lat = f.value().try_into().ok(),
                         "position_long" => lng = f.value().try_into().ok(),
                         // Prefer enhanced_altitude over altitude
-                        "enhanced_altitude" => altitude = fit_value_as_f64(f.value()),
-                        "altitude" if altitude.is_none() => {
-                            altitude = fit_value_as_f64(f.value());
+                        "altitude" if elevation.is_none() => {
+                            elevation = f.into_value().try_into().ok()
                         }
+                        "enhanced_altitude" => elevation = f.into_value().try_into().ok(),
                         "timestamp" => {
-                            let ts: Result<i64, _> = f.value().try_into();
-                            if let Ok(ts) = ts {
-                                timestamp = Some(ts);
-                                if start_time.is_none() {
-                                    start_time = Some(ts);
-                                }
+                            timestamp = f.value().try_into().ok();
+                            if timestamp.is_some() && start_time.is_none() {
+                                start_time = timestamp;
                             }
                         }
                         _ => {}
@@ -345,7 +330,7 @@ fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
                     let pt = Point::new(lng as f64, lat as f64) / SCALE_FACTOR;
                     track_points.push(track_stats::TrackPoint {
                         point: pt,
-                        elevation: altitude,
+                        elevation,
                         timestamp,
                     });
                 }
@@ -358,10 +343,10 @@ fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
         return Ok(None);
     }
 
-    let stats = track_stats::compute_stats(&track_points);
+    let stats = track_stats::TrackStats::from_points(&track_points);
     stats.merge_into(&mut properties);
 
-    let line = track_stats::to_line_string(&track_points);
+    let line: Vec<_> = track_points.iter().map(|pt| pt.point).collect();
     Ok(Some(RawActivity {
         properties,
         title: None,
@@ -399,18 +384,19 @@ fn parse_gpx<R: Read>(reader: &mut R) -> Result<Option<RawActivity>> {
     let mut lines = vec![];
 
     for segment in &track.segments {
-        let start = track_points.len();
+        let mut line = vec![];
         for pt in &segment.points {
-            let coord = pt.point();
-            track_points.push(track_stats::TrackPoint {
-                point: Point::new(coord.x(), coord.y()),
+            let point = pt.point();
+            line.push(point);
+            track_points.push(TrackPoint {
+                point,
                 elevation: pt.elevation,
                 timestamp: pt.time.map(|t| OffsetDateTime::from(t).unix_timestamp()),
             });
         }
-        let line = track_stats::to_line_string(&track_points[start..]);
-        if !line.0.is_empty() {
-            lines.push(line);
+
+        if !line.is_empty() {
+            lines.push(LineString::from(line));
         }
     }
 
@@ -418,7 +404,7 @@ fn parse_gpx<R: Read>(reader: &mut R) -> Result<Option<RawActivity>> {
         return Ok(None);
     }
 
-    let stats = track_stats::compute_stats(&track_points);
+    let stats = TrackStats::from_points(&track_points);
     stats.merge_into(&mut properties);
 
     Ok(Some(RawActivity {
@@ -458,18 +444,24 @@ fn parse_tcx<R: Read>(reader: &mut BufReader<R>) -> Result<Option<RawActivity>> 
 
     for lap in &activity.laps {
         for track in &lap.tracks {
-            let start = track_points.len();
+            let mut line = vec![];
             for pt in &track.trackpoints {
-                let Some(pos) = pt.position.as_ref() else { continue };
-                track_points.push(track_stats::TrackPoint {
-                    point: Point::new(pos.longitude, pos.latitude),
+                let Some(pos) = pt.position.as_ref() else {
+                    continue;
+                };
+
+                let point = Point::new(pos.longitude, pos.latitude);
+                line.push(point);
+
+                track_points.push(TrackPoint {
+                    point,
                     elevation: pt.altitude_meters,
                     timestamp: Some(pt.time.timestamp()),
                 });
             }
-            let line = track_stats::to_line_string(&track_points[start..]);
-            if !line.0.is_empty() {
-                lines.push(line);
+
+            if !line.is_empty() {
+                lines.push(LineString::from(line));
             }
         }
     }
@@ -479,7 +471,7 @@ fn parse_tcx<R: Read>(reader: &mut BufReader<R>) -> Result<Option<RawActivity>> 
     }
 
     let mut properties = HashMap::new();
-    let stats = track_stats::compute_stats(&track_points);
+    let stats = TrackStats::from_points(&track_points);
     stats.merge_into(&mut properties);
 
     Ok(Some(RawActivity {
@@ -641,7 +633,12 @@ impl PropertySource {
     }
 }
 
-pub fn import_path(path: &Path, db: &Database, config: &Config, prop_source: &PropertySource) -> Result<()> {
+pub fn import_path(
+    path: &Path,
+    db: &Database,
+    config: &Config,
+    prop_source: &PropertySource,
+) -> Result<()> {
     let conn = db.connection()?;
 
     // Skip any files that are already in the database.

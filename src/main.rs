@@ -19,11 +19,11 @@ use crate::tile::{LngLat, Tile};
 mod activity;
 mod date;
 mod db;
-mod track_stats;
 mod filter;
 mod raster;
 mod strava;
 mod tile;
+mod track_stats;
 mod web;
 
 #[derive(Subcommand)]
@@ -365,12 +365,8 @@ fn command_activity_info(global: GlobalOpts, args: ActivitiesCmdArgs) -> Result<
         println!("{}", num_activities);
     } else {
         for info in db.activity_info(&filter)? {
-            let mut buf = Vec::new();
-            let formatter = db::RoundedFloats;
-            let mut ser = serde_json::Serializer::with_formatter(&mut buf, formatter);
-            serde::Serialize::serialize(&info, &mut ser)
-                .expect("ActivityInfo should serialize to JSON");
-            println!("{}", String::from_utf8(buf).unwrap());
+            let str = serde_json::to_string(&info).expect("ActivityInfo should serialize to JSON");
+            println!("{}", str);
         }
     }
     Ok(())

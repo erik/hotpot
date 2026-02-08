@@ -17,6 +17,7 @@ use time::OffsetDateTime;
 use crate::activity;
 use crate::activity::RawActivity;
 use crate::db::Database;
+use crate::track_stats::METERS_PER_SEC_TO_KMH;
 use crate::web::AppState;
 
 #[derive(Deserialize)]
@@ -82,9 +83,15 @@ struct SummaryActivity {
     distance: f64,
     #[serde(rename(serialize = "elevation_gain"))]
     total_elevation_gain: f64,
-    #[serde(default, rename(serialize = "min_elevation"), skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename(serialize = "min_elevation"),
+        skip_serializing_if = "Option::is_none"
+    )]
     elev_low: Option<f64>,
-    #[serde(default, rename(serialize = "max_elevation"), skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename(serialize = "max_elevation"),
+        skip_serializing_if = "Option::is_none"
+    )]
     elev_high: Option<f64>,
     // Speed needs unit conversion (m/s → km/h), handled in properties()
     #[serde(default, skip_serializing)]
@@ -134,8 +141,14 @@ impl SummaryActivity {
         }
 
         // Convert speed from m/s to km/h to match our derived stats
-        map.insert("average_speed".to_string(), Value::from(self.average_speed * 3.6));
-        map.insert("max_speed".to_string(), Value::from(self.max_speed * 3.6));
+        map.insert(
+            "average_speed".to_string(),
+            Value::from(self.average_speed * METERS_PER_SEC_TO_KMH),
+        );
+        map.insert(
+            "max_speed".to_string(),
+            Value::from(self.max_speed * METERS_PER_SEC_TO_KMH),
+        );
 
         // Remove the most verbose of the properties (deeply nested JSON that
         // won't be useful for filtering)
@@ -429,7 +442,12 @@ struct WebhookBody {
 
 // TODO: look at subscription_id or something to verify request.
 async fn receive_webhook(
-    State(AppState { db, db_config, strava, .. }): State<AppState>,
+    State(AppState {
+        db,
+        db_config,
+        strava,
+        ..
+    }): State<AppState>,
     Json(body): Json<WebhookBody>,
 ) -> impl IntoResponse {
     let strava = strava.expect("strava auth creds missing");

@@ -314,15 +314,6 @@ impl ActivityFilter {
     }
 }
 
-/// JSON formatter that rounds f64 values to 1 decimal place.
-pub struct RoundedFloats;
-
-impl serde_json::ser::Formatter for RoundedFloats {
-    fn write_f64<W: ?Sized + std::io::Write>(&mut self, w: &mut W, value: f64) -> std::io::Result<()> {
-        write!(w, "{:.1}", value)
-    }
-}
-
 #[derive(Debug, serde::Serialize)]
 pub struct ActivityInfo {
     file_name: String,
