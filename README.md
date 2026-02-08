@@ -148,7 +148,7 @@ name like "Morning%"
 has? heart_rate
 
 # Combine multiple expressions
-elpased_time < 3600 && elevation_gain > 300
+elapsed_time < 3600 && elevation_gain > 300
 elevation_gain > 1000 || (moving_speed > 30 && commute = true)
 ```
 

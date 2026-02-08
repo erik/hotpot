@@ -552,7 +552,7 @@ function createFilterHelpModal() {
           <div class="__desc">property exists</div>
         </div>
         <div class="__example">
-          <code>elpased_time < 3600 && elevation_gain > 300</code>
+          <code>elapsed_time < 3600 && elevation_gain > 300</code>
           <div class="__desc">combine with &&</div>
         </div>
         <div class="__example">

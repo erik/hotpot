@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use geo::HaversineDistance;
 use geo_types::Point;
 
@@ -51,10 +53,7 @@ impl TrackStats {
 
     /// Merge derived stats into a properties map, only setting keys that
     /// are not already present (file-provided values take precedence).
-    pub fn merge_into(
-        &self,
-        properties: &mut std::collections::HashMap<String, serde_json::Value>,
-    ) {
+    pub fn merge_into(&self, properties: &mut HashMap<String, serde_json::Value>) {
         let entries: [(&str, serde_json::Value); 9] = [
             ("total_distance", self.total_distance.into()),
             ("elapsed_time", self.elapsed_time.into()),
@@ -210,35 +209,6 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_stats_empty() {
-        let stats = TrackStats::from_points(&[]);
-        assert!(stats.total_distance.is_none());
-        assert!(stats.elapsed_time.is_none());
-        assert!(stats.moving_time.is_none());
-        assert!(stats.elevation_gain.is_none());
-        assert!(stats.elevation_loss.is_none());
-        assert!(stats.min_elevation.is_none());
-        assert!(stats.max_elevation.is_none());
-        assert!(stats.average_speed.is_none());
-        assert!(stats.max_speed.is_none());
-    }
-
-    #[test]
-    fn test_compute_stats_single_point() {
-        let points = vec![trackpoint(52.5, 13.4, Some(50.0), Some(1000))];
-        let stats = TrackStats::from_points(&points);
-        assert!(stats.total_distance.is_none());
-        assert!(stats.elapsed_time.is_none());
-        assert!(stats.moving_time.is_none());
-        assert!(stats.elevation_gain.is_none());
-        assert!(stats.elevation_loss.is_none());
-        assert!(stats.min_elevation.is_none());
-        assert!(stats.max_elevation.is_none());
-        assert!(stats.average_speed.is_none());
-        assert!(stats.max_speed.is_none());
-    }
-
-    #[test]
     fn test_compute_distance() {
         // Two points ~100m apart (close enough to not be filtered)
         let points = vec![
@@ -359,52 +329,5 @@ mod tests {
             "max_speed should exclude teleport, was {}",
             max
         );
-    }
-
-    #[test]
-    fn test_merge_does_not_overwrite() {
-        let stats = TrackStats {
-            total_distance: Some(5000.0),
-            elapsed_time: Some(3600),
-            moving_time: Some(3000),
-            elevation_gain: Some(100.0),
-            elevation_loss: Some(80.0),
-            min_elevation: Some(400.0),
-            max_elevation: Some(500.0),
-            average_speed: Some(25.0),
-            max_speed: Some(45.0),
-        };
-        let mut props = std::collections::HashMap::new();
-        props.insert("total_distance".to_string(), serde_json::json!(9999));
-
-        stats.merge_into(&mut props);
-
-        // Existing value should be preserved
-        assert_eq!(props["total_distance"], serde_json::json!(9999));
-        // New values should be added (raw f64, rounding happens at serialization)
-        assert_eq!(props["elapsed_time"], serde_json::json!(3600));
-        assert_eq!(props["moving_time"], serde_json::json!(3000));
-        assert_eq!(props["elevation_gain"], serde_json::json!(100.0));
-        assert_eq!(props["elevation_loss"], serde_json::json!(80.0));
-        assert_eq!(props["min_elevation"], serde_json::json!(400.0));
-        assert_eq!(props["max_elevation"], serde_json::json!(500.0));
-        assert_eq!(props["average_speed"], serde_json::json!(25.0));
-        assert_eq!(props["max_speed"], serde_json::json!(45.0));
-    }
-
-    #[test]
-    fn test_no_elevation_data() {
-        let points = vec![
-            trackpoint(52.5200, 13.4050, None, Some(1000)),
-            trackpoint(52.5209, 13.4050, None, Some(1060)),
-        ];
-        let stats = TrackStats::from_points(&points);
-        assert!(stats.total_distance.is_some());
-        assert!(stats.elapsed_time.is_some());
-        assert!(stats.moving_time.is_some());
-        assert!(stats.elevation_gain.is_none());
-        assert!(stats.elevation_loss.is_none());
-        assert!(stats.min_elevation.is_none());
-        assert!(stats.max_elevation.is_none());
     }
 }

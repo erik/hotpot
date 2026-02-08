@@ -125,9 +125,8 @@ pub struct RawActivity {
     pub properties: HashMap<String, serde_json::Value>,
 }
 
-/// How far apart two points can be before we consider them to be
-/// a separate line segment.
-///
+/// How far apart two points can be (meters) before we consider them to be a
+/// separate line segment.
 pub const MAX_POINT_DISTANCE: f64 = 5000.0;
 
 impl RawActivity {
