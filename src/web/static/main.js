@@ -505,8 +505,22 @@ function createFilterHelpModal() {
       <p>
         Generate different heatmaps for cycling vs running, exclude commutes,
         filter by gear, elevation, etc. Any property imported from your activity
-        data can be used.
+        data can be used, as well as the following properties which are computed
+        for each activity on import.
+
       </p>
+
+      <ul class="__properties">
+        <li><code>average_speed</code> — average moving speed (km/h)</li>
+        <li><code>elapsed_time</code> — total time including pauses (seconds)</li>
+        <li><code>elevation_gain</code> — total ascent (meters)</li>
+        <li><code>elevation_loss</code> — total descent (meters)</li>
+        <li><code>max_elevation</code> — highest elevation (meters)</li>
+        <li><code>max_speed</code> — fastest instantaneous speed (km/h)</li>
+        <li><code>min_elevation</code> — lowest elevation (meters)</li>
+        <li><code>moving_time</code> — time spent moving (seconds)</li>
+        <li><code>total_distance</code> — total distance (meters)</li>
+      </ul>
 
       <div class="__heading">Syntax</div>
       <ul>
@@ -515,20 +529,6 @@ function createFilterHelpModal() {
         <li><code>key like "pattern%"</code> — match a pattern, <code>%</code> is a wildcard</li>
         <li><code>has? "key with spaces"</code> — check if a property exists</li>
       </ul>
-
-      <div class="__heading">Computed Properties</div>
-      <p>
-        These are derived from GPS data for all activities:
-        <code>total_distance</code> (m),
-        <code>elapsed_time</code> (s),
-        <code>moving_time</code> (s),
-        <code>elevation_gain</code> (m),
-        <code>elevation_loss</code> (m),
-        <code>min_elevation</code> (m),
-        <code>max_elevation</code> (m),
-        <code>average_speed</code> (km/h),
-        <code>max_speed</code> (km/h)
-      </p>
 
       <div class="__heading">Examples</div>
       <div class="__examples">

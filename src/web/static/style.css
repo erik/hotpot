@@ -414,6 +414,10 @@ body {
         border-radius: var(--radius-sm);
     }
 
+    .__properties {
+        margin: 0.5rem 0;
+    }
+
     .__examples {
         display: grid;
         gap: 0.5rem;
