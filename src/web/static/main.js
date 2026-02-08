@@ -516,15 +516,29 @@ function createFilterHelpModal() {
         <li><code>has? "key with spaces"</code> — check if a property exists</li>
       </ul>
 
+      <div class="__heading">Computed Properties</div>
+      <p>
+        These are derived from GPS data for all activities:
+        <code>total_distance</code> (m),
+        <code>elapsed_time</code> (s),
+        <code>moving_time</code> (s),
+        <code>elevation_gain</code> (m),
+        <code>elevation_loss</code> (m),
+        <code>min_elevation</code> (m),
+        <code>max_elevation</code> (m),
+        <code>average_speed</code> (km/h),
+        <code>max_speed</code> (km/h)
+      </p>
+
       <div class="__heading">Examples</div>
       <div class="__examples">
         <div class="__example">
-          <code>elev_gain > 1000</code>
+          <code>elevation_gain > 1000</code>
           <div class="__desc">basic comparison</div>
         </div>
         <div class="__example">
-          <code>"Total Duration" > 180</code>
-          <div class="__desc">use quotes for keys with spaces</div>
+          <code>total_distance > 100000</code>
+          <div class="__desc">distance in meters</div>
         </div>
         <div class="__example">
           <code>activity_type in [ride, "gravel ride"]</code>
@@ -539,7 +553,7 @@ function createFilterHelpModal() {
           <div class="__desc">property exists</div>
         </div>
         <div class="__example">
-          <code>distance > 100 && elev_gain > 2000</code>
+          <code>total_distance > 100000 && elevation_gain > 2000</code>
           <div class="__desc">combine with &&</div>
         </div>
         <div class="__example">
@@ -547,7 +561,7 @@ function createFilterHelpModal() {
           <div class="__desc">negation</div>
         </div>
         <div class="__example">
-          <code>(a > 1 || b > 2) && c = 3</code>
+          <code>(elevation_gain > 1000 || average_speed > 25) && moving_time > 3600</code>
           <div class="__desc">grouping</div>
         </div>
       </div>

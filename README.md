@@ -133,13 +133,28 @@ Any properties available when the activity was added (either via webhook
 or bulk import) can be used in the filter expression, but the exact names
 will vary based on your data.
 
+The following properties are automatically computed from GPS track data
+for all activities (imported, uploaded, or from Strava):
+
+| Property | Unit | Description |
+| --- | --- | --- |
+| `total_distance` | meters | Total distance (excluding teleport jumps) |
+| `elapsed_time` | seconds | Total time from first to last point |
+| `moving_time` | seconds | Time spent moving (excluding pauses) |
+| `elevation_gain` | meters | Total ascent |
+| `elevation_loss` | meters | Total descent |
+| `min_elevation` | meters | Lowest elevation |
+| `max_elevation` | meters | Highest elevation |
+| `average_speed` | km/h | Average speed while moving |
+| `max_speed` | km/h | Peak speed |
+
 For example, we may want to generate different tiles for cycling vs hiking,
 exclude commutes, which gear we used, a minimum elevation gain, etc.
 
 ```python
 # Comparisons: =, !=, <, <=, >, >=
-elev_gain > 1000
-"Total Distance" >= 100
+elevation_gain > 1000
+total_distance >= 100000
 
 # Match multiple values
 activity_type in [ride, "gravel ride"]
@@ -151,9 +166,9 @@ name like "Morning%"
 has? heart_rate
 
 # Combine multiple expressions
-distance > 100 && elev_gain > 2000
+total_distance > 100000 && elevation_gain > 2000
 !(activity_type in [walk, hike])
-(elev_gain > 1000 || distance > 50) && comute = true
+(elevation_gain > 1000 || total_distance > 50000) && commute = true
 ```
 
 ### Activity Visibility & Privacy
