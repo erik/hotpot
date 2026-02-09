@@ -375,7 +375,7 @@ impl Database {
                    a.file,
                    a.title,
                    a.start_time,
-                   a.properties,
+                   json(a.properties) as properties,
                    a.created_at,
                    COALESCE(
                       COUNT(DISTINCT format('%d/%d/%d', z, x, y)),
