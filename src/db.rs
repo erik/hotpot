@@ -64,10 +64,13 @@ CREATE TABLE IF NOT EXISTS strava_tokens (
 );
 ";
 
-const MIGRATIONS: [&str; 1] = [
+const MIGRATIONS: [&str; 2] = [
     // Keep track of when activities are added to the DB separately from when
     // they occurred.
     "ALTER TABLE activities ADD COLUMN created_at TEXT;",
+    // Requires sqlite3 3.45.0 (2024-01-15), but significantly faster for
+    // unindexed lookups.
+    "UPDATE activities SET properties = jsonb(properties);",
 ];
 
 pub struct Database {
@@ -91,9 +94,14 @@ impl Database {
     }
 
     fn from_connection(manager: SqliteConnectionManager) -> Result<Self> {
-        // Check for version which introduced `->>` syntax (released 2022)
-        if rusqlite::version_number() < 3_038_000 {
-            tracing::warn!("sqlite3 version < 3.38.0, property filtering will not be available");
+        // Recent(ish) sqlite features we rely on:
+        //   - JSON extraction with `->>` (3.38.0 released 2022)
+        //   - JSONB support (3.45.0 released 2024)
+        if rusqlite::version_number() < 3_045_000 {
+            anyhow::bail!(
+                "insufficient sqlite3 version {}, need >= 3.45.0",
+                rusqlite::version()
+            );
         }
 
         let pool = r2d2::Pool::new(manager)?;
