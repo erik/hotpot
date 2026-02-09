@@ -24,6 +24,16 @@ use rusqlite::ToSql;
 use rusqlite::types::ToSqlOutput;
 use serde::{Deserialize, Deserializer};
 
+/// Property keys that have indexed expressions in the database.
+const INDEXED_PROPERTY_KEYS: [&str; 6] = [
+    "activity_type",
+    "total_distance",
+    "elapsed_time",
+    "moving_time",
+    "elevation_gain",
+    "average_speed",
+];
+
 #[derive(Debug, Clone)]
 pub struct PropertyFilter {
     expr: FilterExpr,
@@ -109,17 +119,15 @@ impl FilterExpr {
                     ComparisonOp::Neq => "IS NOT",
                 };
 
-                str.push_str("properties ->> ? ");
+                format_extract_json_key(key, str, params);
+                str.push(' ');
                 str.push_str(op_str);
                 str.push_str(" ?");
-
-                params.push(key);
                 params.push(value);
             }
             FilterExpr::OneOf(key, values) => {
-                str.push_str("properties ->> ? IN (");
-                params.push(key);
-
+                format_extract_json_key(key, str, params);
+                str.push_str(" IN (");
                 for (i, value) in values.iter().enumerate() {
                     if i > 0 {
                         str.push_str(", ");
@@ -130,16 +138,34 @@ impl FilterExpr {
                 str.push(')');
             }
             FilterExpr::HasKey(key) => {
-                str.push_str("properties ->> ? IS NOT NULL");
-                params.push(key);
+                format_extract_json_key(key, str, params);
+                str.push_str(" IS NOT NULL");
             }
             FilterExpr::Like(key, pattern) => {
-                str.push_str("properties ->> ? LIKE ?");
-                params.push(key);
+                format_extract_json_key(key, str, params);
+                str.push_str(" LIKE ?");
                 params.push(pattern);
             }
         }
         str.push(')');
+    }
+}
+
+/// Produce a JSON key extraction expression for sqlite. If the key is one of
+/// the known indexed values, we specify it directly in the query rather than
+/// parameterizing to nudge the query planner into using the index.
+///
+/// TODO: Look into `SELECT ... FROM activities INDEXED BY ...`
+fn format_extract_json_key<'a>(key: &'a String, str: &mut String, params: &mut Vec<&'a dyn ToSql>) {
+    str.push_str("properties ->> ");
+    if INDEXED_PROPERTY_KEYS.contains(&key.as_str()) {
+        str.push('\'');
+        // key is from an allowlist, no SQL injection possible
+        str.push_str(key);
+        str.push('\'');
+    } else {
+        params.push(key);
+        str.push_str("?");
     }
 }
 
@@ -528,8 +554,8 @@ mod tests {
         );
         assert_sql!(
             "activity_type in [gravel, 'road']",
-            "(properties ->> ? IN (?, ?))",
-            ["activity_type", "gravel", "road"]
+            "(properties ->> 'activity_type' IN (?, ?))",
+            ["gravel", "road"]
         );
         assert_sql!(
             "has? heart_rate_data",
@@ -538,8 +564,8 @@ mod tests {
         );
         assert_sql!(
             r#"activity_type like "virtual%""#,
-            "(properties ->> ? LIKE ?)",
-            ["activity_type", "virtual%"]
+            "(properties ->> 'activity_type' LIKE ?)",
+            ["virtual%"]
         );
         assert_sql!(
             "avg_speed > 18 && distance >= 100",

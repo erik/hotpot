@@ -30,6 +30,20 @@ CREATE TABLE IF NOT EXISTS activities (
 
 CREATE UNIQUE INDEX IF NOT EXISTS activities_file ON activities (file);
 
+-- The most frequently queried properties get their own index to avoid scans.
+CREATE INDEX IF NOT EXISTS idx_activities_activity_type
+    ON activities(properties ->> 'activity_type');
+CREATE INDEX IF NOT EXISTS idx_activities_total_distance
+    ON activities(properties ->> 'total_distance');
+CREATE INDEX IF NOT EXISTS idx_activities_elevation_gain
+    ON activities(properties ->> 'elevation_gain');
+CREATE INDEX IF NOT EXISTS idx_activities_average_speed
+    ON activities(properties ->> 'average_speed');
+CREATE INDEX IF NOT EXISTS idx_activities_moving_time
+    ON activities(properties ->> 'moving_time');
+CREATE INDEX IF NOT EXISTS idx_activities_elapsed_time
+    ON activities(properties ->> 'elapsed_time');
+
 CREATE TABLE IF NOT EXISTS activity_tiles (
       id          INTEGER PRIMARY KEY
     , activity_id INTEGER NOT NULL
