@@ -1,4 +1,4 @@
-FROM rust:1-slim-bookworm as builder
+FROM rust:1-slim-trixie as builder
 
 WORKDIR /build
 
@@ -16,7 +16,7 @@ COPY src ./src
 
 RUN cargo build --release
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 # Debian slim images don't have certs available.
 RUN apt-get update && apt-get install -y \
