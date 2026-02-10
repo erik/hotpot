@@ -527,7 +527,7 @@ pub fn upsert(
         "\
         INSERT OR REPLACE \
         INTO activities (file, title, start_time, properties, created_at) \
-        VALUES (?, ?, ?, ?, ?)",
+        VALUES (?, ?, ?, JSONB(?), ?)",
         params![
             name,
             activity.title,
