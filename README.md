@@ -23,7 +23,7 @@ data, [Fly.io]'s smallest instance can render tiles in a few ms.
 cargo build --release
 
 # The binary will be available at ./target/release/hotpot
-hotpot serve
+hotpot --db ./hotpot.sqlite3 serve
 
 # Visit http://127.0.0.1:8080 to browse the map
 ```
@@ -49,11 +49,11 @@ docker run -p 8080:8080 -v ./data:/data ghcr.io/erik/hotpot
 
 ```bash
 # Import an entire directory of activities in parallel
-hotpot import [path/to/files/]
+hotpot --db ./hotpot.sqlite3 import [path/to/files/]
 
 # Import from Strava data export, including Strava metadata (title, which bike
 # you used, the weather, ...)
-hotpot import \
+hotpot --db ./hotpot.sqlite3 import \
     strava_export/activities/ \
     --join strava_export/activities.csv
 ```
@@ -65,7 +65,7 @@ Or use the browser UI by running:
 # that only you can upload.
 export HOTPOT_UPLOAD_TOKEN=xyz...
 
-hotpot serve --upload
+hotpot --db ./hotpot.sqlite3 serve --upload
 
 # Open the browser and open the file upload dialog by clicking the "Add activity
 # files" button
@@ -79,11 +79,11 @@ start visualizing them.
 
 ```bash
 # Run a tile server and web UI on http://127.0,0,1:8080
-hotpot serve
+hotpot --db ./hotpot.sqlite3 serve
 
 # Or generate a static image (to create the bounds, use a tool like
 # https://boundingbox.klokantech.com/)
-hotpot render \
+hotpot --db ./hotpot.sqlite3 render \
     --bounds='-120.7196,32.2459,-116.9234,35.1454' \
     --width 2000 \
     --height 2000 \
@@ -183,9 +183,9 @@ tiles.
 ```bash
 # Create a new area mask. Radius is given in meters, and coordinates are
 # latitude,longitude.
-hotpot mask add "home" --latlng 52.5200,13.4050 --radius 500
-hotpot mask list
-hotpot mask remove "home"
+hotpot --db ./hotpot.sqlite3 mask add "home" --latlng 52.5200,13.4050 --radius 500
+hotpot --db ./hotpot.sqlite3 mask list
+hotpot --db ./hotpot.sqlite3 mask remove "home"
 ```
 
 Area masks are applied when rendering tiles, which means they can be added and
@@ -250,7 +250,7 @@ export STRAVA_CLIENT_ID=... \
        STRAVA_CLIENT_SECRET=...\
        STRAVA_WEBHOOK_SECRET=...
 
-hotpot strava-auth
+hotpot --db ./hotpot.sqlite3 strava-auth
 
 # Authenticate via browser
 open http://127.0.0.1:8080/strava/auth
@@ -267,7 +267,7 @@ export STRAVA_CLIENT_ID=... \
        STRAVA_CLIENT_SECRET=...\
        STRAVA_WEBHOOK_SECRET=...
 
-hotpot serve --strava-webhook
+hotpot --db ./hotpot.sqlite3 serve --strava-webhook
 ```
 
 ## Deployment

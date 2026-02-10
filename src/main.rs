@@ -267,10 +267,10 @@ struct GlobalOpts {
     #[arg(
         short = 'D',
         long = "db",
-        default_value = "./hotpot.sqlite3",
-        conflicts_with = "in_memory"
+        conflicts_with = "in_memory",
+        required_unless_present = "in_memory"
     )]
-    db_path: PathBuf,
+    db_path: Option<PathBuf>,
 
     /// Create an in-memory database (data won't be persisted)
     #[arg(action, long, conflicts_with = "db_path")]
@@ -299,7 +299,7 @@ impl GlobalOpts {
                 "in-memory database is not supported for read-only operations"
             ))
         } else {
-            Database::open(&self.db_path)
+            Database::open(self.db_path.as_ref().unwrap())
         }
     }
 
@@ -308,7 +308,7 @@ impl GlobalOpts {
             tracing::warn!("using empty in-memory DB, data will not be persisted");
             Database::memory()
         } else {
-            Database::new(&self.db_path)
+            Database::new(self.db_path.as_ref().unwrap())
         }
     }
 }
