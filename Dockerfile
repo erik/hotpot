@@ -11,7 +11,11 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
+ARG GIT_HASH
+ENV GIT_HASH=${GIT_HASH}
+
 COPY Cargo.toml Cargo.lock ./
+COPY build.rs ./
 COPY src ./src
 
 RUN cargo build --release

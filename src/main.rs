@@ -282,7 +282,7 @@ struct GlobalOpts {
 }
 
 #[derive(Parser)]
-#[command(author, version, about)]
+#[command(author, version = env!("VERSION_STRING"), about)]
 struct Opts {
     #[clap(flatten)]
     global: GlobalOpts,
