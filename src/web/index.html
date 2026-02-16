@@ -94,7 +94,13 @@
                             <option value="positron">Light</option>
                             <option value="none-black">Solid Black</option>
                             <option value="none-white">Solid White</option>
+                            <option value="raster">Custom Raster</option>
                         </select>
+                    </div>
+
+                    <div class="form-row simple" id="raster-url-input" style="display: none">
+                        <label for="rasterUrl">Raster URL</label>
+                        <input key="rasterUrl" name="rasterUrl" x-debounce placeholder="https://tile.example.com/{z}/{x}/{y}.png" />
                     </div>
 
                     <div class="form-row simple">
@@ -149,6 +155,7 @@
 
         const nodes = {
             gradient: document.getElementById("gradient-input"),
+            rasterUrl: document.getElementById("raster-url-input"),
             properties: document.getElementById("property-modal-link"),
             filterHelp: document.getElementById("filter-help-modal-link"),
             warnings: document.getElementById("warnings-container"),
@@ -164,17 +171,45 @@
             map: "dark-matter-nolabels",
             filter: null,
             gradient: null,
+            rasterUrl: null,
 
             $color: ({ color }) => (color === "custom" ? null : color),
             $gradient: ({ color, gradient }) =>
                 color === "custom" ? gradient : null,
 
-            $styleUrl: ({ map }) => {
+            $rasterUrl: ({ map, rasterUrl }) =>
+                map === "raster" && rasterUrl
+                    ? rasterUrl.replace("{r}", "2x").replace("{ext}", "png")
+                    : null,
+
+            $styleUrl: ({ map, $rasterUrl }) => {
                 switch (map) {
                     case "none-black":
                         return mapStyleBlack;
                     case "none-white":
                         return mapStyleWhite;
+                    case "raster":
+                        return {
+                            version: 8,
+                            sources: {
+                                "raster": {
+                                    type: "raster",
+                                    tiles: [
+                                        $rasterUrl || "https://a.tile.thunderforest.com/landscape/{z}/{x}/{y}.png?apikey={apiKey}",
+                                    ],
+                                    tileSize: 256,
+                                },
+                            },
+                            layers: [
+                                {
+                                    id: "raster",
+                                    type: "raster",
+                                    source: "raster",
+                                    minzoom: 0,
+                                    maxzoom: 22,
+                                },
+                            ],
+                        };
                     default:
                         return `https://basemaps.cartocdn.com/gl/${map}-gl-style/style.json`;
                 }
@@ -193,6 +228,10 @@
             .watch(["color"], ({ color }) => {
                 nodes.gradient.style.display =
                     color === "custom" ? "grid" : "none";
+            })
+            .watch(["map"], ({ map }) => {
+                nodes.rasterUrl.style.display =
+                    map === "raster" ? "grid" : "none";
             })
             .watch(["$styleUrl", "$tileUrl", "size"], ({ $styleUrl }) => {
                 map.setStyle($styleUrl);
