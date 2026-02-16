@@ -100,7 +100,8 @@
 
                     <div class="form-row simple" id="raster-url-input" style="display: none">
                         <label for="rasterUrl">Raster URL</label>
-                        <input key="rasterUrl" name="rasterUrl" x-debounce placeholder="https://tile.example.com/{z}/{x}/{y}.png" />
+                        <input key="rasterUrl" name="rasterUrl" x-debounce
+                            placeholder="https://tile.example.com/{z}/{x}/{y}.png" />
                     </div>
 
                     <div class="form-row simple">
@@ -179,7 +180,7 @@
 
             $rasterUrl: ({ map, rasterUrl }) =>
                 map === "raster" && rasterUrl
-                    ? rasterUrl.replace("{r}", "2x").replace("{ext}", "png")
+                    ? rasterUrl.replace("{r}", "@2x").replace("{ext}", "png")
                     : null,
 
             $styleUrl: ({ map, $rasterUrl }) => {
