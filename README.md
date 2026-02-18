@@ -19,13 +19,9 @@ data, [Fly.io]'s smallest instance can render tiles in a few ms.
 ### Build from source
 
 ```bash
-# Build with Cargo (requires Rust toolchain)
 cargo build --release
 
-# The binary will be available at ./target/release/hotpot
-hotpot serve
-
-# Visit http://127.0.0.1:8080 to browse the map
+./target/release/hotpot --help
 ```
 
 ### Docker
@@ -56,6 +52,10 @@ hotpot import [path/to/files/]
 hotpot import \
     strava_export/activities/ \
     --join strava_export/activities.csv
+
+# Import into existing an existing database. The --db flag works for all
+# subcommands.
+hotpot --db /path/to/db import ...
 ```
 
 Or use the browser UI by running:
