@@ -82,8 +82,8 @@
                     <legend>Map</legend>
 
                     <div class="form-row simple">
-                        <label for="map">Base Map</label>
-                        <select key="map" name="map">
+                        <label for="basemap">Base Map</label>
+                        <select key="basemap" name="basemap">
                             <option value="dark-matter-nolabels" selected>
                                 Dark (no labels)
                             </option>
@@ -147,11 +147,34 @@
             ],
         };
 
+        function getUrlHashParameters() {
+            const parts = window.location.hash.slice(1).split("&");
+            const params = {};
+            for (const part of parts) {
+                const [key, value] = part.split('=');
+                if (key !== "map" && value) {
+                    params[key] = decodeURIComponent(value);
+                }
+            }
+            return params;
+        }
+
+        function setUrlHashParameters(entries) {
+            // Preserve only the Maplibre position
+            const parts = window.location.hash
+                .slice(1)
+                .split("&")
+                .filter(p => p.startsWith("map="));
+
+            parts.push(...entries.map(([k, v]) => `${k}=${encodeURIComponent(v)}`));
+            window.history.replaceState(null, "", "#" + parts.join("&"));
+        }
+
         const map = new maplibregl.Map({
             container: "map",
             style: "https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json",
             center: [0, 0],
-            hash: true,
+            hash: "map",
         });
 
         const nodes = {
@@ -169,22 +192,23 @@
             before: null,
             after: null,
             size: "512",
-            map: "dark-matter-nolabels",
+            basemap: "dark-matter-nolabels",
             filter: null,
             gradient: null,
             rasterUrl: null,
+            ...getUrlHashParameters(),
 
             $color: ({ color }) => (color === "custom" ? null : color),
             $gradient: ({ color, gradient }) =>
                 color === "custom" ? gradient : null,
 
-            $rasterUrl: ({ map, rasterUrl }) =>
-                map === "raster" && rasterUrl
+            $rasterUrl: ({ basemap, rasterUrl }) =>
+                basemap === "raster" && rasterUrl
                     ? rasterUrl.replace("{r}", "@2x").replace("{ext}", "png")
                     : null,
 
-            $styleUrl: ({ map, $rasterUrl }) => {
-                switch (map) {
+            $styleUrl: ({ basemap, $rasterUrl }) => {
+                switch (basemap) {
                     case "none-black":
                         return mapStyleBlack;
                     case "none-white":
@@ -195,9 +219,7 @@
                             sources: {
                                 "raster": {
                                     type: "raster",
-                                    tiles: [
-                                        $rasterUrl || "https://a.tile.thunderforest.com/landscape/{z}/{x}/{y}.png?apikey={apiKey}",
-                                    ],
+                                    tiles: [$rasterUrl],
                                     tileSize: 256,
                                 },
                             },
@@ -212,7 +234,7 @@
                             ],
                         };
                     default:
-                        return `https://basemaps.cartocdn.com/gl/${map}-gl-style/style.json`;
+                        return `https://basemaps.cartocdn.com/gl/${basemap}-gl-style/style.json`;
                 }
             },
             $queryString: ({ before, after, filter, $gradient, $color }) =>
@@ -230,9 +252,9 @@
                 nodes.gradient.style.display =
                     color === "custom" ? "grid" : "none";
             })
-            .watch(["map"], ({ map }) => {
+            .watch(["basemap"], ({ basemap }) => {
                 nodes.rasterUrl.style.display =
-                    map === "raster" ? "grid" : "none";
+                    basemap === "raster" ? "grid" : "none";
             })
             .watch(["$styleUrl", "$tileUrl", "size"], ({ $styleUrl }) => {
                 map.setStyle($styleUrl);
@@ -259,6 +281,11 @@
             })
             .watch(["$tileUrl"], ({ $tileUrl }) => {
                 nodes.tileUrl.innerText = `${$tileUrl}`;
+            })
+            .watch((state) => {
+                const params = Object.entries(state)
+                    .filter(([k, v]) => !k.startsWith("$") && v != null);
+                setUrlHashParameters(params);
             });
 
         nodes.tileUrl.addEventListener("click", async () => {
@@ -282,6 +309,8 @@
                 "input",
                 el.hasAttribute("x-debounce") ? debounce(handler) : handler,
             );
+            // Restore saved value into the form element
+            if (options[key] != null) el.value = options[key];
         });
 
         function updateMapTileSource() {
