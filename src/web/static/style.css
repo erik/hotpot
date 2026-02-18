@@ -4,7 +4,7 @@
     --border: #3a3a44;
     --text-primary: #e2e2e8;
     --text-secondary: #9a9aa6;
-    --text-muted: #6e6e7a;
+    --text-muted: #8e8e8a;
     --accent: #6b8fffde;
     --error: 192, 57, 43;
     --font-ui: system-ui, sans-serif;
@@ -55,7 +55,9 @@ body {
     left: 0;
     max-width: 90%;
     max-height: 90%;
-    background-color: var(--panel-bg);
+    background-color: color-mix(in srgb, var(--panel-bg) 90%, transparent);
+    backdrop-filter: blur(4px);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
     border: 1px solid var(--border);
     border-radius: 0.5rem;
     color: var(--text-secondary);
@@ -158,7 +160,6 @@ body {
 
         &::placeholder {
             font-style: italic;
-            opacity: 0.5;
         }
     }
 
