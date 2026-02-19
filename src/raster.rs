@@ -43,6 +43,7 @@ pub static ORANGE: Lazy<LinearGradient> = Lazy::new(|| {
     LinearGradient::from_stops(&[
         (1, [0xfc, 0x4a, 0x1a, 0xff]),
         (10, [0xf7, 0xb7, 0x33, 0xff]),
+        (50, [0xfd, 0xed, 0xce, 0xff]),
     ])
 });
 
