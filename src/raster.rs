@@ -7,7 +7,6 @@ use anyhow::{Result, anyhow};
 use geo_types::Coord;
 use image::{Rgba, RgbaImage};
 use once_cell::sync::Lazy;
-use palette::{FromColor, IntoColor, Mix, Oklaba, Srgba};
 use rayon::prelude::*;
 use rusqlite::{ToSql, params};
 use serde::{Deserialize, Deserializer};
@@ -149,10 +148,70 @@ impl TileRaster {
     }
 }
 
+fn rgba_to_oklab(rgba: Rgba<u8>) -> [f32; 4] {
+    let [r, g, b, a] = rgba.0;
+    let a = a as f32 / 255.0;
+
+    let lin = |c: u8| -> f32 {
+        let c = c as f32 / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+
+    // RGB -> sRGB
+    let (r, g, b) = (lin(r), lin(g), lin(b));
+
+    // sRGB -> LMS
+    let l = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b).cbrt();
+    let m = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b).cbrt();
+    let s = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b).cbrt();
+
+    // LMS -> Oklab
+    [
+        0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+        1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+        0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
+        a,
+    ]
+}
+
+fn oklab_to_rgba(lab: [f32; 4]) -> Rgba<u8> {
+    let [l, a, b, alpha] = lab;
+
+    // Oklab -> LMS
+    let m = (l - 0.1055613458 * a - 0.0638541728 * b).powi(3);
+    let s = (l - 0.0894841775 * a - 1.2914855480 * b).powi(3);
+    let l = (l + 0.3963377774 * a + 0.2158037573 * b).powi(3);
+
+    // LMS -> sRGB
+    let r = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
+    let g = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
+    let b = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s;
+
+    let encode = |c: f32| -> u8 {
+        let c = c.clamp(0.0, 1.0);
+        let c = if c <= 0.0031308 {
+            12.92 * c
+        } else {
+            1.055 * c.powf(1.0 / 2.4) - 0.055
+        };
+        (c * 255.0).round() as u8
+    };
+
+    Rgba([
+        encode(r),
+        encode(g),
+        encode(b),
+        (alpha * 255.0).round() as u8,
+    ])
+}
+
 /// Interpolate between two Oklaba colors and return sRGB
-fn lerp(a: Oklaba, b: Oklaba, t: f32) -> Rgba<u8> {
-    let rgba = Srgba::from_color(a.mix(b, t)).into_format::<u8, u8>();
-    Rgba::from([rgba.red, rgba.green, rgba.blue, rgba.alpha])
+fn lerp(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t)
 }
 
 struct EnumerateRasterPixels<'a> {
@@ -187,15 +246,10 @@ impl LinearGradient {
     {
         let mut palette = [Rgba::from([0, 0, 0, 0]); 256];
 
-        let oklab_stops: Vec<(u8, Oklaba)> = stops
+        // Color conversions in Oklab space so gradient is nice and smooth.
+        let oklab_stops: Vec<(u8, [f32; 4])> = stops
             .iter()
-            .map(|&(idx, color)| {
-                let rgba: Rgba<u8> = color.into();
-                let srgba: Srgba<u8> = rgba.0.into();
-                let oklab = Oklaba::from_color(srgba.into_format::<f32, f32>());
-
-                (idx, oklab)
-            })
+            .map(|&(idx, color)| (idx, rgba_to_oklab(color.into())))
             .collect();
 
         for window in oklab_stops.windows(2) {
@@ -203,11 +257,13 @@ impl LinearGradient {
             let (end_idx, end_color) = window[1];
 
             for i in start_idx..=end_idx {
-                palette[i as usize] = lerp(
+                let color = lerp(
                     start_color,
                     end_color,
                     (i - start_idx) as f32 / (end_idx - start_idx) as f32,
                 );
+
+                palette[i as usize] = oklab_to_rgba(color);
             }
         }
 
@@ -446,6 +502,39 @@ fn prepare_activities_query<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn approx_eq(a: f32, b: f32) -> bool {
+        (a - b).abs() < 0.0001
+    }
+
+    #[test]
+    fn test_rgba_to_oklab() {
+        // Reference values from https://colorjs.io/tests/conversions.html
+        let cases: &[([u8; 4], [f32; 4])] = &[
+            ([0, 0, 0, 255], [0.0, 0.0, 0.0, 1.0]),
+            ([255, 255, 255, 255], [1.0, 0.0, 0.0, 1.0]),
+            ([255, 0, 0, 255], [0.627955, 0.224863, 0.125846, 1.0]),
+            ([0, 255, 0, 255], [0.86644, -0.233888, 0.179498, 1.0]),
+            ([0, 0, 255, 255], [0.452014, -0.032457, -0.311528, 1.0]),
+            ([0, 255, 255, 255], [0.905399, -0.149444, -0.039398, 1.0]),
+            ([255, 0, 255, 255], [0.701674, 0.274566, -0.169156, 1.0]),
+            ([255, 255, 0, 255], [0.967983, -0.071369, 0.198570, 1.0]),
+        ];
+        for &(rgba, expected) in cases {
+            let rgba = Rgba::from(rgba);
+            let oklab = rgba_to_oklab(rgba);
+            for i in 0..4 {
+                assert!(
+                    approx_eq(oklab[i], expected[i]),
+                    "to_oklab({rgba:?})[{i}]: got {}, expected {}",
+                    oklab[i],
+                    expected[i]
+                );
+            }
+            let reverse = oklab_to_rgba(rgba_to_oklab(rgba));
+            assert_eq!(rgba, reverse, "roundtrip failed for {rgba:?}");
+        }
+    }
 
     #[test]
     fn test_linear_gradient_parse() {
