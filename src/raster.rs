@@ -7,6 +7,7 @@ use anyhow::{Result, anyhow};
 use geo_types::Coord;
 use image::{Rgba, RgbaImage};
 use once_cell::sync::Lazy;
+use palette::{FromColor, IntoColor, Mix, Oklaba, Srgba};
 use rayon::prelude::*;
 use rusqlite::{ToSql, params};
 use serde::{Deserialize, Deserializer};
@@ -148,14 +149,10 @@ impl TileRaster {
     }
 }
 
-/// Linearly interpolate between two colors
-fn lerp(a: Rgba<u8>, b: Rgba<u8>, t: f32) -> Rgba<u8> {
-    Rgba::from([
-        (a[0] as f32 * (1.0 - t) + b[0] as f32 * t) as u8,
-        (a[1] as f32 * (1.0 - t) + b[1] as f32 * t) as u8,
-        (a[2] as f32 * (1.0 - t) + b[2] as f32 * t) as u8,
-        (a[3] as f32 * (1.0 - t) + b[3] as f32 * t) as u8,
-    ])
+/// Interpolate between two Oklaba colors and return sRGB
+fn lerp(a: Oklaba, b: Oklaba, t: f32) -> Rgba<u8> {
+    let rgba = Srgba::from_color(a.mix(b, t)).into_format::<u8, u8>();
+    Rgba::from([rgba.red, rgba.green, rgba.blue, rgba.alpha])
 }
 
 struct EnumerateRasterPixels<'a> {
@@ -190,14 +187,25 @@ impl LinearGradient {
     {
         let mut palette = [Rgba::from([0, 0, 0, 0]); 256];
 
-        for window in stops.windows(2) {
+        let oklab_stops: Vec<(u8, Oklaba)> = stops
+            .iter()
+            .map(|&(idx, color)| {
+                let rgba: Rgba<u8> = color.into();
+                let srgba: Srgba<u8> = rgba.0.into();
+                let oklab = Oklaba::from_color(srgba.into_format::<f32, f32>());
+
+                (idx, oklab)
+            })
+            .collect();
+
+        for window in oklab_stops.windows(2) {
             let (start_idx, start_color) = window[0];
             let (end_idx, end_color) = window[1];
 
             for i in start_idx..=end_idx {
                 palette[i as usize] = lerp(
-                    start_color.into(),
-                    end_color.into(),
+                    start_color,
+                    end_color,
                     (i - start_idx) as f32 / (end_idx - start_idx) as f32,
                 );
             }
