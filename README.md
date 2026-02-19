@@ -14,32 +14,23 @@ data, [Fly.io]'s smallest instance can render tiles in a few ms.
 [Strava webhooks]: https://developers.strava.com/docs/webhooks/
 [Fly.io]: https://fly.io/
 
-## Installation
-
-### Build from source
+## Quick Start
 
 ```bash
-cargo build --release
-
-./target/release/hotpot --help
-```
-
-### Docker
-
-```bash
-# Either pull the pre-built container from GitHub Container Registry
+# Pull the pre-built container from GitHub Container Registry
 docker pull ghcr.io/erik/hotpot
 
 # Or build the Docker image yourself
 docker build -t ghcr.io/erik/hotpot .
 
-# Run the container (always mount a volume at /data for the database)
+# Or build from source
+cargo build --release
+
+# When using Docker, always mount a volume at /data for the database
 docker run -p 8080:8080 -v ./data:/data ghcr.io/erik/hotpot
 
 # Visit http://127.0.0.1:8080 to browse the map
 ```
-
-## Quick Start
 
 ### Import Activities
 
