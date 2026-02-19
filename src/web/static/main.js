@@ -498,72 +498,201 @@ function unsafeHTML(strings, ...values) {
   return template.content;
 }
 
-function createFilterHelpModal() {
-  createModal(
-    "Property Filter Help",
-    unsafeHTML`<div class="filter-help">
-      <p>
-        Generate different heatmaps for cycling vs running, exclude commutes,
-        filter by gear, elevation, etc. Any property imported from your activity
-        data can be used, as well as the following properties which are computed
-        for each activity on import.
-      </p>
+function createHelpModal() {
+  const { div, span, button } = createElement;
 
-      <ul class="__properties">
-        <li><code>average_speed</code> — average moving speed (km/h)</li>
-        <li><code>elapsed_time</code> — total time including pauses (seconds)</li>
-        <li><code>elevation_gain</code> — total ascent (meters)</li>
-        <li><code>elevation_loss</code> — total descent (meters)</li>
-        <li><code>max_elevation</code> — highest elevation (meters)</li>
-        <li><code>max_speed</code> — fastest instantaneous speed (km/h)</li>
-        <li><code>min_elevation</code> — lowest elevation (meters)</li>
-        <li><code>moving_time</code> — time spent moving (seconds)</li>
-        <li><code>total_distance</code> — total distance (km)</li>
-      </ul>
+  const tabs = [
+    { label: "Filters", content: filterHelpContent() },
+    { label: "Gradients", content: gradientHelpContent() },
+    { label: "Basemaps", content: basemapHelpContent() },
+  ];
 
-      <div class="__heading">Syntax</div>
-      <ul>
-        <li><code>=</code> <code>!=</code> <code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code> — supported comparisons</li>
-        <li><code>key in [a, "b c"]</code> — match multiple string values</li>
-        <li><code>key like "pattern%"</code> — match a pattern, <code>%</code> is a wildcard</li>
-        <li><code>has? "key with spaces"</code> — check if a property exists</li>
-      </ul>
-
-      <div class="__heading">Examples</div>
-      <div class="__examples">
-        <div class="__example">
-          <code>elevation_gain > 1000</code>
-          <div class="__desc">basic comparison</div>
-        </div>
-        <div class="__example">
-          <code>"Average Temperature" < 5</code>
-          <div class="__desc">keys with spaces need quotes</div>
-        </div>
-        <div class="__example">
-          <code>activity_type in [ride, "gravel ride"]</code>
-          <div class="__desc">match one of multiple values</div>
-        </div>
-        <div class="__example">
-          <code>name like "Morning%"</code>
-          <div class="__desc">wildcard pattern</div>
-        </div>
-        <div class="__example">
-          <code>has? heart_rate</code>
-          <div class="__desc">property exists</div>
-        </div>
-        <div class="__example">
-          <code>elapsed_time < 3600 && elevation_gain > 300</code>
-          <div class="__desc">combine with &&</div>
-        </div>
-        <div class="__example">
-          <code>!(activity_type in [walk, hike])</code>
-          <div class="__desc">negation</div>
-        </div>
-        <div class="__example">
-          <code>elevation_gain > 1000 || (moving_speed > 30 && commute = true)</code>
-          <div class="__desc">grouping</div>
-        </div>
-      </div>
-    </div>`,
+  const panels = tabs.map(({ content }) =>
+    div({ class: "help-tab-panel" }, content),
   );
+
+  const tabBtns = tabs.map(({ label }, i) => {
+    const btn = button({ class: "help-tab-btn" }, label);
+    btn.addEventListener("click", () => {
+      tabBtns.forEach((b, j) => b.classList.toggle("--active", j === i));
+      panels.forEach((p, j) => p.classList.toggle("--active", j === i));
+    });
+    return btn;
+  });
+
+  tabBtns[0].classList.add("--active");
+  panels[0].classList.add("--active");
+
+  createModal(
+    div({ class: "help-modal-header" }, [
+      span({ class: "__title" }, "Help"),
+      div({ class: "help-tab-bar" }, tabBtns),
+    ]),
+    div({ class: "help-panels" }, panels),
+  );
+}
+
+function filterHelpContent() {
+  return unsafeHTML`<div class="help-content">
+    <p>
+      Choose which activities are included in the heatmap by providing a filter
+      expression.
+    </p>
+
+    <p>
+      These could be used to generate different visualizations for cycling vs
+      running, exclude commutes, filter by gear, elevation, etc.
+    </p>
+
+    <p>
+      Any metadata imported from your activity data can be used, as well as the
+      computed properties below, which are automatically added for each
+      activity.
+    </p>
+
+    <div class="__heading">Filter Syntax</div>
+    <ul>
+      <li>
+        <code>=</code>
+        <code>!=</code>
+        <code>&lt;</code>
+        <code>&lt;=</code>
+        <code>&gt;</code>
+        <code>&gt;=</code>                    — supported comparisons</li>
+      <li><code>key in [a, "b c"]</code>      — match multiple string values</li>
+      <li><code>key like "pattern%"</code>    — match a pattern, <code>%</code> is a wildcard</li>
+      <li><code>has? "key with spaces"</code> — check if a property exists</li>
+    </ul>
+
+    <div class="__heading">Computed Properties</div>
+    <ul class="__properties">
+      <li><code>average_speed</code>  — average moving speed (km/h)</li>
+      <li><code>elapsed_time</code>   — total activity time including pauses (seconds)</li>
+      <li><code>elevation_gain</code> — total ascent (meters)</li>
+      <li><code>elevation_loss</code> — total descent (meters)</li>
+      <li><code>max_elevation</code>  — highest elevation (meters)</li>
+      <li><code>max_speed</code>      — fastest instantaneous speed (km/h)</li>
+      <li><code>min_elevation</code>  — lowest elevation (meters)</li>
+      <li><code>moving_time</code>    — time spent moving (seconds)</li>
+      <li><code>total_distance</code> — total distance (km)</li>
+    </ul>
+
+    <div class="__heading">Examples</div>
+    <div class="__examples">
+      <div class="__example">
+        <code>elevation_gain > 1000</code>
+        <div class="__desc">basic comparison</div>
+      </div>
+      <div class="__example">
+        <code>"Average Temperature" < 5</code>
+        <div class="__desc">keys with spaces need quotes</div>
+      </div>
+      <div class="__example">
+        <code>activity_type in [ride, "gravel ride"]</code>
+        <div class="__desc">match one of multiple values</div>
+      </div>
+      <div class="__example">
+        <code>name like "Morning%"</code>
+        <div class="__desc">wildcard pattern</div>
+      </div>
+      <div class="__example">
+        <code>has? heart_rate</code>
+        <div class="__desc">property exists</div>
+      </div>
+      <div class="__example">
+        <code>elapsed_time < 3600 && elevation_gain > 300</code>
+        <div class="__desc">combine with &&</div>
+      </div>
+      <div class="__example">
+        <code>!(activity_type in [walk, hike])</code>
+        <div class="__desc">negation</div>
+      </div>
+      <div class="__example">
+        <code>elevation_gain > 1000 || (moving_speed > 30 && commute = true)</code>
+        <div class="__desc">grouping</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function gradientHelpContent() {
+  return unsafeHTML`<div class="help-content">
+    <p>
+      The gradient controls the color palette used on the heatmap. It's a simple
+      mapping of how many times a given tile pixel was visited at each zoom
+      level to a color.
+    </p>
+
+    <p>
+      This can either be one of the built-in gradients or a semicolon separated
+      list of <code>threshold:color</code> stops. Pixels visited fewer than the
+      first threshold are transparent; pixels visited more than the last
+      threshold use the last color.
+    </p>
+
+    <p>
+      Colors are given as one of <code>RGB</code>, <code>RRGGBB</code>, or
+      <code>RRGGBBAA</code>. When an alpha value is not given, it's assumed to
+      be fully opaque.
+    </p>
+
+    <p>
+      The threshold can be as high as 255, but generally the full range won't be
+      needed. At higher zoom levels, unless you ride the same route every single
+      day for multiple years, generally the visit count will be relatively low.
+    </p>
+
+    <div class="__heading">Examples</div>
+    <div class="__examples">
+      <div class="__example">
+        <code>1:FF0000;255:FFFFFF</code>
+        <div class="__swatch" style="background-image: linear-gradient(in oklab to right, rgb(255 0 0), white)"></div>
+      </div>
+      <div class="__example">
+        <code>1:000;10:fff</code>
+        <div class="__swatch" style="background-image: linear-gradient(in oklab to right, black, white)"></div>
+      </div>
+      <div class="__example">
+        <code>1:0d0221;10:7b2d8b;50:f7644a</code>
+        <div class="__swatch" style="background-image: linear-gradient(in oklab to right, rgb(13 2 33), rgb(123 45 139) 18%, rgb(247 100 74))"></div>
+      </div>
+      <div class="__example">
+        <code>1:322bb3;10:9894e5;20:fff</code>
+        <div class="__swatch" style="background-image: linear-gradient(in oklab to right, rgb(50 43 179), rgb(152 148 229) 47%, white)"></div>
+      </div>
+      <div class="__example">
+        <code>1:FF000080;10:FF0000</code>
+        <div class="__swatch" style="background-image: linear-gradient(in oklab to right, rgb(255 0 0 / 50%), rgb(255 0 0))"></div>
+      </div>
+      <div class="__example">
+        <code>1:00000077;15:6a040f;40:f00</code>
+        <div class="__swatch" style="background-image: linear-gradient(in oklab to right, rgb(0 0 0 / 47%), rgb(106 4 15) 36%, rgb(255 0 0))"></div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function basemapHelpContent() {
+  return unsafeHTML`<div class="help-content">
+    <p>
+      In addition to the minimal built-in basemaps, custom raster tile layers
+      can be used as the background layer. First set the basemap to <code>Custom
+      Raster</code>, then paste in the tile URL, which will look something like
+      <code>https://example.com/{z}/{x}/{y}.png</code>.
+    </p>
+
+    <p>
+      <a href="https://leaflet-extras.github.io/leaflet-providers/preview/">Leaflet-providers</a>
+      has a large list of (mostly) freely available tile layers, although some
+      may require an API key.
+    </p>
+
+    <p>
+      This is also a tile server, which means you can render two separate
+      heatmaps on top of each other. For example, set the date filters to select
+      last year's activities with one gradient, copy the formatted tile URL as
+      the basemap, then set the date filters to select this year's activities
+      with a different gradient.
+    </p>
+  </div>`;
 }

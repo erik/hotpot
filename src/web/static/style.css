@@ -70,6 +70,7 @@ body {
     details {
         margin: 0;
         padding: 0;
+        position: relative;
     }
 
     details[open] {
@@ -80,13 +81,29 @@ body {
         }
     }
 
+    .modal-link {
+        color: var(--accent);
+        cursor: pointer;
+        font-size: var(--text-xs);
+        &:hover {
+            opacity: 0.85;
+        }
+    }
+
+    #help-modal-link {
+        position: absolute;
+        top: 0;
+        right: 0.5rem;
+        line-height: calc(var(--text-lg) * 1.2);
+    }
+
     summary {
         user-select: none;
         cursor: pointer;
 
         list-style: none;
         padding-right: 0.5rem;
-        align-items: center;
+        align-items: baseline;
         display: flex;
         font-size: var(--text-lg);
 
@@ -205,14 +222,6 @@ body {
 
         > label {
             flex: 1;
-        }
-    }
-
-    .filter-link {
-        color: var(--accent);
-        cursor: pointer;
-        &:hover {
-            opacity: 0.85;
         }
     }
 }
@@ -387,10 +396,88 @@ body {
     }
 }
 
-.modal .filter-help {
+/* Help modal: tabs live inside the header bar */
+.modal .__panel > .__header:has(.help-tab-bar) {
+    padding-bottom: 0;
+}
+
+.modal .help-modal-header {
+    display: flex;
+    flex-direction: column;
+}
+
+.modal .help-tab-bar {
+    display: flex;
+    margin-top: 0.5rem;
+}
+
+.modal .help-tab-btn {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    padding: 0.25rem 0.75rem 0.5rem;
+    margin-bottom: -1px;
+    transition:
+        color 150ms,
+        border-color 150ms;
+
+    &:hover {
+        color: var(--text-secondary);
+    }
+
+    &.--active {
+        color: var(--text-primary);
+        border-bottom-color: var(--accent);
+    }
+}
+
+.modal .__body:has(.help-panels) {
+    overflow: hidden;
+    padding: 0;
+    max-height: none;
+}
+
+.modal .help-panels {
+    display: grid;
+}
+
+.modal .help-tab-panel {
+    grid-area: 1 / 1;
+    visibility: hidden;
+    overflow-y: auto;
+    max-height: 50vh;
+    padding: 1rem;
+
+    &.--active {
+        visibility: visible;
+    }
+}
+
+.modal .help-content {
     p {
-        margin: 0 0 0.25rem;
+        margin: 0 0 0.5rem;
         line-height: 1.5;
+    }
+
+    p + p {
+        margin-bottom: 1rem;
+    }
+
+    a {
+        color: var(--accent);
+        &:hover {
+            opacity: 0.85;
+        }
+    }
+
+    .__swatch {
+        height: 0.5rem;
+        margin-top: 0.5rem;
+        border-radius: var(--radius-sm);
     }
 
     .__heading {
@@ -438,10 +525,9 @@ body {
         border-radius: var(--radius);
         padding: 0.5rem 0.75rem;
 
-        .__code {
-            font-family: var(--font-mono);
-            font-size: var(--text-sm);
-            color: var(--text-primary);
+        code {
+            display: block;
+            word-break: break-all;
         }
 
         .__desc {

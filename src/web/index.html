@@ -25,7 +25,8 @@
     <div id="map"></div>
     <div id="map-overlay">
         <details>
-            <summary>Settings</summary>
+            <summary><span>Settings</span></summary>
+            <span id="help-modal-link" class="modal-link">Help</span>
 
             <form class="settings" autocomplete="off">
                 <fieldset>
@@ -45,8 +46,7 @@
                     <div class="form-row">
                         <div class="filter-label">
                             <label for="filter">Property Filter</label>
-                            <span class="filter-link" id="property-modal-link">Properties</span>
-                            <span class="filter-link" id="filter-help-modal-link">Help</span>
+                            <span class="modal-link" id="property-modal-link">Properties</span>
                         </div>
                         <textarea x-debounce key="filter" name="filter"
                             placeholder='e.g. elevation_gain > 1000'></textarea>
@@ -181,7 +181,7 @@
             gradient: document.getElementById("gradient-input"),
             rasterUrl: document.getElementById("raster-url-input"),
             properties: document.getElementById("property-modal-link"),
-            filterHelp: document.getElementById("filter-help-modal-link"),
+            help: document.getElementById("help-modal-link"),
             warnings: document.getElementById("warnings-container"),
             activityCount: document.getElementById("activity-count"),
             tileUrl: document.getElementById("tile-url"),
@@ -344,9 +344,7 @@
         nodes.properties.addEventListener("click", () =>
             createPropertyModal(globalThis.ACTIVITY_PROPERTIES),
         );
-        nodes.filterHelp.addEventListener("click", () =>
-            createFilterHelpModal(),
-        );
+        nodes.help.addEventListener("click", () => createHelpModal());
     </script>
 </body>
 
