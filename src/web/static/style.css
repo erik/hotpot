@@ -1,11 +1,11 @@
 :root {
-    --panel-bg: #1c1c22;
-    --input-bg: #252530;
-    --border: #3a3a44;
-    --text-primary: #e2e2e8;
-    --text-secondary: #9a9aa6;
-    --text-muted: #8e8e8a;
-    --accent: #6b8fffde;
+    --panel-bg: #f2f2f6;
+    --input-bg: #fff;
+    --border: #d4d4d8;
+    --text-primary: #272727;
+    --text-secondary: #464647;
+    --text-muted: #4c4c4c;
+    --accent: #6b8fff;
     --error: 192, 57, 43;
     --font-ui: system-ui, sans-serif;
     --font-mono: ui-monospace, monospace;
@@ -14,8 +14,6 @@
     --text-sm: 0.875rem;
     --text-md: 0.875rem;
     --text-lg: 1.125rem;
-    --text-xl: 1.25rem;
-
     --radius-sm: 0.3rem;
     --radius: 0.5rem;
     --radius-lg: 0.8rem;
@@ -55,12 +53,8 @@ body {
     left: 0;
     max-width: 90%;
     max-height: 90%;
-    background-color: color-mix(in srgb, var(--panel-bg) 90%, transparent);
-    backdrop-filter: blur(4px);
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
-    border: 1px solid var(--border);
+    background-color: var(--panel-bg);
     border-radius: 0.5rem;
-    color: var(--text-secondary);
     font-size: var(--text-md);
     padding: 0.5rem;
     margin: 1rem;
@@ -125,21 +119,8 @@ body {
 
 .settings {
     fieldset {
-        border: 1px solid var(--border);
-        border-radius: var(--radius);
-        margin: 0;
-        margin-top: 1em;
-        + fieldset {
-            margin-top: 1.2em;
-        }
-    }
-
-    legend {
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        font-size: var(--text-sm);
-        color: var(--text-second);
-        user-select: none;
+        border: none;
+        margin: 1em 0 0;
     }
 
     input,
