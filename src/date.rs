@@ -5,6 +5,9 @@ use serde::Deserializer;
 use serde::de::Error;
 use time::Date;
 
+pub const YYYY_MM_DD: &[time::format_description::FormatItem<'static>] =
+    time::macros::format_description!("[year]-[month]-[day]");
+
 struct Visitor<T>(PhantomData<T>);
 
 pub mod parse {

@@ -12,6 +12,7 @@ use rusqlite::{ToSql, params};
 use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime};
 
+use crate::date::YYYY_MM_DD;
 use crate::filter::PropertyFilter;
 
 const SCHEMA: &str = "\
@@ -190,6 +191,8 @@ pub struct Config {
     pub trim_dist: f64,
     /// Areas to hide activity data.
     pub activity_mask: Vec<ActivityMask>,
+    /// Never fetch activities occurring before this date.
+    pub fetch_cutoff: Option<Date>,
 }
 
 impl Config {
@@ -208,6 +211,9 @@ impl Config {
                 "tile_extent" => cfg.tile_extent = value.parse()?,
                 "trim_dist" => cfg.trim_dist = value.parse()?,
                 "activity_masks" => cfg.activity_mask = serde_json::from_str(&value)?,
+                "fetch_cutoff" => {
+                    cfg.fetch_cutoff = Some(Date::parse(&value, YYYY_MM_DD)?);
+                }
                 key => tracing::warn!("Ignoring unknown config key: {}", key),
             }
         }
@@ -228,6 +234,9 @@ impl Config {
         stmt.execute(params!["tile_extent", &self.tile_extent])?;
         stmt.execute(params!["trim_dist", &self.trim_dist])?;
         stmt.execute(params!["activity_masks", &activity_masks])?;
+        if let Some(cutoff) = self.fetch_cutoff {
+            stmt.execute(params!["fetch_cutoff", cutoff.format(YYYY_MM_DD)?])?;
+        }
 
         Ok(())
     }
@@ -249,6 +258,7 @@ impl Default for Config {
             tile_extent: DEFAULT_TILE_EXTENT,
             trim_dist: DEFAULT_TRIM_DIST,
             activity_mask: vec![],
+            fetch_cutoff: None,
         }
     }
 }

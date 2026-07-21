@@ -664,6 +664,16 @@ impl PropertySource {
     }
 }
 
+/// The set of `file` keys already stored, used to skip re-importing activities.
+pub fn known_files(conn: &rusqlite::Connection) -> Result<HashSet<String>> {
+    let files = conn
+        .prepare("SELECT DISTINCT file FROM activities")?
+        .query_map([], |row| row.get(0))?
+        .filter_map(|n| n.ok())
+        .collect();
+    Ok(files)
+}
+
 pub fn import_path(
     path: &Path,
     db: &Database,
@@ -673,11 +683,7 @@ pub fn import_path(
     let conn = db.connection()?;
 
     // Skip any files that are already in the database.
-    let known_files: HashSet<String> = conn
-        .prepare("SELECT DISTINCT file FROM activities")?
-        .query_map([], |row| row.get(0))?
-        .filter_map(|n| n.ok())
-        .collect();
+    let known_files = known_files(&conn)?;
 
     tracing::info!(
         path = ?path,

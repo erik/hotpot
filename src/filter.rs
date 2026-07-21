@@ -1,6 +1,6 @@
 //! Property filter expression language.
 //!
-//! ```
+//! ```text
 //! <expr>   := <expr> || <expr>
 //!           | <expr> && <expr>
 //!           | !(<expr>)

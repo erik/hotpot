@@ -4,15 +4,13 @@
 
 Render customizable activity heatmap images from GPS tracks extracted from GPX,
 TCX, and FIT files. Includes a built-in web server for [XYZ tiles] and endpoints
-to add new data via HTTP POST or [Strava webhooks].
+to add new data via HTTP POST or from external APIs.
 
 Designed to run locally or be self-hosted. Lightweight enough to run on free
 tiers of most Docker-compatible platforms. Even with 100,000 km of activity
-data, [Fly.io]'s smallest instance can render tiles in a few ms.
+data tiles render in a few ms.
 
 [XYZ tiles]: https://en.wikipedia.org/wiki/Tiled_web_map
-[Strava webhooks]: https://developers.strava.com/docs/webhooks/
-[Fly.io]: https://fly.io/
 
 ## Quick Start
 
@@ -198,11 +196,12 @@ sqlite3 hotpot.db "INSERT OR REPLACE INTO config (key, value) VALUES ('trim_dist
 
 ## Activity Uploads
 
-Hotpot supports two mechanisms for adding new data to the `sqlite3` database
+Hotpot supports multiple mechanisms for adding new data to the `sqlite3` database
 over HTTP:
 
 1. `POST /upload`: Manually upload a single GPX, TCX, or FIT file
-2. Strava webhook: Subscribe to new activity uploads automatically
+2. intervals.icu: Poll for new activity data
+3. Strava webhook: Subscribe to new activity uploads automatically
 
 ### HTTP Upload
 
@@ -220,6 +219,35 @@ curl -X POST \
 The `Authorization` header is required only when `HOTPOT_UPLOAD_TOKEN` is set.
 When not provided, unauthenticated uploads are enabled.
 
+### intervals.icu
+
+[intervals.icu](https://intervals.icu) can aggregate activity data from many
+sources (Garmin, Wahoo, Strava, etc.) and exposes them via a simple API (grab an
+API key from Settings > Developer Settings). To keep setup simple, this source
+is poll-based: hotpot fetches new activities whenever its
+`POST /external/intervals.icu/poll` endpoint is hit.
+
+```bash
+curl -X POST \
+  https://hotpot.example.com/external/intervals.icu/poll \
+  --header 'Authorization: Bearer MY_TOKEN_HERE'
+```
+
+By default each poll will look for new activities from the last 30 days. This
+can be changed with the query the `?lookback=N` query parameter (in days).
+
+Note that due to Strava API limitations, any activities which are _solely_
+sourced from Strava are not available for import via intervals.icu. An activity
+uploaded to both Garmin and Strava would be accessible however.
+
+Set the `intervals_icu_import_after` config key to set the furthest back you
+want to pull activities. Can be helpful if you set up the API integration after
+already importing a local directory of files.
+
+```bash
+sqlite3 hotpot.db "INSERT OR REPLACE INTO config (key, value) VALUES ('intervals_icu_import_after', '2026-01-01')"
+```
+
 ### Strava Webhook
 
 If you're already uploading activity data to Strava, you can use their activity
@@ -230,8 +258,10 @@ documentation](https://developers.strava.com/) to create your own application.
 
 > **NOTE**
 >
-> Strava limits new APIs to only allow the owner of the API to authenticate.
-> You won't be able to share this with multiple people.
+> Strava no longer supports API access without a premium membership.
+>
+> Additionally, only allow the owner of the API (i.e. you) will be allowed to
+> authenticate. You won't be able to share this with multiple people.
 
 Next, we can use oauth to authenticate our account and save the API tokens in
 the database.
@@ -273,40 +303,6 @@ docker run -p 8080:8080 -v ./data:/data hotpot
 
 Since we're using sqlite as our data store, it's easy to first run the bulk
 import locally, then copy the database over to a remote host.
-
-### Fly Quick Start
-
-Hotpot should comfortably fit within Fly.io's free tier, and handles the
-scale-to-zero behavior gracefully. Follow their [setup
-instructions](https://fly.io/docs/hands-on/install-flyctl/) first.
-
-Steps below assume you've cloned this repo locally and already created a local
-database.
-
-```bash
-# Create app
-fly launch --ha false
-
-# Create and attach volume
-fly volumes create hotpot_db -a YOUR_APP_NAME --size 1
-echo '
-[mounts]
-  source="hotpot_db"
-  destination="/data"
-' >> fly.toml
-
-# Set secrets if using Strava
-fly secrets set \
-    STRAVA_CLIENT_ID=... \
-    STRAVA_CLIENT_SECRET=...\
-    STRAVA_WEBHOOK_SECRET=...
-
-# Deploy and copy local database to remote host
-fly deploy
-fly proxy 10022:22 &
-scp -P 10022 ./hotpot.sqlite3* root@localhost:/data/
-fly app restart
-```
 
 ## License
 
