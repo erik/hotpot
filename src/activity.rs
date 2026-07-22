@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use anyhow::{Result, anyhow};
 use csv::StringRecord;
-use fitparser::de::{DecodeOption, from_reader_with_options};
+use fitparser::de::{DecodeOption, FitObject, FitStreamProcessor};
 use fitparser::profile::MesgNum;
 use flate2::read::GzDecoder;
 use geo::{EuclideanDistance, HasDimensions, MapCoords, Simplify};
@@ -252,19 +252,38 @@ const FIT_VIRTUAL_SPORTS: [&str; 4] = [
     "indoor_running",
 ];
 
-fn parse_fit<R: Read>(r: &mut R) -> Result<Option<RawActivity>> {
+fn parse_fit<R: Read>(reader: &mut R) -> Result<Option<RawActivity>> {
     const SCALE_FACTOR: f64 = (1u64 << 32) as f64 / 360.0;
 
-    let opts = [
-        DecodeOption::SkipDataCrcValidation,
-        DecodeOption::SkipHeaderCrcValidation,
-    ]
-    .into();
+    let mut fit_stream = FitStreamProcessor::new();
+    fit_stream.add_option(DecodeOption::SkipDataCrcValidation);
+    fit_stream.add_option(DecodeOption::SkipHeaderCrcValidation);
+
+    let mut buffer = Vec::new();
+    reader.read_to_end(&mut buffer)?;
+    let mut input = buffer.as_slice();
 
     let mut properties = HashMap::new();
     let mut start_time = None;
     let mut track_points = vec![];
-    for data in from_reader_with_options(r, &opts)? {
+
+    while !input.is_empty() {
+        let (rest, obj) = fit_stream.deserialize_next(input)?;
+        input = rest;
+
+        let msg = match obj {
+            FitObject::DataMessage(message) => message,
+
+            // Reset accumulator/definition state between chained FIT files.
+            FitObject::Crc(_) => {
+                fit_stream.reset();
+                continue;
+            }
+
+            FitObject::Header(_) | FitObject::DefinitionMessage(_) => continue,
+        };
+
+        let data = fit_stream.decode_message(msg)?;
         match data.kind() {
             // There's one FileId block per file and one or more sessions.
             // Currently not really supporting the concept of multi-session
