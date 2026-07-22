@@ -67,7 +67,7 @@ After importing, you'll have a SQLite database with all your activities and can
 start visualizing them.
 
 ```bash
-# Run a tile server and web UI on http://127.0,0,1:8080
+# Run a tile server and web UI on http://127.0.0.1:8080
 hotpot serve
 
 # Or generate a static image (to create the bounds, use a tool like
@@ -138,7 +138,7 @@ has? heart_rate
 
 # Combine multiple expressions
 elapsed_time < 3600 && elevation_gain > 300
-elevation_gain > 1000 || (moving_speed > 30 && commute = true)
+elevation_gain > 1000 || (average_speed > 30 && commute = true)
 ```
 
 Any properties available when the activity was imported can be used in the filter
@@ -191,7 +191,8 @@ HTTP API or via the webhook. The value can also be modified directly if
 necessary.
 
 ```bash
-sqlite3 hotpot.db "INSERT OR REPLACE INTO config (key, value) VALUES ('trim_dist', '500.0')"
+sqlite3 hotpot.sqlite3 \
+    "INSERT OR REPLACE INTO config (key, value) VALUES ('trim_dist', '500.0')"
 ```
 
 ## Activity Uploads
@@ -200,7 +201,7 @@ Hotpot supports multiple mechanisms for adding new data to the `sqlite3` databas
 over HTTP:
 
 1. `POST /upload`: Manually upload a single GPX, TCX, or FIT file
-2. intervals.icu: Poll for new activity data
+2. intervals.icu: Fetch new activity data on demand (CLI or HTTP)
 3. Strava webhook: Subscribe to new activity uploads automatically
 
 ### HTTP Upload
@@ -210,9 +211,13 @@ command line can be `POST`ed to the server via the `/upload` endpoint using
 `multipart/form-data` encoding.
 
 ```bash
+export HOTPOT_UPLOAD_TOKEN=xyz...
+
+hotpot serve --upload
+
 curl -X POST \
   http://hotpot.example.com/upload \
-  --header 'Authorization: Bearer MY_TOKEN_HERE' \
+  --header "Authorization: Bearer $HOTPOT_UPLOAD_TOKEN" \
   --form file=@activity.gpx
 ```
 
@@ -221,47 +226,60 @@ When not provided, unauthenticated uploads are enabled.
 
 ### intervals.icu
 
-[intervals.icu](https://intervals.icu) can aggregate activity data from many
-sources (Garmin, Wahoo, Strava, etc.) and exposes them via a simple API (grab an
-API key from Settings > Developer Settings). To keep setup simple, this source
-is poll-based: hotpot fetches new activities whenever its
-`POST /external/intervals.icu/poll` endpoint is hit.
+[intervals.icu](https://intervals.icu) aggregates activity data from many
+sources (Garmin, Wahoo, Strava, etc.) and exposes them over a single API. This
+is a pull-based source, so new activities are fetched either from the command
+line or when triggered over HTTP. Both paths will de-duplicate activities and
+are safe to re-run.
+
+Grab an API key on intervals.icu from Settings > Developer Settings, and see
+[here](https://forum.intervals.icu/t/api-access-to-intervals-icu/609) for more
+details.
 
 ```bash
+export INTERVALS_ICU_API_KEY=abc... \
+       HOTPOT_UPLOAD_TOKEN=xyz...
+
+# Import activities uploaded in the last 30 days
+hotpot fetch intervals-icu --lookback 30
+
+# Start server with the fetch endpoint enabled.
+hotpot serve --fetch
+
+# Trigger an import of last 30 days
 curl -X POST \
-  https://hotpot.example.com/external/intervals.icu/poll \
-  --header 'Authorization: Bearer MY_TOKEN_HERE'
+  https://hotpot.example.com/fetch/intervals.icu?lookback=30 \
+  --header "Authorization: Bearer $HOTPOT_UPLOAD_TOKEN"
 ```
 
-By default each poll will look for new activities from the last 30 days. This
-can be changed with the query the `?lookback=N` query parameter (in days).
-
 Note that due to Strava API limitations, any activities which are _solely_
-sourced from Strava are not available for import via intervals.icu. An activity
-uploaded to both Garmin and Strava would be accessible however.
+sourced from Strava are not available for import via intervals.icu. If the same
+activity was uploaded to Garmin as well as Strava though, it would be
+accessible.
 
-Set the `intervals_icu_import_after` config key to set the furthest back you
-want to pull activities. Can be helpful if you set up the API integration after
-already importing a local directory of files.
+Set the `fetch_cutoff` config key to set the furthest back you want to pull
+activities. Can be helpful if you set up the API integration after already
+importing a local directory of files.
 
 ```bash
-sqlite3 hotpot.db "INSERT OR REPLACE INTO config (key, value) VALUES ('intervals_icu_import_after', '2026-01-01')"
+sqlite3 hotpot.sqlite3 \
+    "INSERT OR REPLACE INTO config (key, value) VALUES ('fetch_cutoff', '2026-01-01')"
 ```
 
 ### Strava Webhook
+
+> **NOTE**
+>
+> Strava **no longer supports API access** without a premium membership.
+>
+> Additionally, only the owner of the API (i.e. you) will be able to
+> authenticate. You won't be able to share this with multiple people.
 
 If you're already uploading activity data to Strava, you can use their activity
 webhook to import new activities automatically.
 
 To get started, follow the [Strava API
 documentation](https://developers.strava.com/) to create your own application.
-
-> **NOTE**
->
-> Strava no longer supports API access without a premium membership.
->
-> Additionally, only allow the owner of the API (i.e. you) will be allowed to
-> authenticate. You won't be able to share this with multiple people.
 
 Next, we can use oauth to authenticate our account and save the API tokens in
 the database.
