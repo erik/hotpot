@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS activity_tiles (
 );
 
 CREATE INDEX IF NOT EXISTS activity_tiles_activity_id ON activity_tiles (activity_id);
-CREATE INDEX IF NOT EXISTS activity_tiles_zxy ON activity_tiles (z, x, y);
+CREATE INDEX IF NOT EXISTS activity_tiles_zxy_coords ON activity_tiles (z, x, y, coords);
 
 CREATE TABLE IF NOT EXISTS strava_tokens (
       athlete_id    INTEGER PRIMARY KEY
@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS strava_tokens (
 );
 ";
 
-const MIGRATIONS: [&str; 2] = [
+const MIGRATIONS: [&str; 3] = [
     // Keep track of when activities are added to the DB separately from when
     // they occurred.
     "ALTER TABLE activities ADD COLUMN created_at TEXT;",
@@ -59,6 +59,9 @@ const MIGRATIONS: [&str; 2] = [
     // lookups (as with our property filters). Requires sqlite 3.45.0+
     // (2024-01-15)
     "UPDATE activities SET properties = jsonb(properties);",
+    // Previous index wasn't covering, which required additional lookups for
+    // tile data queries.
+    "DROP INDEX IF EXISTS activity_tiles_zxy;",
 ];
 
 pub struct Database {
