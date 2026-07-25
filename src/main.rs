@@ -12,6 +12,7 @@ use time::Date;
 use activity::PropertySource;
 
 use crate::db::{ActivityFilter, Database};
+use crate::external::intervals_icu::{IntervalsIcuAuth, IntervalsIcuClient};
 use crate::filter::PropertyFilter;
 use crate::raster::{LinearGradient, PINKISH};
 use crate::tile::{LngLat, Tile};
@@ -19,6 +20,7 @@ use crate::tile::{LngLat, Tile};
 mod activity;
 mod date;
 mod db;
+mod external;
 mod filter;
 mod raster;
 mod strava;
@@ -48,6 +50,9 @@ enum Commands {
 
     /// Authenticate with Strava to fetch OAuth tokens for webhook.
     StravaAuth(StravaAuthCmdArgs),
+
+    /// Fetch new activities from an external service into the database.
+    Fetch(FetchCmdArgs),
 
     /// Add or remove areas to hide from rendered heatmaps.
     Mask(MaskCmdArgs),
@@ -208,6 +213,11 @@ struct ServeCmdArgs {
     #[arg(long, default_value = "false")]
     render: bool,
 
+    /// Enables `/fetch/:source` for pulling new activities from configured
+    /// external sources.
+    #[arg(long, default_value = "false")]
+    fetch: bool,
+
     /// Enable Strava activity webhook
     ///
     /// Use `strava-auth` subcommand to grab OAuth tokens.
@@ -228,6 +238,24 @@ struct StravaAuthCmdArgs {
     /// Port to listen on
     #[arg(short, long, default_value = "8080")]
     port: u16,
+}
+
+#[derive(Args)]
+struct FetchCmdArgs {
+    /// Number of days to look back for new activities.
+    #[arg(short, long, default_value = "30", global = true)]
+    lookback: u32,
+
+    #[command(subcommand)]
+    source: FetchSource,
+}
+
+#[derive(Subcommand)]
+enum FetchSource {
+    /// Fetch new activities from intervals.icu.
+    ///
+    /// Requires the `INTERVALS_ICU_API_KEY` environment variable.
+    IntervalsIcu,
 }
 
 #[derive(Args)]
@@ -339,6 +367,7 @@ fn run() -> Result<()> {
 
     match opts.cmd {
         Commands::Activities(args) => command_activity_info(opts.global, args)?,
+        Commands::Fetch(args) => command_fetch(opts.global, args)?,
         Commands::Import(args) => command_import_activities(opts.global, args)?,
         Commands::Mask(args) => command_mask(opts.global, args)?,
         Commands::Render(args) => command_render_view(opts.global, args)?,
@@ -461,6 +490,7 @@ fn command_serve(global: GlobalOpts, args: ServeCmdArgs) -> Result<()> {
         port,
         upload,
         render,
+        fetch,
         strava_webhook,
         cors,
     } = args;
@@ -471,6 +501,7 @@ fn command_serve(global: GlobalOpts, args: ServeCmdArgs) -> Result<()> {
         strava_webhook,
         upload,
         render,
+        fetch,
         tiles: true,
         strava_auth: false,
     };
@@ -494,6 +525,7 @@ fn command_strava_auth(global: GlobalOpts, args: StravaAuthCmdArgs) -> Result<()
         strava_webhook: false,
         upload: false,
         render: false,
+        fetch: false,
     };
 
     let config = web::Config {
@@ -509,6 +541,26 @@ fn command_strava_auth(global: GlobalOpts, args: StravaAuthCmdArgs) -> Result<()
         addr
     );
     web::run_blocking(addr, db, config)
+}
+
+fn command_fetch(global: GlobalOpts, args: FetchCmdArgs) -> Result<()> {
+    let db = global.database()?;
+    let db_config = db.load_config()?;
+    let rt = tokio::runtime::Runtime::new()?;
+
+    let lookback = args.lookback;
+    let (added, source) = match args.source {
+        FetchSource::IntervalsIcu => {
+            let auth = IntervalsIcuAuth::from_env()
+                .ok_or_else(|| anyhow!("INTERVALS_ICU_API_KEY environment variable is not set"))?;
+            let client = IntervalsIcuClient::new(&auth);
+            let added = rt.block_on(client.fetch(&db, &db_config, lookback))?;
+            (added, "intervals.icu")
+        }
+    };
+
+    println!("Fetched {added} new activities from {source}");
+    Ok(())
 }
 
 fn command_mask(global: GlobalOpts, args: MaskCmdArgs) -> Result<()> {

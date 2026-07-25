@@ -7,9 +7,7 @@ use axum::response::{IntoResponse, Redirect};
 use axum::routing::{get, post};
 use axum::{Json, Router, TypedHeader, headers};
 use geo_types::MultiLineString;
-use reqwest::Response;
 use rusqlite::params;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -17,6 +15,7 @@ use time::OffsetDateTime;
 use crate::activity;
 use crate::activity::RawActivity;
 use crate::db::Database;
+use crate::external::unwrap_response;
 use crate::track_stats::METERS_PER_SEC_TO_KMH;
 use crate::web::AppState;
 
@@ -297,16 +296,6 @@ impl<'a> StravaClient<'a> {
 
         Ok(token)
     }
-}
-
-async fn unwrap_response<T: DeserializeOwned>(res: Response) -> Result<T> {
-    if !res.status().is_success() {
-        let status = res.status();
-        let body = res.text().await?;
-        return Err(anyhow!("HTTP request failed with status {status}: {body}"));
-    }
-
-    Ok(res.json().await?)
 }
 
 pub fn webhook_routes() -> Router<AppState> {

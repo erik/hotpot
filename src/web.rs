@@ -24,8 +24,8 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::{DefaultOnFailure, TraceLayer};
 use tracing::Level;
 
-use crate::db::Config as DbConfig;
-use crate::db::{ActivityFilter, Database};
+use crate::db::{ActivityFilter, Config as DbConfig, Database};
+use crate::external::intervals_icu::{IntervalsIcuAuth, IntervalsIcuClient};
 use crate::filter::PropertyFilter;
 use crate::raster::LinearGradient;
 use crate::strava;
@@ -53,6 +53,7 @@ pub struct RouteConfig {
     pub strava_auth: bool,
     pub upload: bool,
     pub render: bool,
+    pub fetch: bool,
 }
 
 #[derive(Embed)]
@@ -64,6 +65,7 @@ pub struct AppState {
     pub db: Arc<Database>,
     pub db_config: Arc<DbConfig>,
     pub strava: Option<StravaAuth>,
+    pub intervals_icu: Option<IntervalsIcuAuth>,
     pub config: Config,
 }
 
@@ -123,6 +125,13 @@ impl Config {
             router = router.route("/render", get(render_viewport));
         }
 
+        let intervals_icu = IntervalsIcuAuth::from_env();
+        if self.routes.fetch {
+            tracing::info!("/fetch/:source");
+
+            router = router.route("/fetch/:source", post(fetch_source));
+        }
+
         if self.cors {
             let cors = CorsLayer::new()
                 .allow_methods([Method::GET])
@@ -153,6 +162,7 @@ impl Config {
             .with_state(AppState {
                 config: self.clone(),
                 strava,
+                intervals_icu,
                 db: Arc::new(db),
                 db_config: Arc::new(db_config),
             });
@@ -506,10 +516,10 @@ fn choose_gradient(
 }
 
 fn is_authenticated(
-    config: Config,
+    config: &Config,
     auth_header: Option<TypedHeader<axum::headers::Authorization<Bearer>>>,
 ) -> bool {
-    match (config.upload_token, auth_header) {
+    match (&config.upload_token, auth_header) {
         (Some(expected), Some(actual)) => actual.0.token() == expected.as_str(),
         (Some(_), None) => false,
         (None, _) => true,
@@ -526,7 +536,7 @@ async fn upload_activity(
     auth_header: Option<TypedHeader<axum::headers::Authorization<Bearer>>>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
-    if !is_authenticated(config, auth_header) {
+    if !is_authenticated(&config, auth_header) {
         return (StatusCode::UNAUTHORIZED, "bad token");
     }
 
@@ -569,6 +579,56 @@ async fn upload_activity(
     }
 
     (StatusCode::OK, "activity added")
+}
+
+/// Number of days a fetch looks back for new activities when `?lookback` is not
+/// given.
+const DEFAULT_FETCH_LOOKBACK_DAYS: u32 = 30;
+
+#[derive(Debug, Deserialize)]
+struct FetchQueryParams {
+    lookback: Option<u32>,
+}
+
+/// Fetch a single named source, ingesting any new activities. Returns `None` if
+/// the source is unknown or has no credentials configured.
+async fn run_fetch(state: &AppState, source: &str, lookback: u32) -> Option<Result<usize>> {
+    match source {
+        "intervals.icu" => {
+            let auth = state.intervals_icu.as_ref()?;
+            let client = IntervalsIcuClient::new(auth);
+            Some(client.fetch(&state.db, &state.db_config, lookback).await)
+        }
+        _ => None,
+    }
+}
+
+async fn fetch_source(
+    State(state): State<AppState>,
+    Path(source): Path<String>,
+    Query(params): Query<FetchQueryParams>,
+    auth_header: Option<TypedHeader<axum::headers::Authorization<Bearer>>>,
+) -> impl IntoResponse {
+    if !is_authenticated(&state.config, auth_header) {
+        return (StatusCode::UNAUTHORIZED, "bad token".to_string());
+    }
+
+    let lookback_days = params.lookback.unwrap_or(DEFAULT_FETCH_LOOKBACK_DAYS);
+
+    match run_fetch(&state, &source, lookback_days).await {
+        Some(Ok(n)) => (StatusCode::OK, format!("ingested {n} activities")),
+        Some(Err(e)) => {
+            tracing::error!("{source} fetch failed: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "fetch failed".to_string(),
+            )
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            format!("unknown or unconfigured source: {source}"),
+        ),
+    }
 }
 
 struct RequestData {
@@ -620,6 +680,7 @@ mod tests {
                 strava_auth: false,
                 upload: false,
                 render: true,
+                fetch: false,
             },
         }
         .build_router(db)

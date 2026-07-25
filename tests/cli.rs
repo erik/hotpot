@@ -89,6 +89,38 @@ fn test_import_fit_file() {
 }
 
 #[test]
+fn test_strava_export_keys_by_activity_id() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("test.sqlite3");
+
+    // A metadata CSV with an `Activity ID` column marks a Strava export, so
+    // activities are stored keyed by `strava:{id}` rather than their file path.
+    build_subcommand(
+        &db_path,
+        "import",
+        &[
+            TEST_DATA_DIR,
+            "--join",
+            &format!("{}/strava_export.csv", TEST_DATA_DIR),
+        ],
+    )
+    .success();
+
+    let assert = build_subcommand(&db_path, "activities", &[]);
+    let result = assert.success();
+    let output = String::from_utf8_lossy(&result.get_output().stdout);
+
+    assert!(
+        output.contains("strava:19387121985"),
+        "expected strava-keyed file, got: {output}"
+    );
+    assert!(
+        !output.contains("sample.gpx"),
+        "file path should not be used as the key: {output}"
+    );
+}
+
+#[test]
 fn test_import_deduplication() {
     let temp_dir = tempdir().unwrap();
     let db_path = temp_dir.path().join("test.sqlite3");

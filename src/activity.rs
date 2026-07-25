@@ -648,11 +648,39 @@ impl PropertySource {
         })
     }
 
+    fn file_key(&self, path: &Path) -> Option<String> {
+        // When we're importing from a Strava activity export, normalize the
+        // file names so that we can de-dupe imports more effectively later (via
+        // API or some such).
+        if let Some(id) = self.strava_activity_id(path) {
+            return Some(format!("strava:{id}"));
+        }
+
+        Some(path.to_str()?.to_owned())
+    }
+
+    fn lookup_props(&self, path: &Path) -> Option<&HashMap<String, serde_json::Value>> {
+        // Convert /../../export/activities/file.gpx => activities/file.gpx
+        let basename = path.strip_prefix(&self.base_dir).ok()?;
+        self.path_props.get(basename)
+    }
+
+    /// Check if metadata structure matches Strava activity export format and
+    /// return the `Activity ID` if so.
+    fn strava_activity_id(&self, path: &Path) -> Option<String> {
+        const STRAVA_ACTIVITY_ID_COL: &str = "activity_id";
+
+        let props = self.lookup_props(path)?;
+        match props.get(STRAVA_ACTIVITY_ID_COL)? {
+            serde_json::Value::Number(n) => Some(n.to_string()),
+            serde_json::Value::String(s) => Some(s.clone()),
+            _ => None,
+        }
+    }
+
     /// Merge properties from the attribute source into the activity.
     fn enrich(&self, path: &Path, activity: &mut RawActivity) {
-        // /../../export/activities/file.gpx => activities/file.gpx
-        let path = path.strip_prefix(&self.base_dir).ok();
-        let Some(props) = path.and_then(|p| self.path_props.get(p)) else {
+        let Some(props) = self.lookup_props(path) else {
             // We'll get here if there are activities in the import directory which don't have
             // a corresponding line in the metadata file.
             return;
@@ -664,6 +692,16 @@ impl PropertySource {
     }
 }
 
+/// The set of `file` keys already stored, used to skip re-importing activities.
+pub fn known_files(conn: &rusqlite::Connection) -> Result<HashSet<String>> {
+    let files = conn
+        .prepare("SELECT DISTINCT file FROM activities")?
+        .query_map([], |row| row.get(0))?
+        .filter_map(|n| n.ok())
+        .collect();
+    Ok(files)
+}
+
 pub fn import_path(
     path: &Path,
     db: &Database,
@@ -673,11 +711,7 @@ pub fn import_path(
     let conn = db.connection()?;
 
     // Skip any files that are already in the database.
-    let known_files: HashSet<String> = conn
-        .prepare("SELECT DISTINCT file FROM activities")?
-        .query_map([], |row| row.get(0))?
-        .filter_map(|n| n.ok())
-        .collect();
+    let known_files = known_files(&conn)?;
 
     tracing::info!(
         path = ?path,
@@ -700,15 +734,16 @@ pub fn import_path(
 
             let path = dir.path();
 
-            if !known_files.contains(path.to_str()?) {
-                Some(path.to_owned())
+            let file_key = prop_source.file_key(path)?;
+            if !known_files.contains(&file_key) {
+                Some((path.to_owned(), file_key))
             } else {
                 tracing::debug!(?path, "skipping, already imported");
                 skipped.fetch_add(1, Ordering::Relaxed);
                 None
             }
         })
-        .filter_map(|path| {
+        .filter_map(|(path, file_key)| {
             let activity = read_file(&path)
                 .inspect_err(|err| {
                     tracing::error!(?path, ?err, "failed to read activity");
@@ -722,19 +757,18 @@ pub fn import_path(
                 })
                 .ok()??;
 
-            Some((path, activity))
+            Some((path, file_key, activity))
         })
         .for_each_init(
             || db.shared_pool(),
-            |pool, (path, mut activity)| {
+            |pool, (path, file_key, mut activity)| {
                 tracing::debug!(?path, "importing activity");
 
                 // Merge with activity properties
                 prop_source.enrich(&path, &mut activity);
 
                 let mut conn = pool.get().expect("db connection pool timed out");
-                upsert(&mut conn, path.to_str().unwrap(), activity, config)
-                    .expect("insert activity");
+                upsert(&mut conn, &file_key, activity, config).expect("insert activity");
 
                 imported.fetch_add(1, Ordering::Relaxed);
             },
