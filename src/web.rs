@@ -26,12 +26,13 @@ use tracing::Level;
 
 use crate::db::{ActivityFilter, Config as DbConfig, Database};
 use crate::external::intervals_icu::{IntervalsIcuAuth, IntervalsIcuClient};
+use crate::external::strava::{StravaAuth, StravaClient};
 use crate::filter::PropertyFilter;
 use crate::raster::LinearGradient;
-use crate::strava;
-use crate::strava::StravaAuth;
 use crate::tile::{Tile, WebMercatorViewport};
 use crate::{activity, raster};
+
+mod strava_webhook;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ImageFormat {
@@ -94,14 +95,14 @@ impl Config {
         if self.routes.strava_webhook {
             tracing::info!("/strava/webhook (strava activity upload webhook)");
 
-            router = router.nest("/strava", strava::webhook_routes());
+            router = router.nest("/strava", strava_webhook::webhook_routes());
             use_strava_auth = true;
         }
 
         if self.routes.strava_auth {
             tracing::info!("/strava/auth (strava api oauth)");
 
-            router = router.nest("/strava", strava::auth_routes());
+            router = router.nest("/strava", strava_webhook::auth_routes());
             use_strava_auth = true;
         }
 
@@ -598,6 +599,11 @@ async fn run_fetch(state: &AppState, source: &str, lookback: u32) -> Option<Resu
             let auth = state.intervals_icu.as_ref()?;
             let client = IntervalsIcuClient::new(auth);
             Some(client.fetch(&state.db, &state.db_config, lookback).await)
+        }
+        "strava" => {
+            let auth = state.strava.as_ref()?;
+            let client = StravaClient::new(auth, &state.db);
+            Some(client.fetch(&state.db_config, lookback).await)
         }
         _ => None,
     }
