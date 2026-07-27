@@ -6,12 +6,12 @@ use std::io::Cursor;
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use time::{Date, Duration, OffsetDateTime};
+use time::{Date, OffsetDateTime};
 
 use crate::activity::{self, RawActivity};
 use crate::date::YYYY_MM_DD;
 use crate::db::{self, Database};
-use crate::external::{check_status, unwrap_response};
+use crate::external::{check_status, fetch_window_start, unwrap_response};
 
 const BASE_URL: &str = "https://intervals.icu/api/v1";
 
@@ -206,12 +206,7 @@ impl IntervalsIcuClient {
         db_config: &db::Config,
         lookback_days: u32,
     ) -> Result<usize> {
-        let mut window_start =
-            OffsetDateTime::now_utc().date() - Duration::days(lookback_days.into());
-
-        if let Some(cutoff) = db_config.fetch_cutoff {
-            window_start = cutoff.max(window_start);
-        }
+        let window_start = fetch_window_start(db_config, lookback_days);
 
         let refs = self.list_activity_ids(window_start).await?;
         let known = {

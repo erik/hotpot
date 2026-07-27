@@ -13,6 +13,7 @@ use activity::PropertySource;
 
 use crate::db::{ActivityFilter, Database};
 use crate::external::intervals_icu::{IntervalsIcuAuth, IntervalsIcuClient};
+use crate::external::strava::{StravaAuth, StravaClient};
 use crate::filter::PropertyFilter;
 use crate::raster::{LinearGradient, PINKISH};
 use crate::tile::{LngLat, Tile};
@@ -23,7 +24,6 @@ mod db;
 mod external;
 mod filter;
 mod raster;
-mod strava;
 mod tile;
 mod track_stats;
 mod web;
@@ -256,6 +256,12 @@ enum FetchSource {
     ///
     /// Requires the `INTERVALS_ICU_API_KEY` environment variable.
     IntervalsIcu,
+
+    /// Fetch new activities from Strava.
+    ///
+    /// Requires the `STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET` environment
+    /// variables, plus OAuth tokens obtained via the `strava-auth` command.
+    Strava,
 }
 
 #[derive(Args)]
@@ -556,6 +562,12 @@ fn command_fetch(global: GlobalOpts, args: FetchCmdArgs) -> Result<()> {
             let client = IntervalsIcuClient::new(&auth);
             let added = rt.block_on(client.fetch(&db, &db_config, lookback))?;
             (added, "intervals.icu")
+        }
+        FetchSource::Strava => {
+            let auth = StravaAuth::from_env()?;
+            let client = StravaClient::new(&auth, &db);
+            let added = rt.block_on(client.fetch(&db_config, lookback))?;
+            (added, "strava")
         }
     };
 

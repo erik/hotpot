@@ -1,23 +1,19 @@
+//! Strava API client: OAuth token management, activity ingestion via webhook,
+//! and poll-based `fetch`.
+
 use std::collections::HashMap;
 
 use anyhow::{Result, anyhow};
-use axum::extract::{Query, State};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Redirect};
-use axum::routing::{get, post};
-use axum::{Json, Router, TypedHeader, headers};
 use geo_types::MultiLineString;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
 
-use crate::activity;
-use crate::activity::RawActivity;
-use crate::db::Database;
-use crate::external::unwrap_response;
+use crate::activity::{self, RawActivity};
+use crate::db::{self, Database};
+use crate::external::{fetch_window_start, unwrap_response};
 use crate::track_stats::METERS_PER_SEC_TO_KMH;
-use crate::web::AppState;
 
 #[derive(Deserialize)]
 struct AuthToken {
@@ -68,7 +64,7 @@ struct ActivityGear {
 /// https://developers.strava.com/docs/reference/#api-models-SummaryActivity
 #[allow(dead_code)]
 #[derive(Deserialize, Serialize)]
-struct SummaryActivity {
+pub(crate) struct SummaryActivity {
     id: u64,
     #[serde(skip_serializing)]
     name: String,
@@ -157,9 +153,9 @@ impl SummaryActivity {
 
 #[derive(Clone)]
 pub struct StravaAuth {
-    client_id: u64,
-    client_secret: String,
-    webhook_secret: String,
+    pub(crate) client_id: u64,
+    pub(crate) client_secret: String,
+    pub(crate) webhook_secret: String,
 }
 
 impl StravaAuth {
@@ -187,16 +183,24 @@ impl StravaAuth {
     }
 }
 
-struct StravaClient<'a> {
+pub(crate) struct StravaClient<'a> {
+    http: reqwest::Client,
     auth: &'a StravaAuth,
     db: &'a Database,
 }
 
 impl<'a> StravaClient<'a> {
-    async fn exchange_token(&self, code: &str) -> Result<AuthToken> {
-        let client = reqwest::Client::new();
+    pub(crate) fn new(auth: &'a StravaAuth, db: &'a Database) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            auth,
+            db,
+        }
+    }
 
-        let res = client
+    pub(crate) async fn exchange_token(&self, code: &str) -> Result<()> {
+        let res = self
+            .http
             .post("https://www.strava.com/oauth/token")
             .json(&AuthTokenExchangeRequestBody {
                 client_id: self.auth.client_id,
@@ -210,13 +214,18 @@ impl<'a> StravaClient<'a> {
         let token: AuthTokenWithAthlete = unwrap_response(res).await?;
 
         self.store_token(token.athlete.id, &token.token)?;
-        Ok(token.token)
+        Ok(())
     }
-    async fn get_activity(&self, athlete_id: u64, activity_id: u64) -> Result<SummaryActivity> {
-        let token = self.get_token(athlete_id).await?;
-        let client = reqwest::Client::new();
 
-        let res = client
+    pub(crate) async fn get_activity(
+        &self,
+        athlete_id: u64,
+        activity_id: u64,
+    ) -> Result<SummaryActivity> {
+        let token = self.get_token(athlete_id).await?;
+
+        let res = self
+            .http
             .get(format!(
                 "https://www.strava.com/api/v3/activities/{}",
                 activity_id
@@ -277,9 +286,8 @@ impl<'a> StravaClient<'a> {
     }
 
     async fn refresh_token(&self, athlete_id: u64, prev: &AuthToken) -> Result<AuthToken> {
-        let client = reqwest::Client::new();
-
-        let token = client
+        let token = self
+            .http
             .post("https://www.strava.com/api/v3/oauth/token")
             .json(&AuthTokenRefreshRequestBody {
                 client_id: self.auth.client_id,
@@ -298,160 +306,17 @@ impl<'a> StravaClient<'a> {
     }
 }
 
-pub fn webhook_routes() -> Router<AppState> {
-    Router::new()
-        .route("/webhook", get(confirm_webhook))
-        .route("/webhook", post(receive_webhook))
-}
-
-pub fn auth_routes() -> Router<AppState> {
-    Router::new()
-        .route("/auth", get(auth_redirect))
-        .route("/auth/exchange_token", get(exchange_token))
-}
-
-async fn auth_redirect(
-    TypedHeader(host): TypedHeader<headers::Host>,
-    State(AppState { strava, .. }): State<AppState>,
-) -> impl IntoResponse {
-    let strava = strava.expect("strava auth creds missing");
-    let url = format!(
-        "https://www.strava.com/oauth/authorize\
-?client_id={}\
-&approval_prompt=force\
-&scope=activity:read_all\
-&response_type=code\
-&redirect_uri=http://{}/strava/auth/exchange_token",
-        strava.client_id, host,
-    );
-
-    Redirect::to(&url)
-}
-
-#[derive(Deserialize)]
-struct ExchangeTokenQuery {
-    code: String,
-}
-
-async fn exchange_token(
-    State(AppState { db, strava, .. }): State<AppState>,
-    Query(params): Query<ExchangeTokenQuery>,
-) -> impl IntoResponse {
-    let strava = strava.expect("strava auth creds missing");
-
-    let client = StravaClient {
-        auth: &strava,
-        db: &db,
-    };
-
-    if let Err(e) = client.exchange_token(&params.code).await {
-        tracing::error!("failed to exchange token: {}", e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, "error exchanging token").into_response();
-    }
-
-    (
-        StatusCode::OK,
-        format!(
-            "Successfully authenticated with Strava.
-
-Next, make sure the webhook is set up to be called for new activities:
-
-    curl https://www.strava.com/api/v3/push_subscriptions \\
-         -F \"client_id={0}\" \\
-         -F \"client_secret={1}\" \\
-         -F \"callback_url=https://[example.com]/strava/webhook\" \\
-         -F \"verify_token={2}\"
-
-Confirm the webhook was set up correctly with:
-
-    curl --get https://www.strava.com/api/v3/push_subscriptions \\
-         -d \"client_id={0}\" \\
-         -d \"client_secret={1}\"
-
-More information: https://developers.strava.com/docs/getting-started
-",
-            strava.client_id, strava.client_secret, strava.webhook_secret,
-        ),
-    )
-        .into_response()
-}
-
-#[derive(Debug, Deserialize)]
-struct ConfirmWebhookQuery {
-    #[serde(rename = "hub.mode")]
-    mode: String,
-    #[serde(rename = "hub.challenge")]
-    challenge: String,
-    #[serde(rename = "hub.verify_token")]
-    verify_token: String,
-}
-
-#[derive(Serialize)]
-struct ConfirmWebhookResponse {
-    #[serde(rename = "hub.challenge")]
-    challenge: String,
-}
-
-async fn confirm_webhook(
-    State(AppState { strava, .. }): State<AppState>,
-    Query(params): Query<ConfirmWebhookQuery>,
-) -> impl IntoResponse {
-    let strava = strava.expect("strava auth creds missing");
-    if params.mode != "subscribe" {
-        return (StatusCode::BAD_REQUEST, "invalid mode").into_response();
-    }
-
-    if params.verify_token != strava.webhook_secret {
-        return (StatusCode::UNAUTHORIZED, "invalid verify token").into_response();
-    }
-
-    Json(ConfirmWebhookResponse {
-        challenge: params.challenge,
-    })
-    .into_response()
-}
-
-#[derive(Deserialize)]
-struct WebhookBody {
-    /// Athlete ID
-    owner_id: u64,
-    /// Activity or Athlete ID
-    object_id: u64,
-    /// "activity", "athlete"
-    object_type: String,
-    // TODO: handle these
-    // "create", "update", "delete"
-    // aspect_type: String,
-}
-
-// TODO: look at subscription_id or something to verify request.
-async fn receive_webhook(
-    State(AppState {
-        db,
-        db_config,
-        strava,
-        ..
-    }): State<AppState>,
-    Json(body): Json<WebhookBody>,
-) -> impl IntoResponse {
-    let strava = strava.expect("strava auth creds missing");
-    if body.object_type != "activity" {
-        return (StatusCode::OK, "nothing to do");
-    }
-
-    let client = StravaClient {
-        auth: &strava,
-        db: &db,
-    };
-    let activity = match client.get_activity(body.owner_id, body.object_id).await {
-        Ok(a) => a,
-        Err(e) => {
-            tracing::error!("error getting activity: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "error getting activity");
-        }
-    };
-
-    let polyline = polyline::decode_polyline(&activity.map.polyline, 5).expect("valid polyline");
+/// Decode an activity's polyline, skip virtual activities, and upsert it into
+/// the database. Returns `true` if imported, `false` if skipped.
+///
+/// Shared by the webhook handler and the poll-based `fetch`.
+pub(crate) fn ingest_activity(
+    db: &Database,
+    db_config: &db::Config,
+    activity: SummaryActivity,
+) -> Result<bool> {
+    let polyline = polyline::decode_polyline(&activity.map.polyline, 5)
+        .map_err(|e| anyhow!("invalid polyline for strava activity {}: {e}", activity.id))?;
     let properties = activity.properties();
 
     // Filter out virtual activities. In my own data I see both "Virtual Ride"
@@ -461,12 +326,13 @@ async fn receive_webhook(
         .and_then(|t| t.as_str())
         .is_some_and(|ty| ty.starts_with("Virtual"))
     {
-        tracing::info!("Skipping virtual Strava activity {}", activity.id);
-        return (StatusCode::NO_CONTENT, "skipped");
+        tracing::info!("skipping virtual strava activity {}", activity.id);
+        return Ok(false);
     }
 
-    if let Err(e) = activity::upsert(
-        &mut db.connection().unwrap(),
+    let mut conn = db.connection()?;
+    activity::upsert(
+        &mut conn,
         &format!("strava:{}", activity.id),
         RawActivity {
             title: Some(activity.name),
@@ -474,13 +340,116 @@ async fn receive_webhook(
             tracks: MultiLineString::from(polyline),
             properties,
         },
-        &db_config,
-    ) {
-        tracing::error!("error writing activity: {}", e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, "error writing activity");
+        db_config,
+    )?;
+
+    Ok(true)
+}
+
+/// Minimal shape of an entry in the athlete activity list.
+#[derive(Deserialize)]
+struct ActivityRef {
+    id: u64,
+}
+
+impl StravaClient<'_> {
+    /// Athlete IDs we have stored OAuth credentials for.
+    fn stored_athlete_ids(&self) -> Result<Vec<u64>> {
+        let conn = self.db.connection()?;
+        let mut stmt = conn.prepare("SELECT athlete_id FROM strava_tokens")?;
+        let ids = stmt
+            .query_map([], |row| row.get::<_, u64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(ids)
     }
 
-    tracing::info!("Imported Strava activity {} via webhook", activity.id);
+    /// List an athlete's activity IDs recorded after `after` (epoch seconds).
+    async fn list_activity_ids(&self, athlete_id: u64, after: i64) -> Result<Vec<u64>> {
+        let token = self.get_token(athlete_id).await?;
 
-    (StatusCode::OK, "added!")
+        const PER_PAGE: usize = 200;
+        let mut ids = Vec::new();
+        let mut page = 1;
+        loop {
+            let res = self
+                .http
+                .get("https://www.strava.com/api/v3/athlete/activities")
+                .bearer_auth(&token.access_token)
+                .query(&[
+                    ("after", after.to_string()),
+                    ("per_page", PER_PAGE.to_string()),
+                    ("page", page.to_string()),
+                ])
+                .send()
+                .await?;
+
+            let refs: Vec<ActivityRef> = unwrap_response(res).await?;
+            let count = refs.len();
+            ids.extend(refs.into_iter().map(|r| r.id));
+
+            if count < PER_PAGE {
+                break;
+            }
+            page += 1;
+        }
+
+        Ok(ids)
+    }
+
+    /// Poll Strava for all stored athletes and ingest any new activities.
+    /// Returns the number added.
+    pub(crate) async fn fetch(&self, db_config: &db::Config, lookback_days: u32) -> Result<usize> {
+        let after = fetch_window_start(db_config, lookback_days)
+            .midnight()
+            .assume_utc()
+            .unix_timestamp();
+
+        let athletes = self.stored_athlete_ids()?;
+        if athletes.is_empty() {
+            return Err(anyhow!(
+                "no Strava credentials stored; run the `strava-auth` command first"
+            ));
+        }
+
+        let known = {
+            let conn = self.db.connection()?;
+            activity::known_files(&conn)?
+        };
+
+        let mut added = 0;
+        for athlete_id in athletes {
+            for id in self.list_activity_ids(athlete_id, after).await? {
+                if known.contains(&format!("strava:{id}")) {
+                    continue;
+                }
+
+                match self.fetch_and_ingest(db_config, athlete_id, id).await {
+                    Ok(true) => {
+                        tracing::info!("imported strava activity {id}");
+                        added += 1;
+                    }
+                    Ok(false) => {
+                        // skipped (e.g. virtual)
+                    }
+                    Err(e) => {
+                        tracing::error!("failed to ingest strava activity {id}: {e}");
+                    }
+                }
+            }
+        }
+
+        Ok(added)
+    }
+
+    /// Fetch a single activity's full detail and ingest it. Returns `true` if
+    /// imported, `false` if skipped.
+    async fn fetch_and_ingest(
+        &self,
+        db_config: &db::Config,
+        athlete_id: u64,
+        activity_id: u64,
+    ) -> Result<bool> {
+        let activity = self.get_activity(athlete_id, activity_id).await?;
+        ingest_activity(self.db, db_config, activity)
+    }
 }
