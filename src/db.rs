@@ -159,6 +159,13 @@ fn apply_schema(conn: &mut rusqlite::Connection) -> Result<()> {
     }
 
     tx.commit()?;
+
+    // Clean up after a schema change on an existing database.
+    if version < MIGRATIONS.len() {
+        tracing::info!("running post-migration VACUUM + ANALYZE");
+        conn.execute_batch("VACUUM; ANALYZE;")?;
+    }
+
     Ok(())
 }
 

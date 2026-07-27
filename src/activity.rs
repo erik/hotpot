@@ -774,7 +774,9 @@ pub fn import_path(
             },
         );
 
-    conn.execute_batch("VACUUM")?;
+    // Update table statistics post-import
+    conn.execute_batch("ANALYZE;")?;
+
     tracing::info!(
         ?imported,
         ?skipped,
