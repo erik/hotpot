@@ -11,8 +11,8 @@ use rayon::prelude::*;
 use rusqlite::{ToSql, params};
 use serde::{Deserialize, Deserializer};
 
-use crate::WebMercatorViewport;
 use crate::db::{ActivityFilter, Config, Database, decode_line};
+use crate::tile::WebMercatorViewport;
 use crate::tile::{Tile, TileActivityMask, TileBounds};
 
 pub static PINKISH: Lazy<LinearGradient> = Lazy::new(|| {
@@ -74,7 +74,12 @@ impl TileRaster {
         }
     }
 
-    fn add_activity(&mut self, source_tile: &Tile, coords: &[Coord<u32>], mask: &TileActivityMask) {
+    fn add_activity(
+        &mut self,
+        source_tile: &Tile,
+        coords: impl IntoIterator<Item = Coord<u32>>,
+        mask: &TileActivityMask,
+    ) {
         debug_assert_eq!(source_tile.z, self.bounds.z);
 
         // Origin of source tile within target tile
@@ -84,7 +89,7 @@ impl TileRaster {
         let tile_bbox = crate::tile::BBox::square(self.width as f64 - 1.0);
 
         let mut prev = None;
-        for &Coord { x, y } in coords {
+        for Coord { x, y } in coords {
             // Translate (x,y) to location in target tile.
             // [0..(width * STORED_TILE_WIDTH)]
             let x = x + x_offset;
@@ -397,10 +402,10 @@ pub fn rasterize_tile(
     while let Some(row) = rows.next()? {
         let source_tile = Tile::new(row.get_unwrap(0), row.get_unwrap(1), row.get_unwrap(2));
 
-        let bytes: Vec<u8> = row.get_unwrap(3);
-        let coords = decode_line(&bytes)?;
+        let bytes = row.get_ref_unwrap(3).as_bytes().unwrap();
+        let coords = decode_line(bytes);
 
-        raster.add_activity(&source_tile, &coords, &mask);
+        raster.add_activity(&source_tile, coords, &mask);
 
         have_activity = true;
     }

@@ -1,9 +1,7 @@
 use std::collections::HashMap;
-use std::io::Cursor;
 use std::path::Path;
 
 use anyhow::Result;
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use geo::{CoordNum, LineString};
 use geo_types::Coord;
 use num_traits::AsPrimitive;
@@ -273,27 +271,23 @@ impl Default for Config {
     }
 }
 
-pub fn encode_line<T>(line: &LineString<T>) -> Result<Vec<u8>>
+pub fn encode_line<T>(line: &LineString<T>) -> Vec<u8>
 where
     T: CoordNum + AsPrimitive<u16>,
 {
-    let mut w = Vec::with_capacity(line.0.len() * 2);
+    let mut w = Vec::with_capacity(line.0.len() * 4);
     for pt in line.coords() {
-        w.write_u16::<LittleEndian>(pt.x.as_())?;
-        w.write_u16::<LittleEndian>(pt.y.as_())?;
+        w.extend_from_slice(&pt.x.as_().to_le_bytes());
+        w.extend_from_slice(&pt.y.as_().to_le_bytes());
     }
-    Ok(w)
+    w
 }
 
-pub fn decode_line(bytes: &[u8]) -> Result<Vec<Coord<u32>>> {
-    let mut coords = Vec::with_capacity(bytes.len() / (2 * 2));
-    let mut reader = Cursor::new(bytes);
-    while reader.position() < bytes.len() as u64 {
-        let x = reader.read_u16::<LittleEndian>()? as u32;
-        let y = reader.read_u16::<LittleEndian>()? as u32;
-        coords.push(Coord { x, y });
-    }
-    Ok(coords)
+pub fn decode_line(bytes: &[u8]) -> impl Iterator<Item = Coord<u32>> + '_ {
+    bytes.chunks_exact(size_of::<u16>() * 2).map(|c| Coord {
+        x: u16::from_le_bytes([c[0], c[1]]) as u32,
+        y: u16::from_le_bytes([c[2], c[3]]) as u32,
+    })
 }
 
 #[derive(Serialize)]

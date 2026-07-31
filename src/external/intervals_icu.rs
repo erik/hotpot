@@ -239,7 +239,10 @@ impl IntervalsIcuClient {
     }
 }
 
-fn filter_new_activities(refs: Vec<ActivityRef>, known: &HashSet<String>) -> Vec<String> {
+fn filter_new_activities(
+    refs: Vec<ActivityRef>,
+    known: &HashSet<String>,
+) -> impl Iterator<Item = String> {
     refs.into_iter()
         .filter(|r| {
             // Strava activities are not available via Intervals API
@@ -252,7 +255,6 @@ fn filter_new_activities(refs: Vec<ActivityRef>, known: &HashSet<String>) -> Vec
                 })
         })
         .map(|r| r.id)
-        .collect()
 }
 
 async fn ingest_activity(
@@ -375,7 +377,7 @@ mod tests {
         ];
 
         assert_eq!(
-            filter_new_activities(refs, &known),
+            filter_new_activities(refs, &known).collect::<Vec<_>>(),
             vec!["id_new_with_strava_id".to_string(), "id_new".to_string()]
         );
     }

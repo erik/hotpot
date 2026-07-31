@@ -158,18 +158,15 @@ struct ElevationStats {
 
 impl ElevationStats {
     fn from_points(points: &[TrackPoint]) -> Option<Self> {
-        let elevations: Vec<f64> = points.iter().filter_map(|p| p.elevation).collect();
-        if elevations.len() < 2 {
-            return None;
-        }
+        let mut elevations = points.iter().filter_map(|p| p.elevation);
 
-        let mut base = elevations[0];
+        let mut base = elevations.next()?;
         let mut gain = 0.0;
         let mut loss = 0.0;
         let mut min_val = base;
         let mut max_val = base;
 
-        for &elev in &elevations[1..] {
+        for elev in elevations {
             min_val = min_val.min(elev);
             max_val = max_val.max(elev);
 

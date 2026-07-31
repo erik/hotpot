@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use anyhow::{Result, anyhow};
 use clap::{Args, Parser, Subcommand};
 use image::RgbaImage;
-use tile::WebMercatorViewport;
 use time::Date;
 
 use activity::PropertySource;
@@ -15,7 +14,7 @@ use crate::db::{ActivityFilter, Database};
 use crate::external::intervals_icu::{IntervalsIcuAuth, IntervalsIcuClient};
 use crate::filter::PropertyFilter;
 use crate::raster::{LinearGradient, PINKISH};
-use crate::tile::{LngLat, Tile};
+use crate::tile::{LngLat, Tile, WebMercatorViewport};
 
 mod activity;
 mod date;

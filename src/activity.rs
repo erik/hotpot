@@ -580,7 +580,7 @@ pub fn upsert(
             })
             .simplify(&4.0);
 
-        let coords = encode_line(&simplified_line)?;
+        let coords = encode_line(&simplified_line);
         insert_tile.insert(params![activity_id, tile.z, tile.x, tile.y, coords])?;
     }
 
