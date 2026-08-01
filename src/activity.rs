@@ -12,7 +12,7 @@ use fitparser::profile::MesgNum;
 use flate2::read::GzDecoder;
 use geo::{EuclideanDistance, HasDimensions, MapCoords, Simplify};
 use geo_types::{LineString, MultiLineString, Point};
-use rayon::iter::{ParallelBridge, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rusqlite::params;
 use time::OffsetDateTime;
 use walkdir::WalkDir;
@@ -570,15 +570,12 @@ pub fn upsert(
     let tile_size = config.tile_extent as f64;
     let tiles = activity.clip_to_tiles(config);
     for (tile, line) in tiles.iter() {
-        // Have to type-dance a bit because geo::Simplify requires f64
-        let simplified_line = line
-            .map_coords(|c| {
-                // For reasons I cannot remember, we store tile activity data
-                // with inverted Y coordinates from the pixel data.
-                let flip_y = tile_size - c.y;
-                (c.x, flip_y).into()
-            })
-            .simplify(&4.0);
+        let simplified_line = line.simplify(&4.0).map_coords(|c| {
+            // For reasons I cannot remember, we store tile activity data
+            // with inverted Y coordinates from the pixel data.
+            let flip_y = tile_size - c.y;
+            (c.x, flip_y).into()
+        });
 
         let coords = encode_line(&simplified_line);
         insert_tile.insert(params![activity_id, tile.z, tile.x, tile.y, coords])?;
@@ -723,9 +720,9 @@ pub fn import_path(
     let skipped = AtomicU32::new(0);
     let failed = AtomicU32::new(0);
 
-    WalkDir::new(path)
+    // Gather all files we haven't yet ingested
+    let files: Vec<_> = WalkDir::new(path)
         .into_iter()
-        .par_bridge()
         .filter_map(|dir| {
             let dir = dir.ok()?;
             if !dir.file_type().is_file() {
@@ -733,46 +730,59 @@ pub fn import_path(
             }
 
             let path = dir.path();
-
-            let file_key = prop_source.file_key(path)?;
-            if !known_files.contains(&file_key) {
-                Some((path.to_owned(), file_key))
+            let key = prop_source.file_key(path)?;
+            if !known_files.contains(&key) {
+                tracing::debug!(?path, "importing activity");
+                Some((path.to_owned(), key))
             } else {
                 tracing::debug!(?path, "skipping, already imported");
                 skipped.fetch_add(1, Ordering::Relaxed);
                 None
             }
         })
-        .filter_map(|(path, file_key)| {
-            let activity = read_file(&path)
-                .inspect_err(|err| {
+        .collect();
+
+    let (tx, rx) = std::sync::mpsc::channel::<(String, RawActivity)>();
+
+    // Parse the files in parallel, write them to the DB sequentially. We share
+    // a single DB transaction for all writes to reduce overhead.
+    std::thread::scope(|thread| {
+        thread.spawn(|| {
+            let mut conn = db.connection().expect("open writer db connection");
+            conn.execute_batch("BEGIN").expect("begin transaction");
+            for (key, activity) in rx {
+                upsert(&mut conn, &key, activity, config).expect("insert activity");
+                imported.fetch_add(1, Ordering::Relaxed);
+            }
+            conn.execute_batch("COMMIT").expect("commit transaction");
+        });
+
+        files.into_par_iter().for_each(|(path, key)| {
+            let mut activity = match read_file(&path) {
+                Ok(Some(activity)) => activity,
+
+                Err(err) => {
                     tracing::error!(?path, ?err, "failed to read activity");
                     failed.fetch_add(1, Ordering::Relaxed);
-                })
-                .inspect(|activity| {
-                    if activity.is_none() {
-                        tracing::debug!(?path, "skipping, no track data");
-                        skipped.fetch_add(1, Ordering::Relaxed);
-                    }
-                })
-                .ok()??;
+                    return;
+                }
 
-            Some((path, file_key, activity))
-        })
-        .for_each_init(
-            || db.shared_pool(),
-            |pool, (path, file_key, mut activity)| {
-                tracing::debug!(?path, "importing activity");
+                Ok(None) => {
+                    tracing::debug!(?path, "skipping, no track data");
+                    skipped.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+            };
 
-                // Merge with activity properties
-                prop_source.enrich(&path, &mut activity);
+            // Merge with activity properties
+            prop_source.enrich(&path, &mut activity);
 
-                let mut conn = pool.get().expect("db connection pool timed out");
-                upsert(&mut conn, &file_key, activity, config).expect("insert activity");
+            tx.send((key, activity)).expect("send activity to writer");
+        });
 
-                imported.fetch_add(1, Ordering::Relaxed);
-            },
-        );
+        // Close sender so receiver can finish
+        drop(tx);
+    });
 
     // Update table statistics post-import
     conn.execute_batch("ANALYZE;")?;

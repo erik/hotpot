@@ -136,10 +136,6 @@ impl Database {
         let conn = self.pool.get()?;
         Ok(conn)
     }
-
-    pub fn shared_pool(&self) -> r2d2::Pool<SqliteConnectionManager> {
-        self.pool.clone()
-    }
 }
 
 fn apply_schema(conn: &mut rusqlite::Connection) -> Result<()> {
