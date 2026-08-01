@@ -146,10 +146,13 @@ impl TileRaster {
     }
 
     pub fn apply_gradient(&self, gradient: &LinearGradient) -> RgbaImage {
-        RgbaImage::from_fn(self.width, self.width, |x, y| {
-            let idx = (y * self.width + x) as usize;
-            gradient.sample(self.pixels[idx])
-        })
+        let mut buf = Vec::with_capacity(self.pixels.len() * 4);
+        for &v in &self.pixels {
+            buf.extend_from_slice(&gradient.sample(v).0);
+        }
+
+        RgbaImage::from_raw(self.width, self.width, buf)
+            .expect("buffer length == width * width * 4")
     }
 }
 
@@ -423,18 +426,26 @@ fn prepare_activities_query<'a>(
     bounds: &'a TileBounds,
 ) -> Result<(rusqlite::Statement<'a>, Vec<&'a dyn ToSql>)> {
     let mut params = params![bounds.z, bounds.xmin, bounds.xmax, bounds.ymin, bounds.ymax].to_vec();
-    let filter_clause = filter.to_query(&mut params);
+
+    // JOIN is expensive (relatively), so avoid it if we can
+    let (expr, join) = if filter.is_empty() {
+        (String::from("true"), "")
+    } else {
+        (
+            filter.to_query(&mut params),
+            "JOIN activities ON activities.id = activity_tiles.activity_id ",
+        )
+    };
 
     let stmt = conn.prepare(&format!(
         "\
         SELECT x, y, z, coords \
         FROM activity_tiles \
-        JOIN activities ON activities.id = activity_tiles.activity_id \
+        {join}\
         WHERE z = ? \
             AND (x >= ? AND x < ?) \
             AND (y >= ? AND y < ?) \
-            AND {};",
-        filter_clause,
+            AND {expr};",
     ))?;
 
     Ok((stmt, params))

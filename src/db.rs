@@ -273,8 +273,8 @@ where
 {
     let mut w = Vec::with_capacity(line.0.len() * 4);
     for pt in line.coords() {
-        w.extend_from_slice(&pt.x.as_().to_le_bytes());
-        w.extend_from_slice(&pt.y.as_().to_le_bytes());
+        w.extend(&pt.x.as_().to_le_bytes());
+        w.extend(&pt.y.as_().to_le_bytes());
     }
     w
 }
@@ -306,6 +306,10 @@ impl ActivityFilter {
             before: before.map(|date| date.midnight().assume_utc()),
             after: after.map(|date| date.midnight().assume_utc()),
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.before.is_none() && self.after.is_none() && self.props.is_none()
     }
 
     pub fn to_query<'a>(&'a self, params: &mut Vec<&'a dyn ToSql>) -> String {
