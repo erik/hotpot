@@ -1,9 +1,11 @@
-# flyctl launch added from .gitignore
 **/target
 **/.idea
 **/.venv
 **.sqlite3
 **.db
+**.db-wal
+**.db-shm
+.git/
 
 # flyctl launch added from .idea/.gitignore
 # Default ignored files

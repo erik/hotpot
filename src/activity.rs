@@ -78,9 +78,14 @@ impl TileClipper {
                 let line = self.last_line(&tile);
                 if line.is_empty() {
                     line.0.push(a.to_tile_pixel(&bbox, extent));
+                    line.0.push(b.to_tile_pixel(&bbox, extent));
+                } else {
+                    // Cheap de-dupe for points that would be thrown away by RDP anyway
+                    let px = b.to_tile_pixel(&bbox, extent);
+                    if px != *line.0.last().unwrap() {
+                        line.0.push(px);
+                    }
                 }
-
-                line.0.push(b.to_tile_pixel(&bbox, extent));
 
                 // If we've modified the end point, we've left the current tile.
                 if b != end {

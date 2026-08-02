@@ -1,7 +1,5 @@
 target/
 *.sqlite3*
-*.db
-*.db-shm
-*.db-wal
+*.db*
 .idea/
 .venv/
