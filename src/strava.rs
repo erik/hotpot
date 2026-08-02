@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
 
-use crate::activity;
 use crate::activity::RawActivity;
 use crate::db::Database;
 use crate::external::unwrap_response;
@@ -465,17 +464,20 @@ async fn receive_webhook(
         return (StatusCode::NO_CONTENT, "skipped");
     }
 
-    if let Err(e) = activity::upsert(
-        &mut db.connection().unwrap(),
-        &format!("strava:{}", activity.id),
-        RawActivity {
-            title: Some(activity.name),
-            start_time: Some(activity.start_date),
-            tracks: MultiLineString::from(polyline),
-            properties,
-        },
-        &db_config,
-    ) {
+    let raw = RawActivity {
+        title: Some(activity.name),
+        start_time: Some(activity.start_date),
+        tracks: MultiLineString::from(polyline),
+        properties,
+    };
+
+    let file_key = format!("strava:{}", activity.id);
+    let result = raw.split_tiles(file_key, &db_config).and_then(|prepared| {
+        let conn = db.connection()?;
+        crate::db::upsert_activity(&conn, &prepared)
+    });
+
+    if let Err(e) = result {
         tracing::error!("error writing activity: {}", e);
         return (StatusCode::INTERNAL_SERVER_ERROR, "error writing activity");
     }

@@ -12,6 +12,7 @@ use crate::activity::{self, RawActivity};
 use crate::date::YYYY_MM_DD;
 use crate::db::{self, Database};
 use crate::external::{check_status, unwrap_response};
+use crate::file::get_file_type;
 
 const BASE_URL: &str = "https://intervals.icu/api/v1";
 
@@ -274,9 +275,9 @@ async fn ingest_activity(
     let start_time = Some(meta.start_date);
 
     let (filename, bytes) = client.download_file(activity_id).await?;
-    let (media_type, comp) = activity::get_file_type(&filename)
-        .ok_or_else(|| anyhow!("unrecognized file type: {filename}"))?;
-    let parsed = activity::read(Cursor::new(bytes), media_type, comp)?
+    let (media_type, comp) =
+        get_file_type(&filename).ok_or_else(|| anyhow!("unrecognized file type: {filename}"))?;
+    let parsed = crate::file::read(Cursor::new(bytes), media_type, comp)?
         .ok_or_else(|| anyhow!("no activity data in file {filename}"))?;
 
     let mut properties = parsed.properties;
@@ -289,13 +290,9 @@ async fn ingest_activity(
         properties,
     };
 
-    let mut conn = db.connection()?;
-    activity::upsert(
-        &mut conn,
-        &format!("intervals_icu:{activity_id}"),
-        raw,
-        db_config,
-    )?;
+    let conn = db.connection()?;
+    let activity = raw.split_tiles(format!("intervals_icu:{activity_id}"), db_config)?;
+    db::upsert_activity(&conn, &activity)?;
 
     Ok(true)
 }

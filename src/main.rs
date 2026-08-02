@@ -8,8 +8,7 @@ use clap::{Args, Parser, Subcommand};
 use image::RgbaImage;
 use time::Date;
 
-use activity::PropertySource;
-
+use crate::activity::PropertySource;
 use crate::db::{ActivityFilter, Database};
 use crate::external::intervals_icu::{IntervalsIcuAuth, IntervalsIcuClient};
 use crate::filter::PropertyFilter;
@@ -20,6 +19,7 @@ mod activity;
 mod date;
 mod db;
 mod external;
+mod file;
 mod filter;
 mod raster;
 mod strava;

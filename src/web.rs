@@ -27,11 +27,11 @@ use tracing::Level;
 use crate::db::{ActivityFilter, Config as DbConfig, Database};
 use crate::external::intervals_icu::{IntervalsIcuAuth, IntervalsIcuClient};
 use crate::filter::PropertyFilter;
+use crate::raster;
 use crate::raster::LinearGradient;
 use crate::strava;
 use crate::strava::StravaAuth;
 use crate::tile::{Tile, WebMercatorViewport};
-use crate::{activity, raster};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ImageFormat {
@@ -550,7 +550,7 @@ async fn upload_activity(
             None => return (StatusCode::BAD_REQUEST, "no filename"),
         };
 
-        let Some((media_type, comp)) = activity::get_file_type(&file_name) else {
+        let Some((media_type, comp)) = crate::file::get_file_type(&file_name) else {
             return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "unrecognized file type");
         };
 
@@ -563,16 +563,20 @@ async fn upload_activity(
 
         let bytes = field.bytes().await.unwrap();
         let reader = Cursor::new(bytes);
-        let Ok(Some(activity)) = activity::read(reader, media_type, comp) else {
+        let Ok(Some(activity)) = crate::file::read(reader, media_type, comp) else {
             return (StatusCode::UNPROCESSABLE_ENTITY, "couldn't read file");
         };
 
         let activity_id = format!("upload:{}", file_name);
 
-        if let Err(err) = db
-            .connection()
-            .and_then(|mut conn| activity::upsert(&mut conn, &activity_id, activity, &db_config))
-        {
+        let result = activity
+            .split_tiles(activity_id, &db_config)
+            .and_then(|activity| {
+                let conn = db.connection()?;
+                crate::db::upsert_activity(&conn, &activity)
+            });
+
+        if let Err(err) = result {
             tracing::error!("failed to insert activity: {:?}", err);
             return (StatusCode::INTERNAL_SERVER_ERROR, "something went wrong");
         }

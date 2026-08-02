@@ -1,26 +1,20 @@
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use csv::StringRecord;
-use fitparser::de::{DecodeOption, FitObject, FitStreamProcessor};
-use fitparser::profile::MesgNum;
-use flate2::read::GzDecoder;
 use geo::{EuclideanDistance, HasDimensions, MapCoords, Simplify};
-use geo_types::{LineString, MultiLineString, Point};
+use geo_types::{LineString, MultiLineString};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use rusqlite::params;
 use time::OffsetDateTime;
 use walkdir::WalkDir;
 
 use crate::db;
 use crate::db::{Config, Database, encode_line};
+use crate::file::read_file;
 use crate::tile::{BBox, LngLat, Tile, WebMercator};
-use crate::track_stats::{TrackPoint, TrackStats};
 
 struct TileClipper {
     zoom: u8,
@@ -205,388 +199,48 @@ impl RawActivity {
     }
 }
 
-#[derive(Debug)]
-pub enum MediaType {
-    Gpx,
-    Fit,
-    Tcx,
-}
-
-#[derive(Debug)]
-pub enum Compression {
-    None,
-    Gzip,
-}
-
-pub fn read<R>(rdr: R, kind: MediaType, comp: Compression) -> Result<Option<RawActivity>>
-where
-    R: Read + 'static,
-{
-    let mut reader: BufReader<Box<dyn Read>> = BufReader::new(match comp {
-        Compression::None => Box::new(rdr),
-        Compression::Gzip => Box::new(GzDecoder::new(rdr)),
-    });
-
-    match kind {
-        MediaType::Gpx => parse_gpx(&mut reader),
-        MediaType::Fit => parse_fit(&mut reader),
-        MediaType::Tcx => parse_tcx(&mut reader),
-    }
-}
-
-pub fn read_file(p: &Path) -> Result<Option<RawActivity>> {
-    let Some(file_name) = p.file_name().and_then(|f| f.to_str()) else {
-        return Err(anyhow!("no file name"));
-    };
-
-    let Some((media_type, comp)) = get_file_type(file_name) else {
-        // Just skip over unsupported file types.
-        return Ok(None);
-    };
-
-    let file = File::open(p)?;
-    read(file, media_type, comp)
-}
-
-// Not an exhaustive list, but the most obvious of the FIT "sub_sports" which it
-// doesn't make sense to include in a heatmap.
-const FIT_VIRTUAL_SPORTS: [&str; 4] = [
-    "virtual_activity",
-    "indoor_cycling",
-    "indoor_rowing",
-    "indoor_running",
-];
-
-fn parse_fit<R: Read>(reader: &mut R) -> Result<Option<RawActivity>> {
-    const SCALE_FACTOR: f64 = (1u64 << 32) as f64 / 360.0;
-
-    let mut fit_stream = FitStreamProcessor::new();
-    fit_stream.add_option(DecodeOption::SkipDataCrcValidation);
-    fit_stream.add_option(DecodeOption::SkipHeaderCrcValidation);
-
-    let mut buffer = Vec::new();
-    reader.read_to_end(&mut buffer)?;
-    let mut input = buffer.as_slice();
-
-    let mut properties = HashMap::new();
-    let mut start_time = None;
-    let mut track_points = vec![];
-
-    while !input.is_empty() {
-        let (rest, obj) = fit_stream.deserialize_next(input)?;
-        input = rest;
-
-        let msg = match obj {
-            FitObject::DataMessage(message) => message,
-
-            // Reset accumulator/definition state between chained FIT files.
-            FitObject::Crc(_) => {
-                fit_stream.reset();
-                continue;
+impl RawActivity {
+    pub fn split_tiles(
+        mut self,
+        file_key: String,
+        config: &db::Config,
+    ) -> Result<db::TiledActivity> {
+        // Round floats in a JSON value to reduce storage precision noise
+        for val in self.properties.values_mut() {
+            if let Some(n) = val.as_f64()
+                && !val.is_i64()
+                && !val.is_u64()
+            {
+                let mult = 10_000.0;
+                *val = ((n * mult).round() / mult).into();
             }
-
-            FitObject::Header(_) | FitObject::DefinitionMessage(_) => continue,
-        };
-
-        let data = fit_stream.decode_message(msg)?;
-        match data.kind() {
-            // There's one FileId block per file and one or more sessions.
-            // Currently not really supporting the concept of multi-session
-            // files, so don't try to be clever with parsing.
-            MesgNum::FileId | MesgNum::Session => {
-                for f in data.into_vec().into_iter() {
-                    match f.name() {
-                        "sub_sport" => {
-                            // Skip over virtual activity types
-                            if let fitparser::Value::String(ty) = f.value()
-                                && FIT_VIRTUAL_SPORTS.contains(&ty.as_str())
-                            {
-                                return Ok(None);
-                            }
-                        }
-
-                        "start_time" => {
-                            let fitparser::Value::Timestamp(ts) = f.value() else {
-                                continue;
-                            };
-                            start_time = Some(ts.timestamp());
-                        }
-
-                        key if key.starts_with("unknown_field_") => {
-                            // Skip anything the fitparser library doesn't know
-                            // about.
-                        }
-
-                        // Blindly stuff the remaining attributes into properties
-                        key => {
-                            properties.insert(key.to_owned(), serde_json::to_value(f.value())?);
-                        }
-                    }
-                }
-            }
-            MesgNum::Record => {
-                let mut lat: Option<i64> = None;
-                let mut lng: Option<i64> = None;
-                let mut elevation: Option<f64> = None;
-                let mut timestamp: Option<i64> = None;
-
-                for f in data.into_vec().into_iter() {
-                    match f.name() {
-                        "position_lat" => lat = f.value().try_into().ok(),
-                        "position_long" => lng = f.value().try_into().ok(),
-                        // Prefer enhanced_altitude over altitude
-                        "altitude" if elevation.is_none() => {
-                            elevation = f.into_value().try_into().ok()
-                        }
-                        "enhanced_altitude" => elevation = f.into_value().try_into().ok(),
-                        "timestamp" => {
-                            timestamp = f.value().try_into().ok();
-                            if timestamp.is_some() && start_time.is_none() {
-                                start_time = timestamp;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-
-                if let (Some(lat), Some(lng)) = (lat, lng) {
-                    let pt = Point::new(lng as f64, lat as f64) / SCALE_FACTOR;
-                    track_points.push(TrackPoint {
-                        point: pt,
-                        elevation,
-                        timestamp,
-                    });
-                }
-            }
-            _ => {}
         }
-    }
+        let properties = serde_json::to_string(&self.properties)?;
 
-    if track_points.is_empty() {
-        return Ok(None);
-    }
-
-    let stats = TrackStats::from_points(&track_points);
-    stats.merge_into(&mut properties);
-
-    let line: Vec<_> = track_points.iter().map(|pt| pt.point).collect();
-    Ok(Some(RawActivity {
-        properties,
-        title: None,
-        start_time: start_time.map(|ts| OffsetDateTime::from_unix_timestamp(ts).unwrap()),
-        tracks: MultiLineString::from(line),
-    }))
-}
-
-fn parse_gpx<R: Read>(reader: &mut R) -> Result<Option<RawActivity>> {
-    let gpx = gpx::read(reader)?;
-
-    // Just take the first track (generally the only one).
-    let Some(track) = gpx.tracks.first() else {
-        return Ok(None);
-    };
-
-    let mut properties = HashMap::new();
-
-    if let Some(ref ty) = track.type_ {
-        // Skip virtual activities. <type> is free form, so this won't be exhaustive.
-        if ty.starts_with("Virtual") {
-            return Ok(None);
-        }
-
-        properties.insert(
-            "activity_type".to_owned(),
-            serde_json::Value::String(ty.to_owned()),
-        );
-    }
-
-    let start_time = gpx.metadata.and_then(|m| m.time).map(OffsetDateTime::from);
-
-    let mut track_points = vec![];
-    let mut lines = vec![];
-
-    for segment in &track.segments {
-        let mut line = vec![];
-        for pt in &segment.points {
-            let point = pt.point();
-            line.push(point);
-            track_points.push(TrackPoint {
-                point,
-                elevation: pt.elevation,
-                timestamp: pt
-                    .time
-                    .map(OffsetDateTime::from)
-                    .map(OffsetDateTime::unix_timestamp),
-            });
-        }
-
-        if !line.is_empty() {
-            lines.push(LineString::from(line));
-        }
-    }
-
-    if track_points.is_empty() {
-        return Ok(None);
-    }
-
-    let stats = TrackStats::from_points(&track_points);
-    stats.merge_into(&mut properties);
-
-    Ok(Some(RawActivity {
-        start_time,
-        properties,
-        title: track.name.clone(),
-        tracks: MultiLineString::new(lines),
-    }))
-}
-
-// FIXME: this is a mess
-fn parse_tcx<R: Read>(reader: &mut BufReader<R>) -> Result<Option<RawActivity>> {
-    // For some reason all my TCX files start with a bunch of spaces?
-    reader.fill_buf()?;
-    while let Some(&b' ') = reader.buffer().first() {
-        reader.consume(1);
-    }
-
-    let tcx = tcx::read(reader)?;
-    let Some(activities) = tcx.activities.map(|it| it.activities) else {
-        return Ok(None);
-    };
-
-    let Some(activity) = activities.first() else {
-        return Ok(None);
-    };
-
-    let start_time = activity
-        .laps
-        .first()
-        .and_then(|lap| lap.tracks.first())
-        .and_then(|track| track.trackpoints.first())
-        .map(|pt| OffsetDateTime::from_unix_timestamp(pt.time.timestamp()).unwrap());
-
-    let mut track_points = vec![];
-    let mut lines = vec![];
-
-    for lap in &activity.laps {
-        for track in &lap.tracks {
-            let mut line = vec![];
-            for pt in &track.trackpoints {
-                let Some(pos) = pt.position.as_ref() else {
-                    continue;
-                };
-
-                let point = Point::new(pos.longitude, pos.latitude);
-                line.push(point);
-
-                track_points.push(TrackPoint {
-                    point,
-                    elevation: pt.altitude_meters,
-                    timestamp: Some(pt.time.timestamp()),
+        let tile_size = config.tile_extent as f64;
+        let tiles = self
+            .clip_to_tiles(config)
+            .iter()
+            .map(|(tile, line)| {
+                let simplified_line = line.simplify(&4.0).map_coords(|c| {
+                    // For reasons I cannot remember, we store tile activity data
+                    // with inverted Y coordinates from the pixel data.
+                    let flip_y = tile_size - c.y;
+                    (c.x, flip_y).into()
                 });
-            }
 
-            if !line.is_empty() {
-                lines.push(LineString::from(line));
-            }
-        }
+                (*tile, encode_line(&simplified_line))
+            })
+            .collect();
+
+        Ok(db::TiledActivity {
+            file_key,
+            title: self.title,
+            start_time: self.start_time,
+            properties,
+            tiles,
+        })
     }
-
-    if lines.is_empty() {
-        return Ok(None);
-    }
-
-    let mut properties = HashMap::new();
-    let stats = TrackStats::from_points(&track_points);
-    stats.merge_into(&mut properties);
-
-    Ok(Some(RawActivity {
-        start_time,
-        tracks: MultiLineString::new(lines),
-        title: None,
-        properties,
-    }))
-}
-
-/// Allows us to treat `bar.gpx.gz` the same as `bar.gpx`.
-pub fn get_file_type(file_name: &str) -> Option<(MediaType, Compression)> {
-    let mut exts = file_name.rsplit('.');
-
-    let (comp, ext) = match exts.next()? {
-        "gz" => (Compression::Gzip, exts.next()?),
-        ext => (Compression::None, ext),
-    };
-
-    match ext {
-        "gpx" => Some((MediaType::Gpx, comp)),
-        "fit" => Some((MediaType::Fit, comp)),
-        "tcx" => Some((MediaType::Tcx, comp)),
-        _ => None,
-    }
-}
-
-pub fn upsert(
-    conn: &mut rusqlite::Connection,
-    name: &str,
-    mut activity: RawActivity,
-    config: &db::Config,
-) -> Result<i64> {
-    let mut insert_tile = conn.prepare_cached(
-        "\
-        INSERT INTO activity_tiles (activity_id, z, x, y, coords) \
-        VALUES (?, ?, ?, ?, ?)",
-    )?;
-
-    // Round floats in a JSON value to reduce storage precision noise
-    for val in activity.properties.values_mut() {
-        if let Some(n) = val.as_f64()
-            && !val.is_i64()
-            && !val.is_u64()
-        {
-            let mult = 10_000.0;
-            *val = ((n * mult).round() / mult).into();
-        }
-    }
-
-    let num_rows = conn.execute(
-        "\
-        INSERT OR REPLACE \
-        INTO activities (file, title, start_time, properties, created_at) \
-        VALUES (?, ?, ?, JSONB(?), ?)",
-        params![
-            name,
-            activity.title,
-            activity.start_time,
-            serde_json::to_string(&activity.properties)?,
-            OffsetDateTime::now_utc(),
-        ],
-    )?;
-
-    let activity_id = conn.last_insert_rowid();
-
-    // If we've affected more than one row, we've replaced an existing one... so we need to
-    // delete the existing tiles.
-    if num_rows != 1 {
-        conn.execute(
-            "DELETE FROM activity_tiles WHERE activity_id = ?",
-            params![activity_id],
-        )?;
-    }
-
-    let tile_size = config.tile_extent as f64;
-    let tiles = activity.clip_to_tiles(config);
-    for (tile, line) in tiles.iter() {
-        let simplified_line = line.simplify(&4.0).map_coords(|c| {
-            // For reasons I cannot remember, we store tile activity data
-            // with inverted Y coordinates from the pixel data.
-            let flip_y = tile_size - c.y;
-            (c.x, flip_y).into()
-        });
-
-        let coords = encode_line(&simplified_line);
-        insert_tile.insert(params![activity_id, tile.z, tile.x, tile.y, coords])?;
-    }
-
-    Ok(activity_id)
 }
 
 pub struct PropertySource {
@@ -604,7 +258,7 @@ impl Default for PropertySource {
 }
 
 impl PropertySource {
-    pub(crate) fn from_csv(csv_path: &Path) -> Result<Self> {
+    pub fn from_csv(csv_path: &Path) -> Result<Self> {
         const JOIN_COL: &str = "filename";
 
         let base_dir = csv_path.parent().unwrap_or(Path::new("/")).canonicalize()?;
@@ -747,16 +401,15 @@ pub fn import_path(
         })
         .collect();
 
-    let (tx, rx) = std::sync::mpsc::channel::<(String, RawActivity)>();
+    let (tx, rx) = std::sync::mpsc::channel::<db::TiledActivity>();
 
-    // Parse the files in parallel, write them to the DB sequentially. We share
-    // a single DB transaction for all writes to reduce overhead.
+    // Parse files in paralle, insert into DB sequentially (in single transaction)
     std::thread::scope(|thread| {
         thread.spawn(|| {
-            let mut conn = db.connection().expect("open writer db connection");
+            let conn = db.connection().expect("open writer db connection");
             conn.execute_batch("BEGIN").expect("begin transaction");
-            for (key, activity) in rx {
-                upsert(&mut conn, &key, activity, config).expect("insert activity");
+            for activity in rx {
+                db::upsert_activity(&conn, &activity).expect("insert activity");
                 imported.fetch_add(1, Ordering::Relaxed);
             }
             conn.execute_batch("COMMIT").expect("commit transaction");
@@ -782,7 +435,13 @@ pub fn import_path(
             // Merge with activity properties
             prop_source.enrich(&path, &mut activity);
 
-            tx.send((key, activity)).expect("send activity to writer");
+            if let Err(err) = activity
+                .split_tiles(key, config)
+                .and_then(|a| tx.send(a).map_err(Into::into))
+            {
+                tracing::error!(?path, ?err, "failed to prepare activity");
+                failed.fetch_add(1, Ordering::Relaxed);
+            };
         });
 
         // Close sender so receiver can finish

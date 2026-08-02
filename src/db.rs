@@ -12,6 +12,7 @@ use time::{Date, OffsetDateTime};
 
 use crate::date::YYYY_MM_DD;
 use crate::filter::PropertyFilter;
+use crate::tile::Tile;
 
 const SCHEMA: &str = "\
 CREATE TABLE IF NOT EXISTS config (
@@ -265,6 +266,53 @@ impl Default for Config {
             fetch_cutoff: None,
         }
     }
+}
+
+/// New activity pre-prepared and ready to be written to DB
+pub struct TiledActivity {
+    pub file_key: String,
+    pub title: Option<String>,
+    pub start_time: Option<OffsetDateTime>,
+    pub properties: String,
+    pub tiles: Vec<(Tile, Vec<u8>)>,
+}
+
+pub fn upsert_activity(conn: &rusqlite::Connection, activity: &TiledActivity) -> Result<i64> {
+    let num_rows = conn.execute(
+        "\
+        INSERT OR REPLACE \
+        INTO activities (file, title, start_time, properties, created_at) \
+        VALUES (?, ?, ?, JSONB(?), ?)",
+        params![
+            activity.file_key,
+            activity.title,
+            activity.start_time,
+            activity.properties,
+            OffsetDateTime::now_utc(),
+        ],
+    )?;
+
+    let activity_id = conn.last_insert_rowid();
+
+    // If we've affected more than one row, we've replaced an existing one... so we need to
+    // delete the existing tiles.
+    if num_rows != 1 {
+        conn.execute(
+            "DELETE FROM activity_tiles WHERE activity_id = ?",
+            params![activity_id],
+        )?;
+    }
+
+    let mut insert_tile = conn.prepare_cached(
+        "\
+        INSERT INTO activity_tiles (activity_id, z, x, y, coords) \
+        VALUES (?, ?, ?, ?, ?)",
+    )?;
+    for (tile, coords) in &activity.tiles {
+        insert_tile.insert(params![activity_id, tile.z, tile.x, tile.y, coords])?;
+    }
+
+    Ok(activity_id)
 }
 
 pub fn encode_line<T>(line: &LineString<T>) -> Vec<u8>

@@ -5,6 +5,7 @@ use geo_types::Point;
 
 use crate::activity::MAX_POINT_DISTANCE;
 
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub struct TrackPoint {
     pub point: Point,
     pub elevation: Option<f64>,
@@ -48,6 +49,33 @@ impl TrackStats {
                 .zip(distance)
                 .map(|(t, dist)| (dist / t.moving_time as f64) * METERS_PER_SEC_TO_KMH),
             max_speed: speed_time.map(|t| t.max_speed),
+        }
+    }
+
+    pub fn combine(self, other: TrackStats) -> Self {
+        fn c<T, F: Fn(T, T) -> T>(a: Option<T>, b: Option<T>, f: F) -> Option<T> {
+            match (a, b) {
+                (Some(x), Some(y)) => Some(f(x, y)),
+                (x, None) => x,
+                (None, y) => y,
+            }
+        }
+        let total_distance = c(self.total_distance, other.total_distance, |a, b| a + b);
+        let moving_time = c(self.moving_time, other.moving_time, |a, b| a + b);
+
+        TrackStats {
+            total_distance,
+            moving_time,
+            elapsed_time: c(self.elapsed_time, other.elapsed_time, |a, b| a + b),
+            elevation_gain: c(self.elevation_gain, other.elevation_gain, |a, b| a + b),
+            elevation_loss: c(self.elevation_loss, other.elevation_loss, |a, b| a + b),
+            min_elevation: c(self.min_elevation, other.min_elevation, f64::min),
+            max_elevation: c(self.max_elevation, other.max_elevation, f64::max),
+            average_speed: total_distance
+                .zip(moving_time)
+                .filter(|&(_, t)| t > 0)
+                .map(|(d, t)| d / (t as f64 / 3600.0)),
+            max_speed: c(self.max_speed, other.max_speed, f64::max),
         }
     }
 
