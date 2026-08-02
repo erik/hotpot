@@ -25,6 +25,8 @@ pub fn parse_fit<R: Read>(reader: &mut R) -> Result<Option<RawActivity>> {
     let mut fit_stream = FitStreamProcessor::new();
     fit_stream.add_option(DecodeOption::SkipDataCrcValidation);
     fit_stream.add_option(DecodeOption::SkipHeaderCrcValidation);
+    fit_stream.add_option(DecodeOption::DropUnknownFields);
+    fit_stream.add_option(DecodeOption::DropUnknownMessages);
 
     let mut buffer = Vec::new();
     reader.read_to_end(&mut buffer)?;
