@@ -19,8 +19,9 @@ use crate::tile::{BBox, LngLat, Tile, WebMercator};
 struct TileClipper {
     zoom: u8,
     tile_extent: i32,
-    current: Option<(Tile, BBox)>,
-    tiles: HashMap<Tile, Vec<LineString<f64>>>,
+    current_tile: Option<(Tile, BBox)>,
+    current_segment: LineString<f64>,
+    segments: Vec<(Tile, LineString<f64>)>,
 }
 
 impl TileClipper {
@@ -28,8 +29,9 @@ impl TileClipper {
         Self {
             zoom,
             tile_extent,
-            tiles: HashMap::new(),
-            current: None,
+            current_tile: None,
+            current_segment: LineString::new(vec![]),
+            segments: Vec::new(),
         }
     }
 
@@ -39,22 +41,12 @@ impl TileClipper {
         (tile, bbox)
     }
 
-    fn last_line(&mut self, tile: &Tile) -> &mut LineString<f64> {
-        let lines = self.tiles.entry(*tile).or_default();
-
-        if lines.is_empty() {
-            lines.push(LineString::new(vec![]));
-        }
-
-        lines.last_mut().unwrap()
-    }
-
     fn add_line_segment(&mut self, start: WebMercator, end: WebMercator) {
-        let (tile, bbox) = match self.current {
+        let (tile, bbox) = match self.current_tile {
             Some(pair) => pair,
             None => {
                 let pair = self.bounding_tile(&start);
-                self.current = Some(pair);
+                self.current_tile = Some(pair);
                 pair
             }
         };
@@ -63,22 +55,26 @@ impl TileClipper {
             // [start, end] doesn't intersect with the current tile at all, reposition it.
             None => {
                 self.finish_segment();
-                self.current = Some(self.bounding_tile(&start));
+                self.current_tile = Some(self.bounding_tile(&start));
             }
 
             // [start, end] is at least partially contained within the current tile.
             Some((a, b)) => {
                 let extent = self.tile_extent;
-                let line = self.last_line(&tile);
-                if line.is_empty() {
-                    line.0.push(a.to_tile_pixel(&bbox, extent));
-                    line.0.push(b.to_tile_pixel(&bbox, extent));
-                } else {
+                let line = &mut self.current_segment;
+
+                let pb = b.to_tile_pixel(&bbox, extent);
+
+                if let Some(&last) = line.0.last()
+                    && pb != last
+                {
                     // Cheap de-dupe for points that would be thrown away by RDP anyway
-                    let px = b.to_tile_pixel(&bbox, extent);
-                    if px != *line.0.last().unwrap() {
-                        line.0.push(px);
-                    }
+                    line.0.push(pb);
+                } else {
+                    // Otherwise we're at the start of a line segment, and we want
+                    // to guarantee we have at least two points
+                    line.0.push(a.to_tile_pixel(&bbox, extent));
+                    line.0.push(pb);
                 }
 
                 // If we've modified the end point, we've left the current tile.
@@ -87,7 +83,7 @@ impl TileClipper {
 
                     let (next_tile, next_bbox) = self.bounding_tile(&end);
                     if next_tile != tile {
-                        self.current = Some((next_tile, next_bbox));
+                        self.current_tile = Some((next_tile, next_bbox));
                         self.add_line_segment(b, end);
                     }
                 }
@@ -96,10 +92,11 @@ impl TileClipper {
     }
 
     fn finish_segment(&mut self) {
-        if let Some((tile, _)) = self.current {
-            self.tiles.entry(tile).and_modify(|lines| {
-                lines.push(LineString::new(vec![]));
-            });
+        if let Some((tile, _bbox)) = self.current_tile
+            && !self.current_segment.is_empty()
+        {
+            let segment = std::mem::replace(&mut self.current_segment, LineString::new(vec![]));
+            self.segments.push((tile, segment));
         }
     }
 }
@@ -110,9 +107,8 @@ impl ClippedTiles {
     pub fn iter(&self) -> impl Iterator<Item = (&Tile, &LineString<f64>)> {
         self.0
             .iter()
-            .flat_map(|clip| clip.tiles.iter())
-            .filter(|(_, lines)| !lines.is_empty())
-            .flat_map(|(tile, lines)| lines.iter().map(move |line| (tile, line)))
+            .flat_map(|clip| clip.segments.iter())
+            .map(|(tile, line)| (tile, line))
     }
 }
 
