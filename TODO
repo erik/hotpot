@@ -11,3 +11,6 @@ Customization
 Misc
   - Strip noisy points from tracks (e.g. inside buildings, etc.)
   - Export rendered tiles as PMTiles / MBTiles
+
+Performance
+  - Experiment with indexed PNG tiles since gradient guarantees <= 256 colors

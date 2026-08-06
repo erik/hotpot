@@ -33,22 +33,21 @@ pub struct TrackStats {
 
 impl TrackStats {
     pub fn from_points(points: &[TrackPoint]) -> Self {
-        let speed_time = TimeSpeedStats::from_points(points);
+        let base = BaseTrackStats::from_points(points);
         let elevation = ElevationStats::from_points(points);
-        let distance = compute_distance(points);
 
         TrackStats {
-            total_distance: distance.map(|d| d / 1000.0),
-            elapsed_time: speed_time.map(|f| f.elapsed_time),
-            moving_time: speed_time.map(|f| f.moving_time),
+            total_distance: base.map(|d| d.distance / 1000.0),
+            elapsed_time: base.map(|f| f.elapsed_time),
+            moving_time: base.map(|f| f.moving_time),
             elevation_gain: elevation.map(|t| t.gain),
             elevation_loss: elevation.map(|t| t.loss),
             min_elevation: elevation.map(|t| t.min_val),
             max_elevation: elevation.map(|t| t.max_val),
-            average_speed: speed_time
-                .zip(distance)
-                .map(|(t, dist)| (dist / t.moving_time as f64) * METERS_PER_SEC_TO_KMH),
-            max_speed: speed_time.map(|t| t.max_speed),
+            average_speed: base
+                .filter(|t| t.moving_time > 0)
+                .map(|t| (t.distance / t.moving_time as f64) * METERS_PER_SEC_TO_KMH),
+            max_speed: base.map(|t| t.max_speed),
         }
     }
 
@@ -114,41 +113,34 @@ const PAUSE_THRESHOLD_SECS: i64 = 60;
 /// Meters per second to kilometers per hour.
 pub const METERS_PER_SEC_TO_KMH: f64 = 3.6;
 
-fn compute_distance(points: &[TrackPoint]) -> Option<f64> {
-    if points.len() < 2 {
-        return None;
-    }
-
-    let total: f64 = points
-        .windows(2)
-        .map(|w| w[0].distance(&w[1]))
-        .filter(|d| *d <= MAX_POINT_DISTANCE)
-        .sum();
-
-    Some(total)
-}
-
 #[derive(Copy, Clone)]
-struct TimeSpeedStats {
+struct BaseTrackStats {
+    distance: f64,
     max_speed: f64,
     moving_time: i64,
     elapsed_time: i64,
 }
 
-impl TimeSpeedStats {
-    fn from_points(points: &[TrackPoint]) -> Option<Self> {
+impl BaseTrackStats {
+    fn from_points(points: &[TrackPoint]) -> Option<BaseTrackStats> {
         if points.len() < 2 {
             return None;
         }
 
-        let first = points.iter().find_map(|p| p.timestamp)?;
-        let last = points.iter().rev().find_map(|p| p.timestamp)?;
-
-        let elapsed_time = last - first;
+        let mut total_distance = 0.0;
         let mut max_speed: f64 = 0.0;
         let mut moving_time: i64 = 0;
 
         for w in points.windows(2) {
+            let dist = w[0].distance(&w[1]);
+
+            // Large jumps are treated as gaps and excluded
+            if dist > MAX_POINT_DISTANCE {
+                continue;
+            }
+
+            total_distance += dist;
+
             let (Some(start_time), Some(end_time)) = (w[0].timestamp, w[1].timestamp) else {
                 continue;
             };
@@ -158,20 +150,19 @@ impl TimeSpeedStats {
                 continue;
             }
 
-            let dist_diff = w[0].distance(&w[1]);
-            if dist_diff > MAX_POINT_DISTANCE {
-                continue;
-            }
-
-            let speed = dist_diff / time_diff as f64 * METERS_PER_SEC_TO_KMH;
+            let speed = dist / time_diff as f64 * METERS_PER_SEC_TO_KMH;
             max_speed = max_speed.max(speed);
             moving_time += time_diff;
         }
 
-        Some(TimeSpeedStats {
+        let first = points.iter().find_map(|p| p.timestamp).unwrap_or(0);
+        let last = points.iter().rev().find_map(|p| p.timestamp).unwrap_or(0);
+
+        Some(BaseTrackStats {
+            distance: total_distance,
             max_speed,
             moving_time,
-            elapsed_time,
+            elapsed_time: last - first,
         })
     }
 }
