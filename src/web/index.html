@@ -58,7 +58,6 @@
                 </fieldset>
 
                 <fieldset>
-
                     <div class="form-row simple">
                         <label for="color">Theme</label>
                         <select key="color" name="color">
@@ -74,23 +73,18 @@
                         <label for="gradient">Gradient</label>
                         <input key="gradient" name="gradient" x-debounce placeholder="1:400;10:fff" />
                     </div>
-                </fieldset>
-
-                <fieldset>
 
                     <div class="form-row simple">
                         <label for="basemap">Base Map</label>
                         <select key="basemap" name="basemap">
-                            <option value="dark-matter-nolabels" selected>
-                                Dark (no labels)
-                            </option>
-                            <option value="positron-nolabels">
-                                Light (no labels)
-                            </option>
-                            <option value="dark-matter">Dark</option>
+                            <option value="dark" selected>Dark</option>
                             <option value="positron">Light</option>
+                            <option value="fiord">Fiord</option>
+                            <option value="bright">Bright</option>
                             <option value="none-black">Solid Black</option>
                             <option value="none-white">Solid White</option>
+                            <option value="dark-matter-nolabels">Dark (no labels)</option>
+                            <option value="positron-nolabels">Light (no labels)</option>
                             <option value="raster">Custom Raster</option>
                         </select>
                     </div>
@@ -169,7 +163,7 @@
 
         const map = new maplibregl.Map({
             container: "map",
-            style: "https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json",
+            style: "https://tiles.openfreemap.org/styles/dark",
             center: [0, 0],
             hash: "map",
         });
@@ -189,7 +183,7 @@
             before: null,
             after: null,
             size: "512",
-            basemap: "dark-matter-nolabels",
+            basemap: "dark",
             filter: null,
             gradient: null,
             rasterUrl: null,
@@ -230,6 +224,11 @@
                                 },
                             ],
                         };
+                    case "dark":
+                    case "positron":
+                    case "fiord":
+                    case "bright":
+                        return `https://tiles.openfreemap.org/styles/${basemap}`;
                     default:
                         return `https://basemaps.cartocdn.com/gl/${basemap}-gl-style/style.json`;
                 }
