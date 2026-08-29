@@ -546,11 +546,16 @@ pub fn upsert(
         }
     }
 
-    let num_rows = conn.execute(
+    let activity_id: i64 = conn.query_row(
         "\
-        INSERT OR REPLACE \
-        INTO activities (file, title, start_time, properties, created_at) \
-        VALUES (?, ?, ?, JSONB(?), ?)",
+        INSERT INTO activities (file, title, start_time, properties, created_at) \
+        VALUES (?, ?, ?, JSONB(?), ?) \
+        ON CONFLICT (file) DO UPDATE SET \
+            title = excluded.title \
+            , start_time = excluded.start_time \
+            , properties = excluded.properties \
+            , created_at = excluded.created_at \
+        RETURNING id",
         params![
             name,
             activity.title,
@@ -558,18 +563,14 @@ pub fn upsert(
             serde_json::to_string(&activity.properties)?,
             OffsetDateTime::now_utc(),
         ],
+        |row| row.get(0),
     )?;
 
-    let activity_id = conn.last_insert_rowid();
-
-    // If we've affected more than one row, we've replaced an existing one... so we need to
-    // delete the existing tiles.
-    if num_rows != 1 {
-        conn.execute(
-            "DELETE FROM activity_tiles WHERE activity_id = ?",
-            params![activity_id],
-        )?;
-    }
+    // Clean up any existing tiles if we're replacing an existing activity ID
+    conn.execute(
+        "DELETE FROM activity_tiles WHERE activity_id = ?",
+        params![activity_id],
+    )?;
 
     let tile_size = config.tile_extent as f64;
     let tiles = activity.clip_to_tiles(config);
@@ -790,4 +791,51 @@ pub fn import_path(
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_activity(coords: Vec<(f64, f64)>) -> RawActivity {
+        RawActivity {
+            title: None,
+            start_time: None,
+            properties: HashMap::new(),
+            tracks: MultiLineString::from(LineString::from(coords)),
+        }
+    }
+
+    #[test]
+    fn test_reupsert_replaces_tiles_in_place() {
+        let db = Database::memory().unwrap();
+        let mut conn = db.connection().unwrap();
+        let config = db::Config::default();
+
+        let track = vec![(13.40, 52.52), (13.41, 52.53), (13.42, 52.54)];
+        let count_tiles = |conn: &rusqlite::Connection| -> i64 {
+            conn.query_row("SELECT count(*) FROM activity_tiles", [], |r| r.get(0))
+                .unwrap()
+        };
+
+        let first = upsert(
+            &mut conn,
+            "upload:a.gpx",
+            test_activity(track.clone()),
+            &config,
+        )
+        .expect("first insert");
+        let tiles = count_tiles(&conn);
+
+        let second = upsert(
+            &mut conn,
+            "upload:a.gpx",
+            test_activity(track.clone()),
+            &config,
+        )
+        .expect("second insert");
+
+        assert_eq!(first, second, "re-upsert should reuse the activity id");
+        assert_eq!(tiles, count_tiles(&conn), "stale tiles should be replaced");
+    }
 }
