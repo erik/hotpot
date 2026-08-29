@@ -1,12 +1,8 @@
 use std::hint::black_box;
-use std::io::Cursor;
 use std::path::PathBuf;
 use std::str::FromStr;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use image::ImageEncoder;
-use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-
 use hotpot::db::{ActivityFilter, Config, Database};
 use hotpot::filter::PropertyFilter;
 use hotpot::raster::{PINKISH, rasterize_tile, render_view};
@@ -82,22 +78,6 @@ fn bench_db() -> (Database, Config, TileSamples) {
     (db, config, samples)
 }
 
-fn encode_png(image: &image::RgbaImage) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    let mut cursor = Cursor::new(&mut bytes);
-    let encoder =
-        PngEncoder::new_with_quality(&mut cursor, CompressionType::Fast, FilterType::NoFilter);
-    encoder
-        .write_image(
-            image.as_raw(),
-            image.width(),
-            image.height(),
-            image::ExtendedColorType::Rgba8,
-        )
-        .expect("encode png");
-    bytes
-}
-
 fn bench_rasterize_tile(c: &mut Criterion) {
     let (db, config, samples) = bench_db();
     let mut group = c.benchmark_group("rasterize_tile");
@@ -112,7 +92,7 @@ fn bench_rasterize_tile(c: &mut Criterion) {
                             .expect("rasterize tile");
 
                     let bytes = raster
-                        .map(|raster| encode_png(&raster.apply_gradient(&PINKISH)))
+                        .map(|raster| raster.encode_png(&PINKISH))
                         .unwrap_or_default();
 
                     black_box(bytes)
@@ -138,7 +118,7 @@ fn bench_rasterize_tile(c: &mut Criterion) {
                     rasterize_tile(tile, 512, &filter, &db, &config).expect("rasterize tile");
 
                 let bytes = raster
-                    .map(|raster| encode_png(&raster.apply_gradient(&PINKISH)))
+                    .map(|raster| raster.encode_png(&PINKISH))
                     .unwrap_or_default();
 
                 black_box(bytes)

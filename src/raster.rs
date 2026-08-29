@@ -5,7 +5,6 @@ use std::str::FromStr;
 
 use anyhow::{Result, anyhow};
 use geo_types::Coord;
-use image::{Rgba, RgbaImage};
 use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use rusqlite::{ToSql, params};
@@ -139,22 +138,52 @@ impl TileRaster {
         }
     }
 
-    pub fn apply_gradient(&self, gradient: &LinearGradient) -> RgbaImage {
-        RgbaImage::from_fn(self.width, self.width, |x, y| {
-            let idx = (y * self.width + x) as usize;
-            gradient.sample(self.pixels[idx])
-        })
+    pub fn encode_png(&self, gradient: &LinearGradient) -> Vec<u8> {
+        encode_indexed_png(&self.pixels, self.width, self.width, gradient)
     }
 }
 
+fn encode_indexed_png(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    gradient: &LinearGradient,
+) -> Vec<u8> {
+    debug_assert_eq!(pixels.len(), (width * height) as usize);
+
+    let (palette, trns) = gradient.as_png_palette();
+
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut bytes, width, height);
+        encoder.set_color(png::ColorType::Indexed);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_palette(palette.as_slice());
+        encoder.set_trns(trns.as_slice());
+        encoder.set_compression(png::Compression::Fast);
+        encoder.set_filter(png::Filter::NoFilter);
+
+        let mut writer = encoder.write_header().expect("write png header");
+        writer.write_image_data(pixels).expect("write png data");
+    }
+
+    bytes
+}
+
+/// Encode an image of the given size with no activity data, i.e. every pixel at
+/// palette index 0.
+pub fn encode_empty_png(width: u32, height: u32, gradient: &LinearGradient) -> Vec<u8> {
+    encode_indexed_png(&vec![0; (width * height) as usize], width, height, gradient)
+}
+
 /// Linearly interpolate between two colors
-fn lerp(a: Rgba<u8>, b: Rgba<u8>, t: f32) -> Rgba<u8> {
-    Rgba::from([
+fn lerp(a: [u8; 4], b: [u8; 4], t: f32) -> [u8; 4] {
+    [
         (a[0] as f32 * (1.0 - t) + b[0] as f32 * t) as u8,
         (a[1] as f32 * (1.0 - t) + b[1] as f32 * t) as u8,
         (a[2] as f32 * (1.0 - t) + b[2] as f32 * t) as u8,
         (a[3] as f32 * (1.0 - t) + b[3] as f32 * t) as u8,
-    ])
+    ]
 }
 
 struct EnumerateRasterPixels<'a> {
@@ -180,40 +209,51 @@ impl Iterator for EnumerateRasterPixels<'_> {
 }
 
 #[derive(Clone, Debug)]
-pub struct LinearGradient([Rgba<u8>; 256]);
+pub struct LinearGradient {
+    rgb: [u8; 768],
+    alpha: [u8; 256],
+}
 
 impl LinearGradient {
-    pub fn from_stops<P>(stops: &[(u8, P)]) -> Self
-    where
-        P: Copy + Into<Rgba<u8>>,
-    {
-        let mut palette = [Rgba::from([0, 0, 0, 0]); 256];
+    pub fn from_stops(stops: &[(u8, [u8; 4])]) -> Self {
+        let mut gradient = LinearGradient {
+            rgb: [0; 768],
+            alpha: [0; 256],
+        };
 
         for window in stops.windows(2) {
             let (start_idx, start_color) = window[0];
             let (end_idx, end_color) = window[1];
 
             for i in start_idx..=end_idx {
-                palette[i as usize] = lerp(
-                    start_color.into(),
-                    end_color.into(),
+                let color = lerp(
+                    start_color,
+                    end_color,
                     (i - start_idx) as f32 / (end_idx - start_idx) as f32,
                 );
+                gradient.set(i, color);
             }
         }
 
         // Copy the last color to the end of the palette
         if let Some(&(last_idx, color)) = stops.last() {
-            for p in palette.iter_mut().skip(last_idx as usize) {
-                *p = color.into();
+            for i in last_idx..=u8::MAX {
+                gradient.set(i, color);
             }
         }
 
-        LinearGradient(palette)
+        gradient
     }
 
-    pub fn sample(&self, val: u8) -> Rgba<u8> {
-        self.0[val as usize]
+    #[inline]
+    fn set(&mut self, idx: u8, color: [u8; 4]) {
+        let i = idx as usize;
+        self.rgb[i * 3..i * 3 + 3].copy_from_slice(&color[0..3]);
+        self.alpha[i] = color[3];
+    }
+
+    pub fn as_png_palette(&self) -> (&[u8; 768], &[u8; 256]) {
+        (&self.rgb, &self.alpha)
     }
 }
 
@@ -248,7 +288,7 @@ impl FromStr for LinearGradient {
     ///
     /// For example: `0:001122;25:789;50:334455;75:ffffff33`
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let stops: Vec<(u8, Rgba<u8>)> = s
+        let stops: Vec<(u8, [u8; 4])> = s
             .split(';')
             .map(|part| {
                 let (threshold, color) = part.split_once(':').ok_or(LinearGradientParseError)?;
@@ -269,7 +309,7 @@ impl FromStr for LinearGradient {
                     u32::from_str_radix(&rgba, 16).map_err(|_| LinearGradientParseError)?
                 };
 
-                Ok((threshold, Rgba::from(color.to_be_bytes())))
+                Ok((threshold, color.to_be_bytes()))
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -295,7 +335,7 @@ pub fn render_view(
     filter: &ActivityFilter,
     db: &Database,
     config: &Config,
-) -> Result<RgbaImage> {
+) -> Result<Vec<u8>> {
     let tile_size = 256;
     let zoom_range = RangeInclusive::new(
         *config.zoom_levels.iter().min().unwrap() as u32,
@@ -324,7 +364,7 @@ pub fn render_view(
         "rendering subtiles"
     );
 
-    let mut mosaic = RgbaImage::new(img_w, img_h);
+    let mut mosaic = vec![0u8; (img_w * img_h) as usize];
 
     // The tile bounds will be aligned to the tile grid, so we need to trim
     // the excess pixels from the edges of the image.
@@ -363,13 +403,14 @@ pub fn render_view(
 
                 // Ignore pixels which fall into the margins
                 if x >= margin_x && x < margin_x + img_w && y >= margin_y && y < margin_y + img_h {
-                    mosaic.put_pixel(x - margin_x, y - margin_y, gradient.sample(pixel));
+                    let (mx, my) = (x - margin_x, y - margin_y);
+                    mosaic[(my * img_w + mx) as usize] = pixel;
                 }
             }
         }
     }
 
-    Ok(mosaic)
+    Ok(encode_indexed_png(&mosaic, img_w, img_h, gradient))
 }
 
 pub fn rasterize_tile(
@@ -439,16 +480,70 @@ fn prepare_activities_query<'a>(
 mod tests {
     use super::*;
 
+    fn palette_color(gradient: &LinearGradient, idx: u8) -> [u8; 4] {
+        let (palette, trns) = gradient.as_png_palette();
+        let i = idx as usize;
+        [
+            palette[i * 3],
+            palette[i * 3 + 1],
+            palette[i * 3 + 2],
+            trns[i],
+        ]
+    }
+
     #[test]
     fn test_linear_gradient_parse() {
         let gradient = "1:001122;10:789;100:334455;200:ffffff33"
             .parse::<LinearGradient>()
             .unwrap();
-        assert_eq!(gradient.0[0], Rgba::from([0x00, 0x00, 0x00, 0x00]));
-        assert_eq!(gradient.0[1], Rgba::from([0x00, 0x11, 0x22, 0xff]));
-        assert_eq!(gradient.0[10], Rgba::from([0x77, 0x88, 0x99, 0xff]));
-        assert_eq!(gradient.0[100], Rgba::from([0x33, 0x44, 0x55, 0xff]));
+        assert_eq!(palette_color(&gradient, 0), [0x00, 0x00, 0x00, 0x00]);
+        assert_eq!(palette_color(&gradient, 1), [0x00, 0x11, 0x22, 0xff]);
+        assert_eq!(palette_color(&gradient, 10), [0x77, 0x88, 0x99, 0xff]);
+        assert_eq!(palette_color(&gradient, 100), [0x33, 0x44, 0x55, 0xff]);
         // Last value should be copied to end
-        assert_eq!(gradient.0[255], Rgba::from([0xff, 0xff, 0xff, 0x33]));
+        assert_eq!(palette_color(&gradient, 255), [0xff, 0xff, 0xff, 0x33]);
+    }
+
+    #[test]
+    fn test_indexed_png_palette_round_trips_indices_and_colors() {
+        let gradient = "1:001122;10:789;100:334455;200:ffffff33"
+            .parse::<LinearGradient>()
+            .unwrap();
+
+        let pixels: Vec<u8> = (0..=255u8).collect();
+        let encoded = encode_indexed_png(&pixels, 256, 1, &gradient);
+
+        assert_eq!(
+            &encoded[..8],
+            &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]
+        );
+
+        let decoder = png::Decoder::new(std::io::Cursor::new(&encoded));
+        let mut reader = decoder.read_info().unwrap();
+        let info = reader.info();
+        assert_eq!(info.color_type, png::ColorType::Indexed);
+        assert_eq!(info.bit_depth, png::BitDepth::Eight);
+
+        let decoded_palette = info.palette.clone().unwrap().into_owned();
+        let decoded_trns = info.trns.clone().unwrap().into_owned();
+
+        let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+        let frame = reader.next_frame(&mut buf).unwrap();
+        let indices = &buf[..frame.buffer_size()];
+
+        assert_eq!(indices, pixels.as_slice());
+
+        for (i, &idx) in indices.iter().enumerate() {
+            let idx = idx as usize;
+            assert_eq!(
+                [
+                    decoded_palette[idx * 3],
+                    decoded_palette[idx * 3 + 1],
+                    decoded_palette[idx * 3 + 2],
+                    decoded_trns[idx]
+                ],
+                palette_color(&gradient, i as u8)
+            );
+        }
     }
 }
