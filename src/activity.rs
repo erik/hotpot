@@ -158,18 +158,22 @@ impl RawActivity {
             let first = &points[0].0;
             let last = &points[points.len() - 1].0;
 
+            let scale = points[0].meter_scale();
+            let trim_dist = *trim_dist * scale;
+            let max_point_distance = MAX_POINT_DISTANCE * scale;
+
             // Find points which are >= trim_dist away from start/end
             let start_idx = points
                 .iter()
                 .enumerate()
-                .find(|(_, pt)| pt.0.euclidean_distance(first) >= *trim_dist)
+                .find(|(_, pt)| pt.0.euclidean_distance(first) >= trim_dist)
                 .map(|(i, _)| i);
 
             let end_idx = points
                 .iter()
                 .rev()
                 .enumerate()
-                .find(|(_, pt)| pt.0.euclidean_distance(last) >= *trim_dist)
+                .find(|(_, pt)| pt.0.euclidean_distance(last) >= trim_dist)
                 .map(|(i, _)| points.len() - 1 - i);
 
             if let Some((i, j)) = start_idx.zip(end_idx) {
@@ -177,11 +181,11 @@ impl RawActivity {
                     continue;
                 }
 
-                let mut pairs = points[i..j].windows(2);
+                let mut pairs = points[i..=j].windows(2);
                 while let Some(&[p0, p1]) = pairs.next() {
                     // Skip over large jumps
                     let len = p0.0.euclidean_distance(&p1.0);
-                    if len > MAX_POINT_DISTANCE {
+                    if len > max_point_distance {
                         continue;
                     }
 

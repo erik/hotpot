@@ -270,6 +270,11 @@ impl BBox {
 }
 
 impl WebMercator {
+    /// Scale factor to convert ground meters into Mercator units at this point.
+    pub fn meter_scale(&self) -> f64 {
+        (self.0.y() / EARTH_RADIUS_METERS).cosh()
+    }
+
     /// Return the tile coordinate for this point at the given zoom level.
     pub fn tile(&self, zoom: u8) -> Tile {
         let num_tiles = (1u32 << zoom) as f64;
@@ -356,23 +361,23 @@ impl Tile {
     pub fn build_mask(&self, masks: &[ActivityMask], tile_extent: i32) -> TileActivityMask {
         let bbox = self.xy_bounds();
 
-        let tile_width_meter = bbox.right - bbox.left;
-        let pixels_per_meter = tile_extent as f64 / tile_width_meter;
+        let tile_width_merc = bbox.right - bbox.left;
+        let pixels_per_merc_meter = tile_extent as f64 / tile_width_merc;
 
         let tile_masks = masks
             .iter()
             .filter_map(|m| {
                 let center = LngLat::new(m.lng, m.lat).xy()?;
 
-                // Check if mask intersects this tile. Mercator units are
-                // "meters"-ish, so we don't need to scale the radius yet.
-                if !bbox.intersects_circle(center.0.x(), center.0.y(), m.radius) {
+                // Check if mask intersects this tile.
+                let radius = m.radius * center.meter_scale();
+                if !bbox.intersects_circle(center.0.x(), center.0.y(), radius) {
                     return None;
                 }
 
                 // Masking happens in pixel space
                 let center_px = center.to_tile_pixel(&bbox, tile_extent);
-                let radius_px = m.radius * pixels_per_meter;
+                let radius_px = radius * pixels_per_merc_meter;
 
                 // Avoid a sqrt by comparing distance to square of radius.
                 let radius_sq = radius_px * radius_px;
@@ -649,5 +654,50 @@ mod tests {
         assert!(bbox.intersects_circle(15.0, 5.0, 5.0)); // Right edge
         assert!(bbox.intersects_circle(5.0, -5.0, 5.0)); // Bottom edge
         assert!(bbox.intersects_circle(5.0, 15.0, 5.0)); // Top edge
+    }
+
+    // `meter_scale` takes a shortcut by not converting to latitude in radians
+    // first, ensure it's equivalent.
+    #[test]
+    fn test_meter_scale() {
+        for lat in [0.0, 45.0, 52.52, 60.0, 85.0] {
+            let pt = LngLat::new(0.0, lat).xy().unwrap();
+            close_enough!(pt.meter_scale(), 1.0 / lat.to_radians().cos(), 1e-9);
+        }
+    }
+
+    #[test]
+    fn test_mask_radius_is_ground_meters() {
+        let tile_extent = 4096;
+        let mask = ActivityMask {
+            name: "test".to_string(),
+            lat: 52.52,
+            lng: 13.405,
+            radius: 2000.0,
+        };
+
+        let tile = LngLat::new(mask.lng, mask.lat).xy().unwrap().tile(8);
+        let bbox = tile.xy_bounds();
+        let tile_mask = tile.build_mask(std::slice::from_ref(&mask), tile_extent);
+
+        let is_hidden_at_dist = |meters: f64| {
+            let meters_per_deg = EARTH_CIRCUMFERENCE / 360.0 * mask.lat.to_radians().cos();
+            let lng = mask.lng + (meters / meters_per_deg);
+            let Coord { x, y } = LngLat::new(lng, mask.lat)
+                .xy()
+                .unwrap()
+                .to_tile_pixel(&bbox, tile_extent);
+
+            tile_mask.is_hidden(x as i32, y as i32)
+        };
+
+        assert!(
+            is_hidden_at_dist(0.9 * mask.radius),
+            "inside radius should be hidden"
+        );
+        assert!(
+            !is_hidden_at_dist(1.1 * mask.radius),
+            "outside radius should be visible"
+        );
     }
 }
