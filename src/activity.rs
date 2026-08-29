@@ -607,7 +607,7 @@ impl Default for PropertySource {
 }
 
 impl PropertySource {
-    pub(crate) fn from_csv(csv_path: &Path) -> Result<Self> {
+    pub fn from_csv(csv_path: &Path) -> Result<Self> {
         const JOIN_COL: &str = "filename";
 
         let base_dir = csv_path.parent().unwrap_or(Path::new("/")).canonicalize()?;

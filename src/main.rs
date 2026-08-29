@@ -6,27 +6,18 @@ use std::path::PathBuf;
 use anyhow::{Result, anyhow};
 use clap::{Args, Parser, Subcommand};
 use image::RgbaImage;
-use tile::WebMercatorViewport;
 use time::Date;
 
-use activity::PropertySource;
+use hotpot::activity::PropertySource;
 
-use crate::db::{ActivityFilter, Database};
-use crate::external::intervals_icu::{IntervalsIcuAuth, IntervalsIcuClient};
-use crate::filter::PropertyFilter;
-use crate::raster::{LinearGradient, PINKISH};
-use crate::tile::{LngLat, Tile};
+use hotpot::db::{ActivityFilter, Database};
+use hotpot::external::intervals_icu::{IntervalsIcuAuth, IntervalsIcuClient};
+use hotpot::filter::PropertyFilter;
+use hotpot::raster::{LinearGradient, PINKISH};
+use hotpot::tile::WebMercatorViewport;
+use hotpot::tile::{LngLat, Tile};
 
-mod activity;
-mod date;
-mod db;
-mod external;
-mod filter;
-mod raster;
-mod strava;
-mod tile;
-mod track_stats;
-mod web;
+pub use hotpot::*;
 
 #[derive(Subcommand)]
 enum Commands {

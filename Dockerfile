@@ -16,6 +16,7 @@ ENV GIT_HASH=${GIT_HASH}
 
 COPY Cargo.toml Cargo.lock ./
 COPY build.rs ./
+COPY benches ./benches
 COPY src ./src
 
 RUN cargo build --release

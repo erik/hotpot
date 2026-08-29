@@ -11,9 +11,8 @@ use rayon::prelude::*;
 use rusqlite::{ToSql, params};
 use serde::{Deserialize, Deserializer};
 
-use crate::WebMercatorViewport;
 use crate::db::{ActivityFilter, Config, Database, decode_line};
-use crate::tile::{Tile, TileActivityMask, TileBounds};
+use crate::tile::{Tile, TileActivityMask, TileBounds, WebMercatorViewport};
 
 pub static PINKISH: Lazy<LinearGradient> = Lazy::new(|| {
     LinearGradient::from_stops(&[
