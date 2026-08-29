@@ -467,18 +467,25 @@ fn prepare_activities_query<'a>(
     bounds: &'a TileBounds,
 ) -> Result<(rusqlite::Statement<'a>, Vec<&'a dyn ToSql>)> {
     let mut params = params![bounds.z, bounds.xmin, bounds.xmax, bounds.ymin, bounds.ymax].to_vec();
-    let filter_clause = filter.to_query(&mut params);
+
+    let (expr, join) = if filter.is_empty() {
+        (String::from("true"), "")
+    } else {
+        (
+            filter.to_query(&mut params),
+            "JOIN activities ON activities.id = activity_tiles.activity_id ",
+        )
+    };
 
     let stmt = conn.prepare(&format!(
         "\
         SELECT x, y, z, coords \
         FROM activity_tiles \
-        JOIN activities ON activities.id = activity_tiles.activity_id \
+        {join}\
         WHERE z = ? \
             AND (x >= ? AND x < ?) \
             AND (y >= ? AND y < ?) \
-            AND {};",
-        filter_clause,
+            AND {expr};",
     ))?;
 
     Ok((stmt, params))
@@ -553,5 +560,58 @@ mod tests {
                 palette_color(&gradient, i as u8)
             );
         }
+    }
+
+    #[test]
+    fn test_unfiltered_query_matches_filtered_query_raster() {
+        let db = Database::memory().unwrap();
+        let config = db.load_config().unwrap();
+
+        let tile = Tile::new(511, 340, 10);
+        let source_zoom = config.source_level(tile.z).unwrap();
+        let bounds = TileBounds::from(source_zoom, &tile);
+
+        let points: [(u16, u16); 5] = [(10, 10), (900, 400), (1500, 1900), (300, 1700), (60, 25)];
+        let mut coords = Vec::with_capacity(points.len() * 4);
+        for (x, y) in points {
+            coords.extend_from_slice(&x.to_le_bytes());
+            coords.extend_from_slice(&y.to_le_bytes());
+        }
+
+        {
+            let conn = db.connection().unwrap();
+            conn.execute(
+                "INSERT INTO activities (id, file, title, start_time, properties) \
+                 VALUES (1, 'test.gpx', 'test', '2020-06-01T12:00:00Z', jsonb('{}'))",
+                [],
+            )
+            .unwrap();
+
+            conn.execute(
+                "INSERT INTO activity_tiles (activity_id, z, x, y, coords) VALUES (1, ?, ?, ?, ?)",
+                params![bounds.z, bounds.xmin, bounds.ymin, &coords],
+            )
+            .unwrap();
+        }
+
+        let unfiltered = ActivityFilter::default();
+        assert!(unfiltered.is_empty());
+
+        let matches_everything = ActivityFilter::new(
+            None,
+            time::Date::from_calendar_date(2000, time::Month::January, 1).ok(),
+            None,
+        );
+        assert!(!matches_everything.is_empty());
+
+        let without_join = rasterize_tile(tile, 256, &unfiltered, &db, &config)
+            .unwrap()
+            .expect("expected activity data");
+        let with_join = rasterize_tile(tile, 256, &matches_everything, &db, &config)
+            .unwrap()
+            .expect("expected activity data");
+
+        assert!(without_join.pixels.iter().any(|&p| p > 0));
+        assert_eq!(without_join.pixels, with_join.pixels);
     }
 }

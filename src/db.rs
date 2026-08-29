@@ -313,6 +313,10 @@ impl ActivityFilter {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.before.is_none() && self.after.is_none() && self.props.is_none()
+    }
+
     pub fn to_query<'a>(&'a self, params: &mut Vec<&'a dyn ToSql>) -> String {
         let mut clauses = String::from("true");
 
