@@ -312,16 +312,17 @@ pub fn render_view(
     let (img_w, img_h) = (u32::min(width, src_w), u32::min(height, src_h));
 
     if img_w < width || img_h < height {
-        println!(
-            "[WARN] source data is not high resolution for requested image dimensions, clamping to {}x{}.",
-            img_w, img_h
+        tracing::warn!(
+            "source data is not high resolution for requested image dimensions, clamping to {}x{}.",
+            img_w,
+            img_h
         );
     }
 
-    println!(
-        "Rendering {} subtiles at zoom={}...",
-        num_x * num_y,
-        tile_bounds.z
+    tracing::debug!(
+        num_tiles = num_x * num_y,
+        zoom = tile_bounds.z,
+        "rendering subtiles"
     );
 
     let mut mosaic = RgbaImage::new(img_w, img_h);
