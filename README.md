@@ -202,7 +202,8 @@ over HTTP:
 
 1. `POST /upload`: Manually upload a single GPX, TCX, or FIT file
 2. intervals.icu: Fetch new activity data on demand (CLI or HTTP)
-3. Strava webhook: Subscribe to new activity uploads automatically
+3. Strava: Fetch new activities on demand (CLI or HTTP), or subscribe to new
+   uploads automatically via webhook
 
 ### HTTP Upload
 
@@ -307,6 +308,22 @@ export STRAVA_CLIENT_ID=... \
        STRAVA_WEBHOOK_SECRET=...
 
 hotpot serve --strava-webhook
+```
+
+You can also pull recent activities on demand:
+
+```bash
+export STRAVA_CLIENT_ID=... \
+       STRAVA_CLIENT_SECRET=...\
+       STRAVA_WEBHOOK_SECRET=...
+
+# Import activities from the last 30 days
+hotpot fetch strava --lookback 30
+
+# Or over HTTP, with the fetch endpoint enabled (hotpot serve --fetch)
+curl -X POST \
+  https://hotpot.example.com/fetch/strava?lookback=30 \
+  --header "Authorization: Bearer $HOTPOT_UPLOAD_TOKEN"
 ```
 
 ## Deployment
