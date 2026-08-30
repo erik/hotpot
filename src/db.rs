@@ -1,9 +1,8 @@
 use std::collections::HashMap;
-use std::io::Cursor;
 use std::path::Path;
 
 use anyhow::Result;
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use byteorder::{LittleEndian, WriteBytesExt};
 use geo::{CoordNum, LineString};
 use geo_types::Coord;
 use num_traits::AsPrimitive;
@@ -285,15 +284,11 @@ where
     Ok(w)
 }
 
-pub fn decode_line(bytes: &[u8]) -> Result<Vec<Coord<u32>>> {
-    let mut coords = Vec::with_capacity(bytes.len() / (2 * 2));
-    let mut reader = Cursor::new(bytes);
-    while reader.position() < bytes.len() as u64 {
-        let x = reader.read_u16::<LittleEndian>()? as u32;
-        let y = reader.read_u16::<LittleEndian>()? as u32;
-        coords.push(Coord { x, y });
-    }
-    Ok(coords)
+pub fn decode_line(bytes: &[u8]) -> impl Iterator<Item = Coord<u32>> + '_ {
+    bytes.chunks_exact(size_of::<u16>() * 2).map(|c| Coord {
+        x: u16::from_le_bytes([c[0], c[1]]) as u32,
+        y: u16::from_le_bytes([c[2], c[3]]) as u32,
+    })
 }
 
 #[derive(Serialize)]
@@ -316,6 +311,10 @@ impl ActivityFilter {
             before: before.map(|date| date.midnight().assume_utc()),
             after: after.map(|date| date.midnight().assume_utc()),
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.before.is_none() && self.after.is_none() && self.props.is_none()
     }
 
     pub fn to_query<'a>(&'a self, params: &mut Vec<&'a dyn ToSql>) -> String {

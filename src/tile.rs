@@ -109,8 +109,8 @@ pub struct WebMercator(pub Point<f64>);
 
 #[derive(Debug, Clone)]
 pub struct WebMercatorViewport {
-    sw: WebMercator,
-    ne: WebMercator,
+    pub sw: WebMercator,
+    pub ne: WebMercator,
 }
 
 impl FromStr for WebMercatorViewport {

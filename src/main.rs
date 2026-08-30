@@ -1,32 +1,22 @@
 use std::backtrace::BacktraceStatus;
 use std::fs::File;
-use std::io::BufWriter;
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use clap::{Args, Parser, Subcommand};
-use image::RgbaImage;
-use tile::WebMercatorViewport;
 use time::Date;
 
-use activity::PropertySource;
+use hotpot::activity::PropertySource;
 
-use crate::db::{ActivityFilter, Database};
-use crate::external::intervals_icu::{IntervalsIcuAuth, IntervalsIcuClient};
-use crate::filter::PropertyFilter;
-use crate::raster::{LinearGradient, PINKISH};
-use crate::tile::{LngLat, Tile};
+use hotpot::db::{ActivityFilter, Database};
+use hotpot::external::intervals_icu::{IntervalsIcuAuth, IntervalsIcuClient};
+use hotpot::filter::PropertyFilter;
+use hotpot::raster::{LinearGradient, PINKISH};
+use hotpot::tile::WebMercatorViewport;
+use hotpot::tile::{LngLat, Tile};
 
-mod activity;
-mod date;
-mod db;
-mod external;
-mod filter;
-mod raster;
-mod strava;
-mod tile;
-mod track_stats;
-mod web;
+pub use hotpot::*;
 
 #[derive(Subcommand)]
 enum Commands {
@@ -451,14 +441,12 @@ fn command_render_tile(global: GlobalOpts, args: TileCmdArgs) -> Result<()> {
 
     let filter = ActivityFilter::new(before, after, filter);
     let gradient = gradient.unwrap_or_else(|| PINKISH.clone());
-    let image = raster::rasterize_tile(zxy, width, &filter, &db, &config)?
-        .map(|raster| raster.apply_gradient(&gradient))
-        .unwrap_or_else(|| {
-            // note: could also just use RgbaImage::default() here if we don't care about size.
-            RgbaImage::new(width, width)
-        });
+    let png = match raster::rasterize_tile(zxy, width, &filter, &db, &config)? {
+        Some(raster) => raster.encode_png(&gradient),
+        None => raster::encode_empty_png(width, width, &gradient),
+    };
+    file.write_all(&png)?;
 
-    image.write_to(&mut file, image::ImageFormat::Png)?;
     Ok(())
 }
 
@@ -479,8 +467,8 @@ fn command_render_view(global: GlobalOpts, args: RenderCmdArgs) -> Result<()> {
     let gradient = gradient.unwrap_or_else(|| PINKISH.clone());
     let mut file = BufWriter::new(File::create(output)?);
 
-    let image = raster::render_view(viewport, &gradient, width, height, &filter, &db, &config)?;
-    image.write_to(&mut file, image::ImageFormat::Png)?;
+    let png = raster::render_view(viewport, &gradient, width, height, &filter, &db, &config)?;
+    file.write_all(&png)?;
     Ok(())
 }
 

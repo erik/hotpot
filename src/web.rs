@@ -14,8 +14,6 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Router, Server, TypedHeader};
-use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-use image::codecs::webp::WebPEncoder;
 use rust_embed::Embed;
 use serde::{Deserialize, Deserializer};
 use time::Date;
@@ -32,12 +30,6 @@ use crate::strava;
 use crate::strava::StravaAuth;
 use crate::tile::{Tile, WebMercatorViewport};
 use crate::{activity, raster};
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum ImageFormat {
-    Png,
-    WebP,
-}
 
 #[derive(Clone)]
 pub struct Config {
@@ -344,7 +336,6 @@ async fn render_viewport(
         Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
     };
 
-    let image_format = get_image_format(&headers);
     raster::render_view(
         viewport,
         gradient,
@@ -354,7 +345,13 @@ async fn render_viewport(
         &db,
         &db_config,
     )
-    .and_then(|image| render_image_response(image, image_format, &etag))
+    .and_then(|png| {
+        Ok(cached_response(StatusCode::OK, &etag)
+            .header(header::CONTENT_TYPE, "image/png")
+            .body(png)?
+            .into_parts()
+            .into_response())
+    })
     .unwrap_or_else(|err| {
         tracing::error!("error rendering tile: {:?}", err);
         StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -385,55 +382,22 @@ async fn render_tile(
         Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
     };
 
-    let image_format = get_image_format(&headers);
     raster::rasterize_tile(tile, y_param.tile_size, &filter, &db, &db_config)
-        .and_then(|raster| {
-            raster
-                .map(|raster| raster.apply_gradient(gradient))
-                .map(|image| render_image_response(image, image_format, &etag))
-                .unwrap_or_else(|| {
-                    Ok(cached_response(StatusCode::NO_CONTENT, &etag)
-                        .body(Body::empty())
-                        .unwrap()
-                        .into_response())
-                })
+        .and_then(|raster| match raster {
+            Some(raster) => Ok(cached_response(StatusCode::OK, &etag)
+                .header(header::CONTENT_TYPE, "image/png")
+                .body(raster.encode_png(gradient))?
+                .into_parts()
+                .into_response()),
+            None => Ok(cached_response(StatusCode::NO_CONTENT, &etag)
+                .body(Body::empty())
+                .unwrap()
+                .into_response()),
         })
         .unwrap_or_else(|err| {
             tracing::error!("error rendering tile: {:?}", err);
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         })
-}
-
-fn render_image_response(
-    image: image::ImageBuffer<image::Rgba<u8>, Vec<u8>>,
-    format: ImageFormat,
-    etag: &str,
-) -> Result<Response> {
-    let mut bytes = Vec::new();
-    let mut cursor = Cursor::new(&mut bytes);
-
-    let (content_type, result) = match format {
-        ImageFormat::WebP => {
-            let encoder = WebPEncoder::new_lossless(&mut cursor);
-            ("image/webp", image.write_with_encoder(encoder))
-        }
-        ImageFormat::Png => {
-            let encoder = PngEncoder::new_with_quality(
-                &mut cursor,
-                CompressionType::Fast,
-                FilterType::NoFilter,
-            );
-            ("image/png", image.write_with_encoder(encoder))
-        }
-    };
-
-    result?;
-
-    Ok(cached_response(StatusCode::OK, etag)
-        .header(header::CONTENT_TYPE, content_type)
-        .body(bytes)?
-        .into_parts()
-        .into_response())
 }
 
 // Build a partial response with Cache-Control and Etag headers set.
@@ -483,20 +447,6 @@ fn check_etag(db: &Database, headers: &HeaderMap) -> Result<String, StatusCode> 
     }
 
     Ok(etag)
-}
-
-fn get_image_format(headers: &HeaderMap) -> ImageFormat {
-    let accepts_webp = headers
-        .get(header::ACCEPT)
-        .and_then(|h| h.to_str().ok())
-        .map(|accept| accept.to_lowercase().contains("image/webp"))
-        .unwrap_or(false);
-
-    if accepts_webp {
-        ImageFormat::WebP
-    } else {
-        ImageFormat::Png
-    }
 }
 
 fn choose_gradient(
