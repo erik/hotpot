@@ -3,7 +3,6 @@ use std::str::FromStr;
 use std::{f64::consts::PI, ops::RangeInclusive};
 
 use anyhow::{Result, anyhow};
-use derive_more::{From, Into};
 use geo_types::{Coord, Point};
 
 use crate::db::ActivityMask;
@@ -81,8 +80,20 @@ impl TileBounds {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Debug, From, Into)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 pub struct LngLat(pub Point<f64>);
+
+impl From<Point<f64>> for LngLat {
+    fn from(pt: Point<f64>) -> Self {
+        Self(pt)
+    }
+}
+
+impl From<LngLat> for Point<f64> {
+    fn from(ll: LngLat) -> Self {
+        ll.0
+    }
+}
 
 impl LngLat {
     pub fn from_latlng_str(value: &str) -> Result<Self> {
@@ -104,8 +115,20 @@ impl LngLat {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Debug, From, Into)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 pub struct WebMercator(pub Point<f64>);
+
+impl From<Point<f64>> for WebMercator {
+    fn from(pt: Point<f64>) -> Self {
+        Self(pt)
+    }
+}
+
+impl From<WebMercator> for Point<f64> {
+    fn from(wm: WebMercator) -> Self {
+        wm.0
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct WebMercatorViewport {

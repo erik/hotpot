@@ -2,10 +2,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
-use byteorder::{LittleEndian, WriteBytesExt};
-use geo::{CoordNum, LineString};
+use geo::LineString;
 use geo_types::Coord;
-use num_traits::AsPrimitive;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{ToSql, params};
 use serde::{Deserialize, Serialize};
@@ -272,14 +270,11 @@ impl Default for Config {
     }
 }
 
-pub fn encode_line<T>(line: &LineString<T>) -> Result<Vec<u8>>
-where
-    T: CoordNum + AsPrimitive<u16>,
-{
-    let mut w = Vec::with_capacity(line.0.len() * 2);
+pub fn encode_line(line: &LineString<f64>) -> Result<Vec<u8>> {
+    let mut w = Vec::with_capacity(line.0.len() * 2 * size_of::<u16>());
     for pt in line.coords() {
-        w.write_u16::<LittleEndian>(pt.x.as_())?;
-        w.write_u16::<LittleEndian>(pt.y.as_())?;
+        w.extend_from_slice(&(pt.x as u16).to_le_bytes());
+        w.extend_from_slice(&(pt.y as u16).to_le_bytes());
     }
     Ok(w)
 }

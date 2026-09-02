@@ -5,7 +5,6 @@ use std::str::FromStr;
 
 use anyhow::{Result, anyhow};
 use geo_types::Coord;
-use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use rusqlite::{ToSql, params};
 use serde::{Deserialize, Deserializer};
@@ -13,37 +12,29 @@ use serde::{Deserialize, Deserializer};
 use crate::db::{ActivityFilter, Config, Database, decode_line};
 use crate::tile::{Tile, TileActivityMask, TileBounds, WebMercatorViewport};
 
-pub static PINKISH: Lazy<LinearGradient> = Lazy::new(|| {
-    LinearGradient::from_stops(&[
-        (1, [0xff, 0xb1, 0xff, 0x7f]),
-        (10, [0xff, 0xb1, 0xff, 0xff]),
-        (50, [0xff, 0xff, 0xff, 0xff]),
-    ])
-});
+pub static PINKISH: LinearGradient = LinearGradient::from_stops(&[
+    (1, [0xff, 0xb1, 0xff, 0x7f]),
+    (10, [0xff, 0xb1, 0xff, 0xff]),
+    (50, [0xff, 0xff, 0xff, 0xff]),
+]);
 
-pub static BLUE_RED: Lazy<LinearGradient> = Lazy::new(|| {
-    LinearGradient::from_stops(&[
-        (1, [0x3f, 0x5e, 0xfb, 0xff]),
-        (10, [0xfc, 0x46, 0x6b, 0xff]),
-        (50, [0xff, 0xff, 0xff, 0xff]),
-    ])
-});
+pub static BLUE_RED: LinearGradient = LinearGradient::from_stops(&[
+    (1, [0x3f, 0x5e, 0xfb, 0xff]),
+    (10, [0xfc, 0x46, 0x6b, 0xff]),
+    (50, [0xff, 0xff, 0xff, 0xff]),
+]);
 
-pub static RED: Lazy<LinearGradient> = Lazy::new(|| {
-    LinearGradient::from_stops(&[
-        (1, [0xb2, 0x0a, 0x2c, 0xff]),
-        (10, [0xff, 0xfb, 0xd5, 0xff]),
-        (50, [0xff, 0xff, 0xff, 0xff]),
-    ])
-});
+pub static RED: LinearGradient = LinearGradient::from_stops(&[
+    (1, [0xb2, 0x0a, 0x2c, 0xff]),
+    (10, [0xff, 0xfb, 0xd5, 0xff]),
+    (50, [0xff, 0xff, 0xff, 0xff]),
+]);
 
-pub static ORANGE: Lazy<LinearGradient> = Lazy::new(|| {
-    LinearGradient::from_stops(&[
-        (1, [0xfc, 0x4a, 0x1a, 0xff]),
-        (10, [0xf7, 0xb7, 0x33, 0xff]),
-        (50, [0xfd, 0xed, 0xce, 0xff]),
-    ])
-});
+pub static ORANGE: LinearGradient = LinearGradient::from_stops(&[
+    (1, [0xfc, 0x4a, 0x1a, 0xff]),
+    (10, [0xf7, 0xb7, 0x33, 0xff]),
+    (50, [0xfd, 0xed, 0xce, 0xff]),
+]);
 
 pub struct TileRaster {
     bounds: TileBounds,
@@ -182,7 +173,7 @@ pub fn encode_empty_png(width: u32, height: u32, gradient: &LinearGradient) -> V
 }
 
 /// Linearly interpolate between two colors
-fn lerp(a: [u8; 4], b: [u8; 4], t: f32) -> [u8; 4] {
+const fn lerp(a: [u8; 4], b: [u8; 4], t: f32) -> [u8; 4] {
     [
         (a[0] as f32 * (1.0 - t) + b[0] as f32 * t) as u8,
         (a[1] as f32 * (1.0 - t) + b[1] as f32 * t) as u8,
@@ -220,30 +211,45 @@ pub struct LinearGradient {
 }
 
 impl LinearGradient {
-    pub fn from_stops(stops: &[(u8, [u8; 4])]) -> Self {
+    pub const fn from_stops(stops: &[(u8, [u8; 4])]) -> Self {
         let mut gradient = LinearGradient {
             rgb: [0; 768],
             alpha: [0; 256],
         };
 
-        for window in stops.windows(2) {
-            let (start_idx, start_color) = window[0];
-            let (end_idx, end_color) = window[1];
+        let mut w = 0;
+        while w + 1 < stops.len() {
+            let (start_idx, start_color) = stops[w];
+            let (end_idx, end_color) = stops[w + 1];
 
-            for i in start_idx..=end_idx {
-                let color = lerp(
-                    start_color,
-                    end_color,
-                    (i - start_idx) as f32 / (end_idx - start_idx) as f32,
-                );
-                gradient.set(i, color);
+            if start_idx <= end_idx {
+                let mut i = start_idx;
+                loop {
+                    let color = lerp(
+                        start_color,
+                        end_color,
+                        (i - start_idx) as f32 / (end_idx - start_idx) as f32,
+                    );
+                    gradient.set(i, color);
+                    if i == end_idx {
+                        break;
+                    }
+                    i += 1;
+                }
             }
+            w += 1;
         }
 
         // Copy the last color to the end of the palette
-        if let Some(&(last_idx, color)) = stops.last() {
-            for i in last_idx..=u8::MAX {
+        if !stops.is_empty() {
+            let (last_idx, color) = stops[stops.len() - 1];
+            let mut i = last_idx;
+            loop {
                 gradient.set(i, color);
+                if i == u8::MAX {
+                    break;
+                }
+                i += 1;
             }
         }
 
@@ -251,9 +257,11 @@ impl LinearGradient {
     }
 
     #[inline]
-    fn set(&mut self, idx: u8, color: [u8; 4]) {
+    const fn set(&mut self, idx: u8, color: [u8; 4]) {
         let i = idx as usize;
-        self.rgb[i * 3..i * 3 + 3].copy_from_slice(&color[0..3]);
+        self.rgb[i * 3] = color[0];
+        self.rgb[i * 3 + 1] = color[1];
+        self.rgb[i * 3 + 2] = color[2];
         self.alpha[i] = color[3];
     }
 
@@ -517,6 +525,16 @@ mod tests {
         assert_eq!(palette_color(&gradient, 100), [0x33, 0x44, 0x55, 0xff]);
         // Last value should be copied to end
         assert_eq!(palette_color(&gradient, 255), [0xff, 0xff, 0xff, 0x33]);
+    }
+
+    #[test]
+    fn test_linear_gradient_parse_out_of_order_stops() {
+        let gradient = "50:ff0000;10:00ff00".parse::<LinearGradient>().unwrap();
+        assert_eq!(palette_color(&gradient, 0), [0x00, 0x00, 0x00, 0x00]);
+        assert_eq!(palette_color(&gradient, 9), [0x00, 0x00, 0x00, 0x00]);
+        assert_eq!(palette_color(&gradient, 10), [0x00, 0xff, 0x00, 0xff]);
+        assert_eq!(palette_color(&gradient, 50), [0x00, 0xff, 0x00, 0xff]);
+        assert_eq!(palette_color(&gradient, 255), [0x00, 0xff, 0x00, 0xff]);
     }
 
     #[test]
