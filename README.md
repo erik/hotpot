@@ -8,11 +8,11 @@ to add new data via HTTP POST or from external APIs.
 
 Designed to run locally or be self-hosted. Lightweight enough to run on free
 tiers of most Docker-compatible platforms. Even with 100,000 km of activity
-data tiles render in a few ms.
+data, tiles render in a few milliseconds.
 
 [XYZ tiles]: https://en.wikipedia.org/wiki/Tiled_web_map
 
-## Quick Start
+## Quick start
 
 ```bash
 # Pull the pre-built container from GitHub Container Registry
@@ -27,51 +27,68 @@ cargo build --release
 # When using Docker, always mount a volume at /data for the database
 docker run -p 8080:8080 -v ./data:/data ghcr.io/erik/hotpot
 
-# Visit http://127.0.0.1:8080 to browse the map
+# Visit http://localhost:8080 to browse the map
 ```
 
-### Import Activities
+### Import activities
+
+To import an entire directory of activities in parallel, run the following
+command:
 
 ```bash
-# Import an entire directory of activities in parallel
-hotpot import [path/to/files/]
+hotpot import path/to/activities/
+```
 
-# Import from Strava data export, including Strava metadata (title, which bike
-# you used, the weather, ...)
+If you're pulling from a [Strava bulk data export], include metadata such as the
+gear you used, the weather, etc. with `--join`:
+
+```bash
 hotpot import \
     strava_export/activities/ \
     --join strava_export/activities.csv
-
-# Import into existing an existing database. The --db flag works for all
-# subcommands.
-hotpot --db /path/to/db import ...
 ```
 
-Or use the browser UI by running:
+By default, the database is called `hotpot.sqlite3`. Change the name or location
+with `--db`:
 
 ```bash
-# If your server is accessible to the internet, set this environment variable so
-# that only you can upload.
-export HOTPOT_UPLOAD_TOKEN=xyz...
-
-hotpot serve --upload
-
-# Open the browser and open the file upload dialog by clicking the "Add activity
-# files" button
-open http://localhost:8080
+hotpot --db /somewhere/else/heatmap.db import ...
 ```
 
-### Create Heatmaps
+You can also import activities from your browser. Note that this isn't run in
+parallel, and is significantly slower than the command line import:
 
-After importing, you'll have a SQLite database with all your activities and can
+1. Optional: Set an upload token so that only you can upload:
+
+   ```bash
+   export HOTPOT_UPLOAD_TOKEN=xyz123...
+   ```
+
+2. Uploads are disabled by default. To enable them, start the server with
+   `--upload`:
+
+   ```bash
+   hotpot serve --upload
+   ```
+
+3. Go to `http://localhost:8080`, and drag files into the upload modal.
+
+[Strava bulk data export]: https://support.strava.com/en-us/articles/15401919-exporting-your-data-and-bulk-export
+
+### Create heatmaps
+
+After the initial import, you have a database with all your activities and can
 start visualizing them.
 
-```bash
-# Run a tile server and web UI on http://127.0.0.1:8080
-hotpot serve
+To run a tile server and web UI on `http://localhost:8080`:
 
-# Or generate a static image (to create the bounds, use a tool like
-# https://boundingbox.klokantech.com/)
+```bash
+hotpot serve
+```
+
+To generate a static image instead:
+
+```bash
 hotpot render \
     --bounds='-120.7196,32.2459,-116.9234,35.1454' \
     --width 2000 \
@@ -79,31 +96,33 @@ hotpot render \
     --output heatmap.png
 ```
 
-See `hotpot --help` for full details on how to use the CLI.
+To construct the bounds, use a tool such as
+[Klokantech bounding box](https://boundingbox.klokantech.com/).
+
+For full details about the CLI, run `hotpot --help`.
 
 ## Customization
 
 ### Gradients
 
-There are several built in palettes available for converting the raw frequency
-data into colored pixels, which can be set via the `?color={...}` query
-parameter. A list of these is available in the map view.
+Several built-in palettes are available in the web UI to control the colors used
+in the rendered heatmap.
 
-In addition to the presets, custom gradients can also be used via the
-`?gradient={...}` parameter. With this, we specify a sequence of threshold
-values (how many times a particular pixel was visited) along with an associated
-color. Values falling between the thresholds will be smoothly interpolated to a
-reasonable color.
+You can also define a custom color gradient by specifying a sequence of
+threshold values (how many times a particular pixel was visited) along with an
+associated color. Hotpot interpolates values that fall between the thresholds to
+a reasonable color.
 
-For example, if we want to display pure red when we've visited a pixel once, and
-white when we've visited 255 times (or more), we'd use `1:FF0000;255:FFFFFF`.
+For example, to display pure red for a pixel visited once and white for a pixel
+visited 255 times or more, use `1:FF0000;255:FFFFFF`.
 
-Color codes are interpreted as hex RGBA values in `RGB`, `RRGGBB` or `RRGGBBAA`
-formats. If alpha values are not given, they are assumed to be `FF` (fully
-opaque).
+Color codes are given as hex RGBA values in `RGB`, `RRGGBB`, or `RRGGBBAA`
+format. If you omit the alpha value, it's assumed to be fully opaque.
+
+The following table shows the same tile rendered with three different example gradients:
 
 <details>
-  <summary>Example Gradients</summary>
+  <summary>Example gradients</summary>
 
 | Gradient                          | Rendered                                                                                                 |
 | --------------------------------- | -------------------------------------------------------------------------------------------------------- |
@@ -115,10 +134,10 @@ opaque).
 
 ### Filters
 
-We can choose which activities we're interested in visualizing dynamically with
-the `filter` query parameter. For example, we may want to generate different
-tiles for cycling vs hiking, exclude commutes, which gear we used, a minimum
-elevation gain, etc.
+You can choose which activities are visualized with filter expressions.
+
+For example, you can generate different tiles for cycling and hiking, exclude
+commutes, only select activities above a certain average speed, and so on.
 
 ```python
 # Comparisons: =, !=, <, <=, >, >=
@@ -141,11 +160,11 @@ elapsed_time < 3600 && elevation_gain > 300
 elevation_gain > 1000 || (average_speed > 30 && commute = true)
 ```
 
-Any properties available when the activity was imported can be used in the filter
-expression, but the exact names will vary based on your data.
+You can use any property key that was included when the activity was imported, but
+the exact names vary based on your data.
 
-The following properties are automatically computed from GPS track data
-for all activities (imported, uploaded, or from Strava):
+In addition, several standard properties are computed automatically from the GPS
+data for all activities, regardless of how they were imported:
 
 | Property         | Unit    | Description                 |
 | ---------------- | ------- | --------------------------- |
@@ -157,61 +176,69 @@ for all activities (imported, uploaded, or from Strava):
 | `min_elevation`  | meters  | Lowest elevation            |
 | `max_elevation`  | meters  | Highest elevation           |
 | `average_speed`  | km/h    | Average speed while moving  |
-| `max_speed`      | km/h    | Maximum instantanous speed  |
+| `max_speed`      | km/h    | Maximum instantaneous speed |
 
-### Activity Visibility & Privacy
+### Privacy
 
-When running a public-facing tile server or rendering heatmaps to share with
-others, you may want to hide activities near sensitive locations (home, work,
-etc.).
+If you run an internet-facing tile server or render heatmaps to share with
+others, you might want to hide activities near sensitive locations such as your
+home or work.
 
-The `mask` command can be used to define areas where no activity data should be
-rendered. These are circular areas which are fully removed from the heatmap
-tiles.
+Use the `mask` command to define circular areas that Hotpot removes entirely
+from the rendered heatmap. Give the radius in meters and the coordinates as
+`latitude,longitude`.
 
 ```bash
-# Create a new area mask. Radius is given in meters, and coordinates are
-# latitude,longitude.
 hotpot mask add "home" --latlng 52.5200,13.4050 --radius 500
 hotpot mask list
 hotpot mask remove "home"
 ```
 
-Area masks are applied when rendering tiles, which means they can be added and
-removed dynamically without needing to re-import data.
+Area masks are dynamic, and can be repositioned, added, or removed without
+needing to re-import data.
 
-Alternatively, the `--trim N` argument for the `import` command can be used to
-trim off the first and last `N` meters of an activity. Unlike area masks, this
-changes the activity data stored, which means that changing the value would
-require re-importing data.
-
-The `--trim` value given during the initial `import` will be persisted to the
-database's configuration, and will also apply for activities uploaded from the
-HTTP API or via the webhook. The value can also be modified directly if
-necessary.
+Alternatively, the `--trim N` argument for the `import` command trims the first
+and last `N` meters from an activity. Unlike area masks, this affects the stored
+activity data, so changing the value requires you to re-import your data. The
+`--trim` value used for the initial import is stored and applies to future
+activity imports as well. You can modify this value directly, if necessary:
 
 ```bash
 sqlite3 hotpot.sqlite3 \
     "INSERT OR REPLACE INTO config (key, value) VALUES ('trim_dist', '500.0')"
 ```
 
-## Activity Uploads
+## Activity uploads
 
-Hotpot supports multiple mechanisms for adding new data to the `sqlite3` database
-over HTTP:
+Hotpot supports several ways to keep your database up to date by adding new data
+to the database:
 
-1. `POST /upload`: Manually upload a single GPX, TCX, or FIT file
-2. intervals.icu: Fetch new activity data on demand (CLI or HTTP)
-3. Strava webhook: Subscribe to new activity uploads automatically
+- Command line
+- HTTP upload
+- intervals.icu API integration
+- Strava webhook
 
-### HTTP Upload
+### Command line
 
-Run the server with the `--upload` flag. Any files that can be imported on the
-command line can be `POST`ed to the server via the `/upload` endpoint using
-`multipart/form-data` encoding.
+To add new activities to the database with the CLI, use the `import` command:
 
 ```bash
-export HOTPOT_UPLOAD_TOKEN=xyz...
+hotpot import path/to/activities/
+```
+
+You can re-run `import` multiple times on the same directory, Hotpot
+deduplicates imported activities as long as they share the same name.
+
+### HTTP upload
+
+To enable HTTP uploads, run the server with the `--upload` flag. You can then `POST`
+any file that Hotpot imports on the command line to the `/upload` endpoint,
+using `multipart/form-data` encoding.
+
+```bash
+# Remember to set this to a secret value if you expose your server to the
+# internet.
+export HOTPOT_UPLOAD_TOKEN=xyz123...
 
 hotpot serve --upload
 
@@ -221,68 +248,65 @@ curl -X POST \
   --form file=@activity.gpx
 ```
 
-The `Authorization` header is required only when `HOTPOT_UPLOAD_TOKEN` is set.
-When not provided, unauthenticated uploads are enabled.
+### intervals.icu API integration
 
-### intervals.icu
+[intervals.icu](https://intervals.icu) aggregates activity data from sources
+such as Garmin, Wahoo, and Strava, and exposes it through a single API. To get
+an API key, go to intervals.icu and select **Settings > Developer Settings**.
+For more information, see
+[API access to intervals.icu](https://forum.intervals.icu/t/api-access-to-intervals-icu/609).
 
-[intervals.icu](https://intervals.icu) aggregates activity data from many
-sources (Garmin, Wahoo, Strava, etc.) and exposes them over a single API. This
-is a pull-based source, so new activities are fetched either from the command
-line or when triggered over HTTP. Both paths will de-duplicate activities and
-are safe to re-run.
-
-Grab an API key on intervals.icu from Settings > Developer Settings, and see
-[here](https://forum.intervals.icu/t/api-access-to-intervals-icu/609) for more
-details.
+This is a pull-based source, so you need to trigger a fetch to pull new
+activities, which can be done either on the command line or over HTTP. Both
+paths deduplicate imported activities and are safe to re-run.
 
 ```bash
-export INTERVALS_ICU_API_KEY=abc... \
-       HOTPOT_UPLOAD_TOKEN=xyz...
+export INTERVALS_ICU_API_KEY=API_KEY \
+       HOTPOT_UPLOAD_TOKEN=UPLOAD_TOKEN
 
 # Import activities uploaded in the last 30 days
 hotpot fetch intervals-icu --lookback 30
 
-# Start server with the fetch endpoint enabled.
+# Start the server with the fetch endpoint enabled
 hotpot serve --fetch
 
-# Trigger an import of last 30 days
+# Trigger an import of the last 30 days
 curl -X POST \
   https://hotpot.example.com/fetch/intervals.icu?lookback=30 \
   --header "Authorization: Bearer $HOTPOT_UPLOAD_TOKEN"
 ```
 
-Note that due to Strava API limitations, any activities which are _solely_
-sourced from Strava are not available for import via intervals.icu. If the same
-activity was uploaded to Garmin as well as Strava though, it would be
-accessible.
+Due to Strava API limitations, activities sourced _solely_ from Strava aren't
+available for import through intervals.icu. An activity that was uploaded to
+both Garmin and Strava is accessible.
 
-Set the `fetch_cutoff` config key to set the furthest back you want to pull
-activities. Can be helpful if you set up the API integration after already
-importing a local directory of files.
+To configure the earliest date to pull activities, set `fetch_cutoff`. This can
+be helpful if you want to first import from local files, and then set up the
+intervals API for future activities.
 
 ```bash
 sqlite3 hotpot.sqlite3 \
     "INSERT OR REPLACE INTO config (key, value) VALUES ('fetch_cutoff', '2026-01-01')"
 ```
 
-### Strava Webhook
+### Strava webhook
 
-> **NOTE**
+> [!WARNING]
 >
-> Strava **no longer supports API access** without a premium membership.
+> Strava no longer supports API access without a premium membership.
 >
-> Additionally, only the owner of the API (i.e. you) will be able to
-> authenticate. You won't be able to share this with multiple people.
+> Additionally, only the owner of the API (i.e. you) can authenticate.
+> You can't share this with multiple people.
 
-If you're already uploading activity data to Strava, you can use their activity
+If you already upload activity data to Strava, you can use the Strava activity
 webhook to import new activities automatically.
 
-To get started, follow the [Strava API
-documentation](https://developers.strava.com/) to create your own application.
+To get started, follow the
+[Strava API documentation](https://developers.strava.com/) to create your own
+application.
 
-Next, we can use oauth to authenticate our account and save the API tokens in
-the database.
+Next, authenticate your account through OAuth and save the API tokens in the
+database:
 
 ```bash
 export STRAVA_CLIENT_ID=... \
@@ -291,36 +315,22 @@ export STRAVA_CLIENT_ID=... \
 
 hotpot strava-auth
 
-# Authenticate via browser
-open http://127.0.0.1:8080/strava/auth
+# Authenticate in the browser
+open http://localhost:8080/strava/auth
 ```
 
-Once you've authenticated successfully, you'll need to register the callback
-URL of your server with Strava's API. Follow the `curl` commands shown on the
-success page to complete setup.
+After you authenticate, register your server's callback URL with the Strava
+API. To complete setup, follow the `curl` commands shown on the success page.
 
-The webhook endpoints can then be enabled with the `--strava-webhook` flag
+To enable the webhook endpoints, use the `--strava-webhook` flag:
 
 ```bash
 export STRAVA_CLIENT_ID=... \
-       STRAVA_CLIENT_SECRET=...\
+       STRAVA_CLIENT_SECRET=... \
        STRAVA_WEBHOOK_SECRET=...
 
 hotpot serve --strava-webhook
 ```
-
-## Deployment
-
-To simplify things, a basic `Dockerfile` is included. Mount a volume at
-`/data/` to persist the sqlite database between runs.
-
-```console
-docker build -t hotpot .
-docker run -p 8080:8080 -v ./data:/data hotpot
-```
-
-Since we're using sqlite as our data store, it's easy to first run the bulk
-import locally, then copy the database over to a remote host.
 
 ## License
 
