@@ -174,16 +174,17 @@ fn find_nearby_activities(
 fn load_activity_geojson(
     conn: &Connection,
     config: &Config,
-    z: u8,
+    zoom: u8,
     activity_ids: &HashSet<i64>,
 ) -> Result<Vec<Feature>> {
-    // Low zoom levels are too coarse to give a recognizable route outline
-    const MIN_GEOMETRY_ZOOM: u8 = 10;
+    // Low zooms are too coarse for route data, higher zoom levels are too
+    // detailed.
+    const MIN_ZOOM: u8 = 10;
+    const MAX_ZOOM: u8 = 14;
 
-    let geometry_z = config
-        .source_level(z.max(MIN_GEOMETRY_ZOOM))
-        .or_else(|| config.zoom_levels.last().copied())
-        .unwrap_or(z);
+    let tile_zoom = config
+        .source_level(zoom.clamp(MIN_ZOOM, MAX_ZOOM))
+        .unwrap_or_else(|| *config.zoom_levels.last().expect("no stored zoom levels"));
 
     let mut stmt = conn.prepare_cached(
         "\
@@ -208,7 +209,7 @@ fn load_activity_geojson(
     let mut curr: Option<Feature> = None;
 
     let ids = serde_json::to_string(activity_ids)?;
-    let mut rows = stmt.query(params![geometry_z, ids])?;
+    let mut rows = stmt.query(params![tile_zoom, ids])?;
 
     while let Some(row) = rows.next()? {
         let activity_id: i64 = row.get_unwrap(0);
@@ -217,7 +218,7 @@ fn load_activity_geojson(
         if let Some(ref feat) = curr
             && feat.id != activity_id
         {
-            features.extend(curr.take());
+            features.extend(curr.take_if(|f| !f.geometry.coordinates.is_empty()));
         }
 
         let feature = curr.get_or_insert_with(|| Feature {
@@ -243,7 +244,7 @@ fn load_activity_geojson(
             continue;
         };
 
-        let tile = Tile::new(row.get_unwrap(5), row.get_unwrap(6), geometry_z);
+        let tile = Tile::new(row.get_unwrap(5), row.get_unwrap(6), tile_zoom);
         let coordinates = &mut feature.geometry.coordinates;
 
         let mut seg = vec![];
@@ -251,7 +252,7 @@ fn load_activity_geojson(
             match pt {
                 Some(pt) => {
                     let ll =
-                        LngLat::from_mercator_pixel(pt.into(), geometry_z, config.tile_extent).0;
+                        LngLat::from_mercator_pixel(pt.into(), tile_zoom, config.tile_extent).0;
                     seg.push([round_6dp(ll.x()), round_6dp(ll.y())]);
                 }
 
@@ -271,7 +272,7 @@ fn load_activity_geojson(
         }
     }
 
-    features.extend(curr);
+    features.extend(curr.take_if(|f| !f.geometry.coordinates.is_empty()));
 
     Ok(features)
 }
