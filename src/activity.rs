@@ -10,7 +10,7 @@ use csv::StringRecord;
 use fitparser::de::{DecodeOption, FitObject, FitStreamProcessor};
 use fitparser::profile::MesgNum;
 use flate2::read::GzDecoder;
-use geo::{EuclideanDistance, HasDimensions, MapCoords, Simplify};
+use geo::{EuclideanDistance, MapCoords, Simplify};
 use geo_types::{LineString, MultiLineString, Point};
 use rayon::iter::{ParallelBridge, ParallelIterator};
 use rusqlite::params;
@@ -26,7 +26,8 @@ struct TileClipper {
     zoom: u8,
     tile_extent: i32,
     current: Option<(Tile, BBox)>,
-    tiles: HashMap<Tile, Vec<LineString<f64>>>,
+    has_active_segment: bool,
+    lines: Vec<(Tile, LineString<f64>)>,
 }
 
 impl TileClipper {
@@ -34,8 +35,9 @@ impl TileClipper {
         Self {
             zoom,
             tile_extent,
-            tiles: HashMap::new(),
+            lines: Vec::new(),
             current: None,
+            has_active_segment: false,
         }
     }
 
@@ -43,16 +45,6 @@ impl TileClipper {
         let tile = pt.tile(self.zoom);
         let bbox = tile.xy_bounds();
         (tile, bbox)
-    }
-
-    fn last_line(&mut self, tile: &Tile) -> &mut LineString<f64> {
-        let lines = self.tiles.entry(*tile).or_default();
-
-        if lines.is_empty() {
-            lines.push(LineString::new(vec![]));
-        }
-
-        lines.last_mut().unwrap()
     }
 
     fn add_line_segment(&mut self, start: WebMercator, end: WebMercator) {
@@ -75,11 +67,13 @@ impl TileClipper {
             // [start, end] is at least partially contained within the current tile.
             Some((a, b)) => {
                 let extent = self.tile_extent;
-                let line = self.last_line(&tile);
-                if line.is_empty() {
-                    line.0.push(a.to_tile_pixel(&bbox, extent));
+                if !self.has_active_segment {
+                    let start = LineString::new(vec![a.to_tile_pixel(&bbox, extent)]);
+                    self.lines.push((tile, start));
+                    self.has_active_segment = true;
                 }
 
+                let (_, line) = self.lines.last_mut().unwrap();
                 line.0.push(b.to_tile_pixel(&bbox, extent));
 
                 // If we've modified the end point, we've left the current tile.
@@ -97,23 +91,15 @@ impl TileClipper {
     }
 
     fn finish_segment(&mut self) {
-        if let Some((tile, _)) = self.current {
-            self.tiles.entry(tile).and_modify(|lines| {
-                lines.push(LineString::new(vec![]));
-            });
-        }
+        self.has_active_segment = false;
     }
 }
 
 pub struct ClippedTiles(Vec<TileClipper>);
 
 impl ClippedTiles {
-    pub fn iter(&self) -> impl Iterator<Item = (&Tile, &LineString<f64>)> {
-        self.0
-            .iter()
-            .flat_map(|clip| clip.tiles.iter())
-            .filter(|(_, lines)| !lines.is_empty())
-            .flat_map(|(tile, lines)| lines.iter().map(move |line| (tile, line)))
+    pub fn iter(&self) -> impl Iterator<Item = &(Tile, LineString<f64>)> {
+        self.0.iter().flat_map(|clip| &clip.lines)
     }
 }
 
@@ -804,6 +790,31 @@ mod tests {
             properties: HashMap::new(),
             tracks: MultiLineString::from(LineString::from(coords)),
         }
+    }
+
+    #[test]
+    fn test_upsert_stores_no_empty_lines() {
+        let db = Database::memory().unwrap();
+        let mut conn = db.connection().unwrap();
+        let track = vec![(13.40, 52.52), (13.41, 52.53), (13.42, 52.54)];
+        upsert(
+            &mut conn,
+            "a.gpx",
+            test_activity(track),
+            &db::Config::default(),
+        )
+        .unwrap();
+
+        // length < 8 is based on the encoded coordinate format (2x u16 = 8 bytes)
+        let (rows, short): (i64, i64) = conn
+            .query_row(
+                "SELECT count(*), sum(length(coords) < 8) FROM activity_tiles",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(rows > 0);
+        assert_eq!(short, 0, "{short} of {rows} rows have < 2 points");
     }
 
     #[test]
