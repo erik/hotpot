@@ -203,6 +203,11 @@ struct ServeCmdArgs {
     #[arg(long, default_value = "false")]
     render: bool,
 
+    /// Allow looking up activities near a point via `/api/activities/inspect`
+    /// endpoint.
+    #[arg(long, default_value = "false")]
+    inspect: bool,
+
     /// Enables `/fetch/:source` for pulling new activities from configured
     /// external sources.
     #[arg(long, default_value = "false")]
@@ -478,6 +483,7 @@ fn command_serve(global: GlobalOpts, args: ServeCmdArgs) -> Result<()> {
         port,
         upload,
         render,
+        inspect,
         fetch,
         strava_webhook,
         cors,
@@ -489,6 +495,7 @@ fn command_serve(global: GlobalOpts, args: ServeCmdArgs) -> Result<()> {
         strava_webhook,
         upload,
         render,
+        inspect,
         fetch,
         tiles: true,
         strava_auth: false,
@@ -514,6 +521,7 @@ fn command_strava_auth(global: GlobalOpts, args: StravaAuthCmdArgs) -> Result<()
         upload: false,
         render: false,
         fetch: false,
+        inspect: false,
     };
 
     let config = web::Config {

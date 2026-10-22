@@ -16,6 +16,7 @@
     <script>
       // globalThis.UPLOADS_ENABLED = {};
       // globalThis.RENDER_ENABLED = {};
+      // globalThis.INSPECT_ENABLED = {};
       // globalThis.ACTIVITY_PROPERTIES = {};
       // $INJECT$
     </script>
@@ -284,6 +285,10 @@
                 setUrlHashParameters(params);
             });
 
+        const inspector = globalThis.INSPECT_ENABLED
+            ? new ActivityInspector(map, options)
+            : null;
+
         nodes.tileUrl.addEventListener("click", async () => {
             const url = window.location.origin + nodes.tileUrl.innerText;
             if (navigator.share) {
@@ -326,6 +331,8 @@
                 type: "raster",
                 source: "hotpot",
             });
+
+            inspector?.addLayers();
         }
 
         map.on("load", () => updateMapTileSource());
