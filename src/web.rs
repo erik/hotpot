@@ -28,7 +28,7 @@ use crate::filter::PropertyFilter;
 use crate::raster::LinearGradient;
 use crate::strava;
 use crate::strava::StravaAuth;
-use crate::tile::{LngLat, Tile, WebMercatorViewport};
+use crate::tile::{LngLat, Tile, WebMercatorViewport, mercator_pixel_scale};
 use crate::{activity, inspect, raster};
 
 #[derive(Clone)]
@@ -321,6 +321,7 @@ impl<'de> Deserialize<'de> for TileYParam {
 async fn get_activity_count(
     State(AppState { db, .. }): State<AppState>,
     Query(filter): Query<FilterParams>,
+    Query(_style): Query<StyleParams>,
 ) -> impl IntoResponse {
     let num_activities = db
         .activity_count(&filter.into())
@@ -334,13 +335,25 @@ async fn get_activities_inspect(
     Query(params): Query<InspectQueryParams>,
     Query(filter): Query<FilterParams>,
 ) -> impl IntoResponse {
-    if params.radius <= 0.0 || !params.radius.is_finite() {
-        return (StatusCode::BAD_REQUEST, "radius out of bounds").into_response();
+    const MAX_ZOOM: u8 = 22;
+    const MAX_RADIUS_PX: f64 = 64.0;
+
+    if !params.lng.is_finite() || !params.lat.is_finite() {
+        return (StatusCode::BAD_REQUEST, "lng/lat out of bounds").into_response();
+    }
+
+    if params.zoom > MAX_ZOOM {
+        return (StatusCode::BAD_REQUEST, "zoom out of bounds").into_response();
     }
 
     let Some(center) = LngLat::new(params.lng, params.lat).xy() else {
         return (StatusCode::BAD_REQUEST, "lng/lat out of bounds").into_response();
     };
+
+    let radius_px = params.radius * center.meter_scale() * mercator_pixel_scale(params.zoom, 256);
+    if params.radius <= 0.0 || !params.radius.is_finite() || radius_px > MAX_RADIUS_PX {
+        return (StatusCode::BAD_REQUEST, "radius out of bounds").into_response();
+    }
 
     match inspect::activities_at(
         &db,

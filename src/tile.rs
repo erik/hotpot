@@ -326,8 +326,8 @@ impl LngLat {
     const LAT_BOUNDS: Range<f64> = -89.99999..90.0;
 
     pub fn new(mut x: f64, y: f64) -> LngLat {
-        while x < -180.0 {
-            x += 360.0;
+        if x < -180.0 {
+            x = (x + 180.0).rem_euclid(360.0) - 180.0;
         }
 
         Self(Point::new(x, y))
@@ -466,6 +466,16 @@ mod tests {
         ( $x:expr, $y:expr, $z:expr ) => {
             assert!(($y - $x).abs() < $z, "{} != {} (within {})", $x, $y, $z);
         };
+    }
+
+    #[test]
+    fn test_lnglat_wraps_longitude() {
+        assert_eq!(LngLat::new(-190.0, 0.0).0.x(), 170.0);
+        assert_eq!(LngLat::new(-540.0, 0.0).0.x(), -180.0);
+        assert_eq!(LngLat::new(10.0, 0.0).0.x(), 10.0);
+
+        let x = LngLat::new(-1e300, 0.0).0.x();
+        assert!((-180.0..180.0).contains(&x), "{x}");
     }
 
     #[test]
