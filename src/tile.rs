@@ -95,26 +95,6 @@ impl From<LngLat> for Point<f64> {
     }
 }
 
-impl LngLat {
-    pub fn from_latlng_str(value: &str) -> Result<Self> {
-        let parts: Vec<&str> = value.split(',').collect();
-        if parts.len() != 2 {
-            anyhow::bail!("expected format: latitude,longitude");
-        }
-
-        let lat: f64 = parts[0].trim().parse()?;
-        let lng: f64 = parts[1].trim().parse()?;
-        if !(-90.0..=90.0).contains(&lat) {
-            anyhow::bail!("latitude must be between -90 and 90");
-        }
-        if !(-180.0..=180.0).contains(&lng) {
-            anyhow::bail!("longitude must be between -180 and 180");
-        }
-
-        Ok(Self((lng, lat).into()))
-    }
-}
-
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub struct WebMercator(pub Point<f64>);
 
@@ -292,6 +272,12 @@ impl BBox {
     }
 }
 
+/// Pixels per (mercator) meter at zoom level for given tile width
+pub fn mercator_pixel_scale(zoom: u8, tile_extent: u32) -> f64 {
+    debug_assert!((1u32 << zoom).checked_mul(tile_extent).is_some());
+    ((1u32 << zoom) * tile_extent) as f64 / EARTH_CIRCUMFERENCE
+}
+
 impl WebMercator {
     /// Scale factor to convert ground meters into Mercator units at this point.
     pub fn meter_scale(&self) -> f64 {
@@ -303,15 +289,19 @@ impl WebMercator {
         let num_tiles = (1u32 << zoom) as f64;
         let scale = num_tiles / EARTH_CIRCUMFERENCE;
 
-        let x = (scale * (self.0.x() + ORIGIN_OFFSET)).floor() as u32;
-        let y = (scale * (ORIGIN_OFFSET - self.0.y())).floor() as u32;
+        let max = num_tiles - 1.0;
+        let x = (scale * (self.0.x() + ORIGIN_OFFSET))
+            .floor()
+            .clamp(0.0, max) as u32;
+        let y = (scale * (ORIGIN_OFFSET - self.0.y()))
+            .floor()
+            .clamp(0.0, max) as u32;
 
         Tile::new(x, y, zoom)
     }
 
     pub fn to_mercator_pixel(self, zoom: u8, tile_extent: u32) -> Coord<f64> {
-        let num_tiles = 1u32 << zoom;
-        let scale = (num_tiles * tile_extent) as f64 / EARTH_CIRCUMFERENCE;
+        let scale = mercator_pixel_scale(zoom, tile_extent);
 
         Coord {
             x: (scale * (self.0.x() + ORIGIN_OFFSET)),
@@ -341,6 +331,32 @@ impl LngLat {
         }
 
         Self(Point::new(x, y))
+    }
+
+    pub fn from_latlng_str(value: &str) -> Result<Self> {
+        let parts: Vec<&str> = value.split(',').collect();
+        if parts.len() != 2 {
+            anyhow::bail!("expected format: latitude,longitude");
+        }
+
+        let lat: f64 = parts[0].trim().parse()?;
+        let lng: f64 = parts[1].trim().parse()?;
+        if !(-90.0..=90.0).contains(&lat) {
+            anyhow::bail!("latitude must be between -90 and 90");
+        }
+        if !(-180.0..=180.0).contains(&lng) {
+            anyhow::bail!("longitude must be between -180 and 180");
+        }
+
+        Ok(Self((lng, lat).into()))
+    }
+
+    pub fn from_mercator_pixel(px: Coord<f64>, zoom: u8, tile_extent: u32) -> Self {
+        debug_assert!((1u32 << zoom).checked_mul(tile_extent).is_some());
+        let size = ((1u32 << zoom) * tile_extent) as f64;
+        let lng = px.x / size * 360.0 - 180.0;
+        let lat = (PI * (1.0 - 2.0 * px.y / size)).sinh().atan().to_degrees();
+        Self(Point::new(lng, lat))
     }
 
     pub fn xy(&self) -> Option<WebMercator> {
@@ -383,9 +399,7 @@ impl Tile {
     /// Pre-compute activity masks relevant to this tile.
     pub fn build_mask(&self, masks: &[ActivityMask], tile_extent: i32) -> TileActivityMask {
         let bbox = self.xy_bounds();
-
-        let tile_width_merc = bbox.right - bbox.left;
-        let pixels_per_merc_meter = tile_extent as f64 / tile_width_merc;
+        let pixels_per_merc_meter = mercator_pixel_scale(self.z, tile_extent as u32);
 
         let tile_masks = masks
             .iter()

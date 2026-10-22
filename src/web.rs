@@ -28,8 +28,8 @@ use crate::filter::PropertyFilter;
 use crate::raster::LinearGradient;
 use crate::strava;
 use crate::strava::StravaAuth;
-use crate::tile::{Tile, WebMercatorViewport};
-use crate::{activity, raster};
+use crate::tile::{LngLat, Tile, WebMercatorViewport};
+use crate::{activity, inspect, raster};
 
 #[derive(Clone)]
 pub struct Config {
@@ -46,6 +46,7 @@ pub struct RouteConfig {
     pub upload: bool,
     pub render: bool,
     pub fetch: bool,
+    pub inspect: bool,
 }
 
 #[derive(Embed)]
@@ -117,7 +118,12 @@ impl Config {
             router = router.route("/render", get(render_viewport));
         }
 
-        let intervals_icu = IntervalsIcuAuth::from_env();
+        if self.routes.inspect {
+            tracing::info!("/api/activities/inspect (activity lookup)");
+
+            router = router.route("/api/activities/inspect", get(get_activities_inspect));
+        }
+
         if self.routes.fetch {
             tracing::info!("/fetch/:source");
 
@@ -154,7 +160,7 @@ impl Config {
             .with_state(AppState {
                 config: self.clone(),
                 strava,
-                intervals_icu,
+                intervals_icu: IntervalsIcuAuth::from_env(),
                 db: Arc::new(db),
                 db_config: Arc::new(db_config),
             });
@@ -198,9 +204,10 @@ async fn index(State(AppState { config, db, .. }): State<AppState>) -> impl Into
             "\
             globalThis.UPLOADS_ENABLED = {};
             globalThis.RENDER_ENABLED = {};
+            globalThis.INSPECT_ENABLED = {};
             globalThis.ACTIVITY_PROPERTIES = {};
         ",
-            config.routes.upload, config.routes.render, properties,
+            config.routes.upload, config.routes.render, config.routes.inspect, properties,
         )
         .as_str(),
     );
@@ -225,12 +232,9 @@ async fn static_file(uri: Uri) -> impl IntoResponse {
     }
 }
 
+/// Shared filter params
 #[derive(Debug, Deserialize)]
-struct RenderQueryParams {
-    #[serde(default)]
-    color: Option<String>,
-    #[serde(default)]
-    gradient: Option<LinearGradient>,
+struct FilterParams {
     #[serde(default, with = "crate::date::parse")]
     before: Option<Date>,
     #[serde(default, with = "crate::date::parse")]
@@ -239,22 +243,48 @@ struct RenderQueryParams {
     filter: Option<PropertyFilter>,
 }
 
+impl From<FilterParams> for ActivityFilter {
+    fn from(params: FilterParams) -> Self {
+        ActivityFilter::new(params.before, params.after, params.filter)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct StyleParams {
+    #[serde(default)]
+    color: Option<String>,
+    #[serde(default)]
+    gradient: Option<LinearGradient>,
+}
+
+impl StyleParams {
+    fn gradient(&self) -> Result<&LinearGradient, &'static str> {
+        match (&self.gradient, self.color.as_deref()) {
+            (Some(gradient), None) => Ok(gradient),
+            (Some(_), Some(_)) => Err("cannot specify both gradient and color"),
+            (None, None) => Ok(&raster::ORANGE),
+            (None, Some("pinkish")) => Ok(&raster::PINKISH),
+            (None, Some("blue-red")) => Ok(&raster::BLUE_RED),
+            (None, Some("red")) => Ok(&raster::RED),
+            (None, Some("orange")) => Ok(&raster::ORANGE),
+            (None, Some(_)) => Err("invalid color name"),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct RenderViewQueryParams {
     bounds: String,
     width: u32,
     height: u32,
+}
 
-    #[serde(default)]
-    color: Option<String>,
-    #[serde(default)]
-    gradient: Option<LinearGradient>,
-    #[serde(default, with = "crate::date::parse")]
-    before: Option<Date>,
-    #[serde(default, with = "crate::date::parse")]
-    after: Option<Date>,
-    #[serde(default)]
-    filter: Option<PropertyFilter>,
+#[derive(Debug, Deserialize)]
+struct InspectQueryParams {
+    lng: f64,
+    lat: f64,
+    radius: f64,
+    zoom: u8,
 }
 
 /// Handle the `y` part of an `/z/x/y` or `/z/x/y@2x` URL
@@ -290,19 +320,56 @@ impl<'de> Deserialize<'de> for TileYParam {
 
 async fn get_activity_count(
     State(AppState { db, .. }): State<AppState>,
-    Query(params): Query<RenderQueryParams>,
+    Query(filter): Query<FilterParams>,
 ) -> impl IntoResponse {
-    let filter = ActivityFilter::new(params.before, params.after, params.filter);
     let num_activities = db
-        .activity_count(&filter)
+        .activity_count(&filter.into())
         .expect("failed to count activities");
 
     (StatusCode::OK, num_activities.to_string()).into_response()
 }
 
+async fn get_activities_inspect(
+    State(AppState { db, db_config, .. }): State<AppState>,
+    Query(params): Query<InspectQueryParams>,
+    Query(filter): Query<FilterParams>,
+) -> impl IntoResponse {
+    if params.radius <= 0.0 || !params.radius.is_finite() {
+        return (StatusCode::BAD_REQUEST, "radius out of bounds").into_response();
+    }
+
+    let Some(center) = LngLat::new(params.lng, params.lat).xy() else {
+        return (StatusCode::BAD_REQUEST, "lng/lat out of bounds").into_response();
+    };
+
+    match inspect::activities_at(
+        &db,
+        &db_config,
+        &filter.into(),
+        center,
+        params.radius,
+        params.zoom,
+    )
+    .and_then(|geojson| Ok(serde_json::to_vec(&geojson)?))
+    {
+        Ok(body) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/geo+json")],
+            body,
+        )
+            .into_response(),
+        Err(err) => {
+            tracing::error!("error looking up activities: {:?}", err);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
 async fn render_viewport(
     State(AppState { db, db_config, .. }): State<AppState>,
     Query(params): Query<RenderViewQueryParams>,
+    Query(filter): Query<FilterParams>,
+    Query(style): Query<StyleParams>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
     let viewport = match WebMercatorViewport::from_str(&params.bounds) {
@@ -324,14 +391,14 @@ async fn render_viewport(
             .into_response();
     }
 
-    let filter = ActivityFilter::new(params.before, params.after, params.filter);
+    let filter = ActivityFilter::from(filter);
 
     let etag = match check_etag(&db, &headers) {
         Ok(etag) => etag,
         Err(status) => return status.into_response(),
     };
 
-    let gradient = match choose_gradient(&params.gradient, params.color) {
+    let gradient = match style.gradient() {
         Ok(value) => value,
         Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
     };
@@ -361,7 +428,8 @@ async fn render_viewport(
 async fn render_tile(
     State(AppState { db, db_config, .. }): State<AppState>,
     Path((z, x, y_param)): Path<(u8, u32, TileYParam)>,
-    Query(params): Query<RenderQueryParams>,
+    Query(filter): Query<FilterParams>,
+    Query(style): Query<StyleParams>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
     // Fail fast when tile is higher zoom level than we store data for.
@@ -369,20 +437,18 @@ async fn render_tile(
         return StatusCode::NOT_FOUND.into_response();
     }
 
-    let filter = ActivityFilter::new(params.before, params.after, params.filter);
-
     let etag = match check_etag(&db, &headers) {
         Ok(etag) => etag,
         Err(status) => return status.into_response(),
     };
 
     let tile = Tile::new(x, y_param.y, z);
-    let gradient = match choose_gradient(&params.gradient, params.color) {
+    let gradient = match style.gradient() {
         Ok(value) => value,
         Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
     };
 
-    raster::rasterize_tile(tile, y_param.tile_size, &filter, &db, &db_config)
+    raster::rasterize_tile(tile, y_param.tile_size, &filter.into(), &db, &db_config)
         .and_then(|raster| match raster {
             Some(raster) => Ok(cached_response(StatusCode::OK, &etag)
                 .header(header::CONTENT_TYPE, "image/png")
@@ -447,22 +513,6 @@ fn check_etag(db: &Database, headers: &HeaderMap) -> Result<String, StatusCode> 
     }
 
     Ok(etag)
-}
-
-fn choose_gradient(
-    gradient: &Option<LinearGradient>,
-    color: Option<String>,
-) -> Result<&LinearGradient, &'static str> {
-    match (gradient, color.as_deref()) {
-        (Some(gradient), None) => Ok(gradient),
-        (Some(_), Some(_)) => Err("cannot specify both gradient and color"),
-        (None, None) => Ok(&raster::ORANGE),
-        (None, Some("pinkish")) => Ok(&raster::PINKISH),
-        (None, Some("blue-red")) => Ok(&raster::BLUE_RED),
-        (None, Some("red")) => Ok(&raster::RED),
-        (None, Some("orange")) => Ok(&raster::ORANGE),
-        (None, Some(_)) => Err("invalid color name"),
-    }
 }
 
 fn is_authenticated(
@@ -631,6 +681,7 @@ mod tests {
                 upload: false,
                 render: true,
                 fetch: false,
+                inspect: false,
             },
         }
         .build_router(db)

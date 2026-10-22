@@ -592,3 +592,57 @@ body {
         }
     }
 }
+
+.activity-popup {
+    .maplibregl-popup-content {
+        background-color: var(--input-bg);
+        color: var(--text-muted);
+        font-family: var(--font-ui);
+        font-size: var(--text-xs);
+        border-radius: var(--radius);
+        padding: 0.25rem 0;
+        width: 14rem;
+    }
+
+    .__list {
+        max-height: 16rem;
+        overflow-y: auto;
+    }
+
+    .__row {
+        display: grid;
+        row-gap: 0.125rem;
+        padding: 0.25rem 0.5rem;
+        line-height: 1.2;
+        cursor: pointer;
+
+        &:nth-child(even) {
+            background-color: color-mix(in srgb, var(--panel-bg) 60%, var(--input-bg));
+        }
+
+        &:hover,
+        &.--active {
+            background-color: color-mix(in srgb, var(--panel-bg), var(--border) 35%);
+        }
+    }
+
+    .__summary {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 0.75rem;
+    }
+
+    .__title {
+        color: var(--text-primary);
+        font-weight: 600;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        overflow: hidden;
+    }
+
+    .__stats {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.75rem;
+    }
+}

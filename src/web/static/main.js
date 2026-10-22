@@ -403,6 +403,239 @@ class ExportButton {
   }
 }
 
+const EMPTY_COLLECTION = { type: "FeatureCollection", features: [] };
+
+const DATE_FORMAT = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
+const NUMBER_FORMAT = new Intl.NumberFormat(undefined, {
+  maximumFractionDigits: 1,
+});
+
+function activityStats(props) {
+  const num = (v, unit) => `${NUMBER_FORMAT.format(v)} ${unit}`;
+  return [
+    ["Distance", props.total_distance, (v) => num(v, "km")],
+    [
+      "Elevation gain",
+      props.elevation_gain,
+      (v) => `+${num(Math.round(v), "m")}`,
+    ],
+  ]
+    .filter(([_label, value]) => value != null)
+    .map(([label, value, fmt]) => [label, fmt(value)]);
+}
+
+class ActivityInspector {
+  constructor(map, options) {
+    this.map = map;
+    this.options = options;
+    this.data = EMPTY_COLLECTION;
+    this.popup = null;
+    this.hovered = null;
+    this.selected = null;
+    this.rows = new Map();
+    this.request = null;
+
+    map.on("click", (ev) => this.inspect(ev.lngLat, ev.point));
+    options.watch(["$queryString"], () => this.clear());
+  }
+
+  addLayers() {
+    for (const id of ["selection-highlight", "selection"]) {
+      if (this.map.getLayer(id)) {
+        this.map.removeLayer(id);
+      }
+    }
+
+    if (this.map.getSource("selection")) {
+      this.map.removeSource("selection");
+    }
+
+    const layout = { "line-cap": "round", "line-join": "round" };
+
+    this.map
+      .addSource("selection", { type: "geojson", data: this.data })
+      .addLayer({
+        id: "selection",
+        type: "line",
+        source: "selection",
+        layout,
+        paint: { "line-color": "#6b8fff", "line-width": 3 },
+      })
+      .addLayer({
+        id: "selection-highlight",
+        type: "line",
+        source: "selection",
+        layout,
+        paint: { "line-color": "#6b8fff", "line-width": 3 },
+      });
+
+    this.updateHighlight();
+  }
+
+  setData(data) {
+    this.data = data;
+    this.hovered = null;
+    this.selected = null;
+    this.rows.clear();
+    this.map.getSource("selection")?.setData(data);
+    this.updateHighlight();
+  }
+
+  setHovered(id) {
+    this.hovered = id;
+    this.updateHighlight();
+  }
+
+  setSelected(id) {
+    this.selected = id;
+    this.updateHighlight();
+  }
+
+  updateHighlight() {
+    const activeId = this.hovered ?? this.selected;
+
+    if (this.map.getLayer("selection-highlight")) {
+      this.map.setFilter("selection-highlight", ["==", ["id"], activeId ?? -1]);
+      this.map.setPaintProperty(
+        "selection",
+        "line-color",
+        activeId == null ? "#6b8fff" : "#5f636b",
+      );
+      this.map.setPaintProperty(
+        "selection",
+        "line-width",
+        activeId == null ? 3 : 1.5,
+      );
+    }
+
+    this.rows.forEach((row, rowId) => {
+      row.classList.toggle("--active", rowId === activeId);
+    });
+  }
+
+  clear() {
+    this.request?.abort();
+    this.popup?.remove();
+  }
+
+  async inspect(lngLat, point) {
+    this.clear();
+    const request = new AbortController();
+    this.request = request;
+
+    const canvasStyle = this.map.getCanvas().style;
+    canvasStyle.cursor = "progress";
+
+    const qs = encodeQueryString({
+      lng: lngLat.lng,
+      lat: lngLat.lat,
+
+      // Add pixel buffer to click point so we can convert to meters
+      // consistently
+      radius: lngLat.distanceTo(this.map.unproject([point.x + 8, point.y])),
+      zoom: Math.ceil(this.map.getZoom()),
+    });
+
+    let data = EMPTY_COLLECTION;
+    try {
+      const res = await fetch(
+        `/api/activities/inspect?${qs}&${this.options.$queryString}`,
+        { signal: request.signal },
+      );
+
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+
+      data = await res.json();
+    } catch (err) {
+      if (request.signal.aborted) {
+        return;
+      }
+
+      console.error("Activity lookup failed", err);
+    } finally {
+      if (this.request === request) {
+        canvasStyle.cursor = "";
+      }
+    }
+
+    if (data.features.length === 0) return;
+
+    this.setData(data);
+
+    const list = this.renderList(data.features);
+    this.popup = new maplibregl.Popup({
+      className: "activity-popup",
+      closeButton: false,
+      maxWidth: "none",
+    })
+      .setLngLat(lngLat)
+      .setDOMContent(list)
+      .addTo(this.map)
+      .on("close", () => {
+        this.popup = null;
+        this.setData(EMPTY_COLLECTION);
+      });
+  }
+
+  renderList(features) {
+    const { div, span } = createElement;
+
+    return div(
+      { class: "__list" },
+      features.map((feature) => {
+        const { title, start_time } = feature.properties;
+        const name = title || "Untitled Activity";
+        const stats = activityStats(feature.properties);
+
+        const row = div(
+          {
+            class: "__row",
+            mouseenter: () => this.setHovered(feature.id),
+            mouseleave: () => this.setHovered(null),
+            click: () => {
+              if (this.selected === feature.id) {
+                this.setSelected(null);
+              } else {
+                this.setSelected(feature.id);
+                this.zoomTo(feature);
+              }
+            },
+          },
+          [
+            div({ class: "__summary" }, [
+              div({ class: "__title", title: name }, name),
+              div(
+                { class: "__date" },
+                start_time && DATE_FORMAT.format(new Date(start_time)),
+              ),
+            ]),
+            stats.length > 0
+              ? div(
+                  { class: "__stats" },
+                  stats.map(([label, value]) => span({ title: label }, value)),
+                )
+              : null,
+          ],
+        );
+
+        this.rows.set(feature.id, row);
+        return row;
+      }),
+    );
+  }
+
+  zoomTo(feature) {
+    const bounds = new maplibregl.LngLatBounds();
+    feature.geometry.coordinates.flat().forEach((pt) => bounds.extend(pt));
+
+    if (!bounds.isEmpty()) {
+      this.map.fitBounds(bounds, { padding: 64 });
+    }
+  }
+}
+
 class UploadButton {
   onAdd(_map) {
     const { div, button } = createElement;

@@ -33,7 +33,7 @@ RUN apt-get update && apt-get install -y \
 COPY --from=builder /build/target/release/hotpot /usr/local/bin/hotpot
 
 ENTRYPOINT ["hotpot"]
-CMD ["--db", "/data/hotpot.sqlite3", "serve", "--host", "0.0.0.0"]
+CMD ["--db", "/data/hotpot.sqlite3", "serve", "--host", "0.0.0.0", "--inspect"]
 
 EXPOSE 8080
 

@@ -3,6 +3,7 @@ pub mod date;
 pub mod db;
 pub mod external;
 pub mod filter;
+pub mod inspect;
 pub mod raster;
 pub mod strava;
 pub mod tile;
