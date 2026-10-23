@@ -4,8 +4,9 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use csv::StringRecord;
 use fitparser::de::{DecodeOption, FitObject, FitStreamProcessor};
 use fitparser::profile::MesgNum;
@@ -515,11 +516,7 @@ pub fn upsert(
     mut activity: RawActivity,
     config: &db::Config,
 ) -> Result<i64> {
-    let mut insert_tile = conn.prepare_cached(
-        "\
-        INSERT INTO activity_tiles (activity_id, z, x, y, coords) \
-        VALUES (?, ?, ?, ?, ?)",
-    )?;
+    let tx = conn.transaction()?;
 
     // Round floats in a JSON value to reduce storage precision noise
     for val in activity.properties.values_mut() {
@@ -532,7 +529,7 @@ pub fn upsert(
         }
     }
 
-    let activity_id: i64 = conn.query_row(
+    let activity_id: i64 = tx.query_row(
         "\
         INSERT INTO activities (file, title, start_time, properties, created_at) \
         VALUES (?, ?, ?, JSONB(?), ?) \
@@ -553,14 +550,19 @@ pub fn upsert(
     )?;
 
     // Clean up any existing tiles if we're replacing an existing activity ID
-    conn.execute(
+    tx.execute(
         "DELETE FROM activity_tiles WHERE activity_id = ?",
         params![activity_id],
     )?;
 
+    let mut insert_tile = tx.prepare_cached(
+        "\
+        INSERT INTO activity_tiles (activity_id, z, x, y, coords) \
+        VALUES (?, ?, ?, ?, ?)",
+    )?;
+
     let tile_size = config.tile_extent as f64;
-    let tiles = activity.clip_to_tiles(config);
-    for (tile, line) in tiles.iter() {
+    for (tile, line) in activity.clip_to_tiles(config).iter() {
         // Have to type-dance a bit because geo::Simplify requires f64
         let simplified_line = line
             .map_coords(|c| {
@@ -574,6 +576,9 @@ pub fn upsert(
         let coords = encode_line(&simplified_line)?;
         insert_tile.insert(params![activity_id, tile.z, tile.x, tile.y, coords])?;
     }
+
+    drop(insert_tile);
+    tx.commit()?;
 
     Ok(activity_id)
 }
@@ -699,7 +704,7 @@ pub fn import_path(
     config: &Config,
     prop_source: &PropertySource,
 ) -> Result<()> {
-    let conn = db.connection()?;
+    let mut conn = db.connection()?;
 
     // Skip any files that are already in the database.
     let known_files = known_files(&conn)?;
@@ -714,56 +719,70 @@ pub fn import_path(
     let skipped = AtomicU32::new(0);
     let failed = AtomicU32::new(0);
 
-    WalkDir::new(path)
-        .into_iter()
-        .par_bridge()
-        .filter_map(|dir| {
-            let dir = dir.ok()?;
-            if !dir.file_type().is_file() {
-                return None;
+    let (tx, rx) = mpsc::sync_channel::<(String, RawActivity)>(64);
+
+    // Read activity files in parallel, but write to DB sequentially to avoid
+    // lock contention.
+    std::thread::scope(|scope| {
+        let write_thread = scope.spawn(|| -> Result<()> {
+            for (file_key, activity) in rx {
+                upsert(&mut conn, &file_key, activity, config)
+                    .with_context(|| format!("failed to import {file_key}"))?;
+
+                imported.fetch_add(1, Ordering::Relaxed);
             }
+            Ok(())
+        });
 
-            let path = dir.path();
+        let read_result = WalkDir::new(path)
+            .into_iter()
+            .par_bridge()
+            .filter_map(|dir| {
+                let dir = dir.ok()?;
+                if !dir.file_type().is_file() {
+                    return None;
+                }
 
-            let file_key = prop_source.file_key(path)?;
-            if !known_files.contains(&file_key) {
-                Some((path.to_owned(), file_key))
-            } else {
-                tracing::debug!(?path, "skipping, already imported");
-                skipped.fetch_add(1, Ordering::Relaxed);
-                None
-            }
-        })
-        .filter_map(|(path, file_key)| {
-            let activity = read_file(&path)
-                .inspect_err(|err| {
-                    tracing::error!(?path, ?err, "failed to read activity");
-                    failed.fetch_add(1, Ordering::Relaxed);
-                })
-                .inspect(|activity| {
-                    if activity.is_none() {
-                        tracing::debug!(?path, "skipping, no track data");
-                        skipped.fetch_add(1, Ordering::Relaxed);
-                    }
-                })
-                .ok()??;
+                let path = dir.path();
 
-            Some((path, file_key, activity))
-        })
-        .for_each_init(
-            || db.shared_pool(),
-            |pool, (path, file_key, mut activity)| {
+                let file_key = prop_source.file_key(path)?;
+                if !known_files.contains(&file_key) {
+                    Some((path.to_owned(), file_key))
+                } else {
+                    tracing::debug!(?path, "skipping, already imported");
+                    skipped.fetch_add(1, Ordering::Relaxed);
+                    None
+                }
+            })
+            .filter_map(|(path, file_key)| {
+                let activity = read_file(&path)
+                    .inspect_err(|err| {
+                        tracing::error!(?path, ?err, "failed to read activity");
+                        failed.fetch_add(1, Ordering::Relaxed);
+                    })
+                    .inspect(|activity| {
+                        if activity.is_none() {
+                            tracing::debug!(?path, "skipping, no track data");
+                            skipped.fetch_add(1, Ordering::Relaxed);
+                        }
+                    })
+                    .ok()??;
+
+                Some((path, file_key, activity))
+            })
+            .try_for_each_with(tx, |tx, (path, file_key, mut activity)| {
                 tracing::debug!(?path, "importing activity");
 
                 // Merge with activity properties
                 prop_source.enrich(&path, &mut activity);
 
-                let mut conn = pool.get().expect("db connection pool timed out");
-                upsert(&mut conn, &file_key, activity, config).expect("insert activity");
+                tx.send((file_key, activity))
+                    .map_err(|_| anyhow!("DB writer finished before activity reader"))
+            });
 
-                imported.fetch_add(1, Ordering::Relaxed);
-            },
-        );
+        let write_result = write_thread.join().expect("db writer thread panicked");
+        read_result.and(write_result)
+    })?;
 
     // Update table statistics post-import
     conn.execute_batch("ANALYZE;")?;

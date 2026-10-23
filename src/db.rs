@@ -68,7 +68,6 @@ pub struct Database {
 impl Database {
     pub fn new(path: &Path) -> Result<Self> {
         let manager = SqliteConnectionManager::file(path).with_init(|conn| {
-            conn.pragma_update(None, "journal_mode", "WAL")?;
             conn.pragma_update(None, "synchronous", "OFF")?;
             Ok(())
         });
@@ -94,6 +93,10 @@ impl Database {
 
         let pool = r2d2::Pool::new(manager)?;
         let mut conn = pool.get()?;
+
+        // We support concurrent writes during imports. Ensure DB is in WAL mode
+        // to avoid locking errors
+        conn.pragma_update(None, "journal_mode", "WAL")?;
 
         apply_schema(&mut conn)?;
 
@@ -134,10 +137,6 @@ impl Database {
     pub fn connection(&self) -> Result<r2d2::PooledConnection<SqliteConnectionManager>> {
         let conn = self.pool.get()?;
         Ok(conn)
-    }
-
-    pub fn shared_pool(&self) -> r2d2::Pool<SqliteConnectionManager> {
-        self.pool.clone()
     }
 }
 
