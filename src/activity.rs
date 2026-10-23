@@ -696,7 +696,18 @@ impl PropertySource {
 /// The set of `file` keys already stored, used to skip re-importing activities.
 pub fn known_files(conn: &rusqlite::Connection) -> Result<HashSet<String>> {
     let files = conn
-        .prepare("SELECT DISTINCT file FROM activities")?
+        .prepare(
+            "\
+            SELECT DISTINCT file FROM activities
+            UNION
+
+            -- Also try to dedupe Garmin activities imported via intervals.icu
+            SELECT DISTINCT 'garmin:' || (properties ->> 'external_id')
+            FROM activities
+            WHERE file LIKE 'intervals_icu:%'
+              AND properties ->> 'source' = 'GARMIN_CONNECT'
+            ",
+        )?
         .query_map([], |row| row.get(0))?
         .filter_map(|n| n.ok())
         .collect();
