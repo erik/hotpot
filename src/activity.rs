@@ -781,7 +781,7 @@ pub fn import_path(
             });
 
         let write_result = write_thread.join().expect("db writer thread panicked");
-        read_result.and(write_result)
+        write_result.and(read_result)
     })?;
 
     // Update table statistics post-import
