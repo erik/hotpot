@@ -93,6 +93,7 @@ impl TileClipper {
 
     fn finish_segment(&mut self) {
         self.has_active_segment = false;
+        self.current = None;
     }
 }
 
@@ -173,6 +174,10 @@ impl RawActivity {
                     // Skip over large jumps
                     let len = p0.0.euclidean_distance(&p1.0);
                     if len > max_point_distance {
+                        // End lines here so they don't bridge the gap
+                        for clip in clippers.iter_mut() {
+                            clip.finish_segment();
+                        }
                         continue;
                     }
 
@@ -808,6 +813,32 @@ mod tests {
             start_time: None,
             properties: HashMap::new(),
             tracks: MultiLineString::from(LineString::from(coords)),
+        }
+    }
+
+    #[test]
+    fn test_clip_splits_lines_at_large_jumps() {
+        let config = db::Config {
+            zoom_levels: vec![8, 16],
+            trim_dist: 0.0,
+            ..db::Config::default()
+        };
+
+        let activity = test_activity(vec![
+            (13.4001, 52.5201),
+            (13.4002, 52.5202),
+            (13.6001, 52.5201),
+            (13.6002, 52.5202),
+        ]);
+
+        let clipped = activity.clip_to_tiles(&config);
+        for z in config.zoom_levels {
+            let lines: Vec<_> = clipped
+                .iter()
+                .filter(|(tile, _)| tile.z == z)
+                .map(|(_, line)| line.0.len())
+                .collect();
+            assert_eq!(lines, [2, 2], "z{z}");
         }
     }
 
