@@ -23,6 +23,7 @@ use tower_http::trace::{DefaultOnFailure, TraceLayer};
 use tracing::Level;
 
 use crate::db::{ActivityFilter, Config as DbConfig, Database};
+use crate::external::garmin::{GarminAuth, GarminClient};
 use crate::external::intervals_icu::{IntervalsIcuAuth, IntervalsIcuClient};
 use crate::filter::PropertyFilter;
 use crate::raster::LinearGradient;
@@ -59,6 +60,7 @@ pub struct AppState {
     pub db_config: Arc<DbConfig>,
     pub strava: Option<StravaAuth>,
     pub intervals_icu: Option<IntervalsIcuAuth>,
+    pub garmin: Option<GarminAuth>,
     pub config: Config,
 }
 
@@ -161,6 +163,7 @@ impl Config {
                 config: self.clone(),
                 strava,
                 intervals_icu: IntervalsIcuAuth::from_env(),
+                garmin: GarminAuth::from_env(),
                 db: Arc::new(db),
                 db_config: Arc::new(db_config),
             });
@@ -611,6 +614,10 @@ async fn run_fetch(state: &AppState, source: &str, lookback: u32) -> Option<Resu
             let auth = state.intervals_icu.as_ref()?;
             let client = IntervalsIcuClient::new(auth);
             Some(client.fetch(&state.db, &state.db_config, lookback).await)
+        }
+        "garmin" => {
+            let auth = state.garmin.as_ref()?;
+            Some(GarminClient::fetch_with(auth, &state.db, &state.db_config, lookback).await)
         }
         _ => None,
     }

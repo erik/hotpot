@@ -1,3 +1,4 @@
+pub mod garmin;
 pub mod intervals_icu;
 
 use anyhow::{Result, anyhow};

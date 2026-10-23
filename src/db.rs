@@ -7,7 +7,7 @@ use geo_types::Coord;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{ToSql, params};
 use serde::{Deserialize, Serialize};
-use time::{Date, OffsetDateTime};
+use time::{Date, Duration, OffsetDateTime};
 
 use crate::date::YYYY_MM_DD;
 use crate::filter::PropertyFilter;
@@ -202,6 +202,13 @@ pub struct Config {
 }
 
 impl Config {
+    /// Earliest date a fetch should look at: `lookback_days` ago, but never
+    /// before `fetch_cutoff`.
+    pub fn fetch_window_start(&self, lookback_days: u32) -> Date {
+        let start = OffsetDateTime::now_utc().date() - Duration::days(lookback_days.into());
+        self.fetch_cutoff.map_or(start, |cutoff| cutoff.max(start))
+    }
+
     fn load_from(conn: &mut rusqlite::Connection) -> Result<Self> {
         let mut cfg = Config::default();
 

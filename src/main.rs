@@ -10,6 +10,7 @@ use time::Date;
 use hotpot::activity::PropertySource;
 
 use hotpot::db::{ActivityFilter, Database};
+use hotpot::external::garmin::{GarminAuth, GarminClient};
 use hotpot::external::intervals_icu::{IntervalsIcuAuth, IntervalsIcuClient};
 use hotpot::filter::PropertyFilter;
 use hotpot::raster::{LinearGradient, PINKISH};
@@ -251,6 +252,11 @@ enum FetchSource {
     ///
     /// Requires the `INTERVALS_ICU_API_KEY` environment variable.
     IntervalsIcu,
+
+    /// Fetch new activities from the Garmin Connect Personal API.
+    ///
+    /// Requires the `GARMIN_API_KEY` environment variable.
+    Garmin,
 }
 
 #[derive(Args)]
@@ -552,6 +558,12 @@ fn command_fetch(global: GlobalOpts, args: FetchCmdArgs) -> Result<()> {
             let client = IntervalsIcuClient::new(&auth);
             let added = rt.block_on(client.fetch(&db, &db_config, lookback))?;
             (added, "intervals.icu")
+        }
+        FetchSource::Garmin => {
+            let auth = GarminAuth::from_env()
+                .ok_or_else(|| anyhow!("GARMIN_API_KEY environment variable is not set"))?;
+            let added = rt.block_on(GarminClient::fetch_with(&auth, &db, &db_config, lookback))?;
+            (added, "Garmin")
         }
     };
 
