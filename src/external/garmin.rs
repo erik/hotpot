@@ -248,8 +248,8 @@ impl GarminClient {
         properties.extend(meta.properties());
 
         let raw = RawActivity {
-            start_time: meta.start_time(),
-            title: meta.activity_name,
+            start_time: meta.start_time().or(parsed.start_time),
+            title: meta.activity_name.or(parsed.title),
             tracks: parsed.tracks,
             properties,
         };
