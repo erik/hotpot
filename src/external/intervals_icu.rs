@@ -6,7 +6,7 @@ use std::io::Cursor;
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use time::{Date, Duration, OffsetDateTime};
+use time::{Date, OffsetDateTime};
 
 use crate::activity::{self, RawActivity};
 use crate::date::YYYY_MM_DD;
@@ -38,6 +38,7 @@ pub struct ActivityRef {
     pub id: String,
     pub source: Option<String>,
     pub strava_id: Option<String>,
+    pub external_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -145,7 +146,7 @@ impl IntervalsIcuClient {
             .basic_auth(AUTH_USER_KEY, Some(&self.api_key))
             .query(&[
                 ("oldest", oldest.as_str()),
-                ("fields", "id,strava_id,source"),
+                ("fields", "id,strava_id,source,external_id"),
             ])
             .send()
             .await?;
@@ -206,14 +207,9 @@ impl IntervalsIcuClient {
         db_config: &db::Config,
         lookback_days: u32,
     ) -> Result<usize> {
-        let mut window_start =
-            OffsetDateTime::now_utc().date() - Duration::days(lookback_days.into());
-
-        if let Some(cutoff) = db_config.fetch_cutoff {
-            window_start = cutoff.max(window_start);
-        }
-
-        let refs = self.list_activity_ids(window_start).await?;
+        let refs = self
+            .list_activity_ids(db_config.fetch_window_start(lookback_days))
+            .await?;
         let known = {
             let conn = db.connection()?;
             activity::known_files(&conn)?
@@ -250,6 +246,11 @@ fn filter_new_activities(refs: Vec<ActivityRef>, known: &HashSet<String>) -> Vec
                 && !r.strava_id.as_deref().is_some_and(|id| {
                     known.contains(&format!("strava:{}", id))
                 })
+                // Already imported (via Garmin)
+                && !(r.source.as_deref() == Some("GARMIN_CONNECT")
+                    && r.external_id.as_deref().is_some_and(|id| {
+                        known.contains(&format!("garmin:{}", id))
+                    }))
         })
         .map(|r| r.id)
         .collect()
@@ -309,6 +310,7 @@ mod tests {
             id: id.to_string(),
             source: source.map(str::to_string),
             strava_id: strava_id.map(str::to_string),
+            external_id: None,
         }
     }
 
@@ -357,10 +359,14 @@ mod tests {
 
     #[test]
     fn selects_only_new_non_strava_activities() {
-        let known: HashSet<String> = ["intervals_icu:id_existing", "strava:19387121985"]
-            .into_iter()
-            .map(String::from)
-            .collect();
+        let known: HashSet<String> = [
+            "intervals_icu:id_existing",
+            "strava:19387121985",
+            "garmin:24824121573",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
 
         let refs = vec![
             activity_ref("id_from_strava", Some("STRAVA"), None),
@@ -372,6 +378,10 @@ mod tests {
             ),
             activity_ref("id_new_with_strava_id", Some("GARMIN_CONNECT"), Some("222")),
             activity_ref("id_new", None, None),
+            ActivityRef {
+                external_id: Some("24824121573".to_string()),
+                ..activity_ref("id_garmin_dupe", Some("GARMIN_CONNECT"), None)
+            },
         ];
 
         assert_eq!(

@@ -216,6 +216,7 @@ to the database:
 - Command line
 - HTTP upload
 - intervals.icu API integration
+- Garmin Connect API integration
 - Strava webhook
 
 ### Command line
@@ -288,6 +289,35 @@ intervals API for future activities.
 sqlite3 hotpot.sqlite3 \
     "INSERT OR REPLACE INTO config (key, value) VALUES ('fetch_cutoff', '2026-01-01')"
 ```
+
+### Garmin Connect API integration
+
+Garmin offers a [Personal API](https://developer.garmin.com/gc-developer-program/personal/personal-api/)
+for accessing your own data. Create a key on the Personal API Key page in Garmin
+Connect.
+
+API keys have an expiration (between 30 days and 1 year) and can't be refreshed,
+so you'll need to create a new one when it expires.
+
+```bash
+export GARMIN_API_KEY=API_KEY \
+       HOTPOT_UPLOAD_TOKEN=UPLOAD_TOKEN
+
+# Import activities uploaded in the last 30 days
+hotpot fetch garmin --lookback 30
+
+# Start the server with the fetch endpoint enabled
+hotpot serve --fetch
+
+# Trigger an import of the last 30 days
+curl -X POST \
+  https://hotpot.example.com/fetch/garmin?lookback=30 \
+  --header "Authorization: Bearer $HOTPOT_UPLOAD_TOKEN"
+```
+
+Indoor activities and activities without GPS data are skipped. Activities
+already imported via intervals.icu are deduplicated, but those imported from a
+Strava export are not, so use `fetch_cutoff` if your history overlaps.
 
 ### Strava webhook
 
