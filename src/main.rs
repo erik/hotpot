@@ -145,12 +145,13 @@ struct RenderCmdArgs {
     viewport: WebMercatorViewport,
 
     /// Width of output image in pixels.
-    #[arg(short, long, default_value = "1024")]
+    #[arg(short, long, default_value = "2048")]
     width: u32,
 
-    /// Height of output image in pixels.
-    #[arg(short = 'H', long, default_value = "1024")]
-    height: u32,
+    /// Height of output image in pixels. If unset, will be derived from aspect
+    /// ratio of given bounds.
+    #[arg(short = 'H', long)]
+    height: Option<u32>,
 
     /// Select activities before this date (YYYY-MM-DD).
     #[arg(short, long, value_parser = date::try_parse)]
@@ -477,6 +478,15 @@ fn command_render_view(global: GlobalOpts, args: RenderCmdArgs) -> Result<()> {
     let filter = ActivityFilter::new(before, after, filter);
     let gradient = gradient.unwrap_or_else(|| PINKISH.clone());
     let mut file = BufWriter::new(File::create(output)?);
+
+    // If height isn't given, maintain the viewport's aspect ratio
+    let height = height.unwrap_or_else(|| {
+        let aspect_ratio = viewport.height() / viewport.width();
+        let scaled_height = aspect_ratio * width as f64;
+
+        // Ensure extreme aspect ratios don't end up with a zero-height image
+        scaled_height.max(1.0) as u32
+    });
 
     let png = raster::render_view(viewport, &gradient, width, height, &filter, &db, &config)?;
     file.write_all(&png)?;
