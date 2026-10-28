@@ -1,6 +1,6 @@
+use std::f64::consts::PI;
 use std::ops::Range;
 use std::str::FromStr;
-use std::{f64::consts::PI, ops::RangeInclusive};
 
 use anyhow::{Result, anyhow};
 use geo_types::{Coord, Point};
@@ -44,40 +44,6 @@ impl TileBounds {
             ymax: (tile.y + 1) << zoom_steps,
         }
     }
-
-    pub fn from_viewport(
-        viewport: &WebMercatorViewport,
-        viewport_width: u32,
-        viewport_height: u32,
-        zoom_range: RangeInclusive<u32>,
-    ) -> Self {
-        let tile_size = 256;
-
-        let min_zoom = *zoom_range.start();
-        let max_zoom = *zoom_range.end();
-
-        let sw_px = viewport.sw.to_mercator_pixel(max_zoom as u8, tile_size);
-        let ne_px = viewport.ne.to_mercator_pixel(max_zoom as u8, tile_size);
-
-        let scale = f64::max(
-            (ne_px.x - sw_px.x) / (viewport_width as f64),
-            (sw_px.y - ne_px.y) / (viewport_height as f64),
-        );
-
-        // Find the smallest zoom level which will cover our viewport at full
-        // resolution.
-        let zoom = (max_zoom - scale.log2().floor() as u32).clamp(min_zoom, max_zoom) as u8;
-        let sw_tile = viewport.sw.tile(zoom);
-        let ne_tile = viewport.ne.tile(zoom);
-
-        TileBounds {
-            z: zoom,
-            xmin: sw_tile.x,
-            xmax: ne_tile.x,
-            ymin: ne_tile.y,
-            ymax: sw_tile.y,
-        }
-    }
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
@@ -116,6 +82,16 @@ pub struct WebMercatorViewport {
     pub ne: WebMercator,
 }
 
+impl WebMercatorViewport {
+    pub fn width(&self) -> f64 {
+        self.ne.0.x() - self.sw.0.x()
+    }
+
+    pub fn height(&self) -> f64 {
+        self.ne.0.y() - self.sw.0.y()
+    }
+}
+
 impl FromStr for WebMercatorViewport {
     type Err = anyhow::Error;
 
@@ -129,11 +105,11 @@ impl FromStr for WebMercatorViewport {
             return Err(anyhow!("expected coordinates as 'west,south,east,north'"));
         }
 
-        let sw = LngLat((parts[0], parts[1]).into())
+        let sw = LngLat::new(parts[0], parts[1])
             .xy()
             .ok_or_else(|| anyhow!("south/western coord out of WebMercator bounds"))?;
 
-        let ne = LngLat((parts[2], parts[3]).into())
+        let ne = LngLat::new(parts[2], parts[3])
             .xy()
             .ok_or_else(|| anyhow!("north/eastern coord out of WebMercator bounds"))?;
 
@@ -275,7 +251,7 @@ impl BBox {
 /// Pixels per (mercator) meter at zoom level for given tile width
 pub fn mercator_pixel_scale(zoom: u8, tile_extent: u32) -> f64 {
     debug_assert!((1u32 << zoom).checked_mul(tile_extent).is_some());
-    ((1u32 << zoom) * tile_extent) as f64 / EARTH_CIRCUMFERENCE
+    ((1 << zoom) * tile_extent) as f64 / EARTH_CIRCUMFERENCE
 }
 
 impl WebMercator {
@@ -326,7 +302,8 @@ impl LngLat {
     const LAT_BOUNDS: Range<f64> = -89.99999..90.0;
 
     pub fn new(mut x: f64, y: f64) -> LngLat {
-        if x < -180.0 {
+        // Out of world bounds, wrap to -180..180
+        if !(-180.0..=180.0).contains(&x) {
             x = (x + 180.0).rem_euclid(360.0) - 180.0;
         }
 
@@ -746,5 +723,16 @@ mod tests {
             !is_hidden_at_dist(1.1 * mask.radius),
             "outside radius should be visible"
         );
+    }
+
+    #[test]
+    fn test_viewport_wraps_longitudes_onto_real_world() {
+        let wrapped = WebMercatorViewport::from_str("343.0,34.0,394.0,53.0").unwrap();
+        let expected = WebMercatorViewport::from_str("-17.0,34.0,34.0,53.0").unwrap();
+
+        close_enough!(wrapped.sw.0.x(), expected.sw.0.x(), 1e-3);
+        close_enough!(wrapped.ne.0.x(), expected.ne.0.x(), 1e-3);
+        close_enough!(wrapped.sw.0.y(), expected.sw.0.y(), 1e-3);
+        close_enough!(wrapped.ne.0.y(), expected.ne.0.y(), 1e-3);
     }
 }

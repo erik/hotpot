@@ -1,6 +1,5 @@
 use std::error::Error;
 use std::fmt::Display;
-use std::ops::RangeInclusive;
 use std::str::FromStr;
 
 use anyhow::{Result, anyhow};
@@ -126,14 +125,6 @@ impl TileRaster {
         }
     }
 
-    fn enumerate_pixels(&self) -> EnumerateRasterPixels<'_> {
-        EnumerateRasterPixels {
-            width: self.width as usize,
-            idx: 0,
-            pixels: self.pixels.as_ref(),
-        }
-    }
-
     pub fn encode_png(&self, gradient: &LinearGradient) -> Vec<u8> {
         encode_indexed_png(&self.pixels, self.width, self.width, gradient)
     }
@@ -180,28 +171,6 @@ const fn lerp(a: [u8; 4], b: [u8; 4], t: f32) -> [u8; 4] {
         (a[2] as f32 * (1.0 - t) + b[2] as f32 * t) as u8,
         (a[3] as f32 * (1.0 - t) + b[3] as f32 * t) as u8,
     ]
-}
-
-struct EnumerateRasterPixels<'a> {
-    width: usize,
-    idx: usize,
-    pixels: &'a [u8],
-}
-
-impl Iterator for EnumerateRasterPixels<'_> {
-    type Item = (usize, usize, u8);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.idx >= (self.width * self.width) {
-            None
-        } else {
-            let pixel = self.pixels[self.idx];
-            let x = self.idx % self.width;
-            let y = self.idx / self.width;
-            self.idx += 1;
-            Some((x, y, pixel))
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -340,90 +309,146 @@ impl<'de> Deserialize<'de> for LinearGradient {
     }
 }
 
+/// Render an arbitrary viewport composed of many subtiles.
 pub fn render_view(
     viewport: WebMercatorViewport,
     gradient: &LinearGradient,
-    width: u32,
-    height: u32,
+    out_width: u32,
+    out_height: u32,
     filter: &ActivityFilter,
     db: &Database,
     config: &Config,
 ) -> Result<Vec<u8>> {
-    let tile_size = 256;
-    let zoom_range = RangeInclusive::new(
-        *config.zoom_levels.iter().min().unwrap() as u32,
-        *config.zoom_levels.iter().max().unwrap() as u32,
+    let tile_size = config.tile_extent;
+    let max_zoom = *config
+        .zoom_levels
+        .last()
+        .expect("empty list of stored zoom levels");
+
+    // Viewport corners in z0 pixels.
+    let sw = viewport.sw.to_mercator_pixel(0, tile_size);
+    let ne = viewport.ne.to_mercator_pixel(0, tile_size);
+
+    // How much the z0 viewport would need to be scaled to fit in the requested
+    // output image.
+    let target_scale = f64::min(
+        out_width as f64 / (ne.x - sw.x),
+        out_height as f64 / (sw.y - ne.y),
     );
 
-    let tile_bounds = TileBounds::from_viewport(&viewport, width, height, zoom_range);
+    // Pick the lowest zoom level which contains the full stored tile data at
+    // full resolution for this image.
+    let source_zoom = target_scale.log2().ceil().clamp(0.0, max_zoom as f64) as u8;
 
-    let num_x = tile_bounds.xmax - tile_bounds.xmin + 1;
-    let num_y = tile_bounds.ymax - tile_bounds.ymin + 1;
+    // Source pixels per output pixel. Since the source data is chosen to always
+    // be at least full resolution, this only ever downsamples.
+    let zoom_scale = (1 << source_zoom) as f64;
+    let out_scale = (zoom_scale / target_scale).max(1.0);
 
-    let (src_w, src_h) = (num_x * tile_size, num_y * tile_size);
-    let (img_w, img_h) = (u32::min(width, src_w), u32::min(height, src_h));
+    let margin_width = out_width as f64 * out_scale;
+    let margin_height = out_height as f64 * out_scale;
 
-    if img_w < width || img_h < height {
-        tracing::warn!(
-            "source data is not high resolution for requested image dimensions, clamping to {}x{}.",
-            img_w,
-            img_h
-        );
-    }
+    // Region of source-zoom pixels to render, centered on the viewport.
+    let margin_left = (((sw.x + ne.x) * zoom_scale - margin_width) / 2.0).round() as i64;
+    let margin_top = (((sw.y + ne.y) * zoom_scale - margin_height) / 2.0).round() as i64;
+
+    let max_tile = (1 << source_zoom) - 1;
+    let tile_at = |px: i64| (px / tile_size as i64).clamp(0, max_tile) as u32;
+
+    let margin_width = margin_width.round() as i64;
+    let margin_height = margin_height.round() as i64;
+    let bounds = TileBounds {
+        z: source_zoom,
+        xmin: tile_at(margin_left),
+        ymin: tile_at(margin_top),
+        xmax: tile_at(margin_left + margin_width - 1),
+        ymax: tile_at(margin_top + margin_height - 1),
+    };
 
     tracing::debug!(
-        num_tiles = num_x * num_y,
-        zoom = tile_bounds.z,
+        num_tiles = (bounds.xmax - bounds.xmin + 1) * (bounds.ymax - bounds.ymin + 1),
+        source_zoom,
         "rendering subtiles"
     );
 
-    let mut mosaic = vec![0u8; (img_w * img_h) as usize];
+    let mut out_pixels = vec![0u8; (out_width * out_height) as usize];
+    for (tile, raster) in rasterize_tiles(&bounds, tile_size, filter, db, config)? {
+        let offset_x = (tile.x * tile_size) as i64 - margin_left;
+        let offset_y = (tile.y * tile_size) as i64 - margin_top;
 
-    // The tile bounds will be aligned to the tile grid, so we need to trim
-    // the excess pixels from the edges of the image.
-    let margin_x = (src_w - img_w) / 2;
-    let margin_y = (src_h - img_h) / 2;
-
-    // Collect all tile positions for parallel processing
-    let tile_positions: Vec<_> = (0..num_y)
-        .flat_map(|row| (0..num_x).map(move |col| (row, col)))
-        .collect();
-
-    // Render tiles in parallel
-    let tile_results: Vec<_> = tile_positions
-        .par_iter()
-        .map(|(row, col)| {
-            let tile = Tile::new(
-                tile_bounds.xmin + col,
-                tile_bounds.ymin + row,
-                tile_bounds.z,
-            );
-
-            // Position of the tile in the mosaic
-            let tile_origin_y = row * tile_size;
-            let tile_origin_x = col * tile_size;
-
-            rasterize_tile(tile, tile_size, filter, db, config)
-                .map(|img| img.map(|img| (tile_origin_x, tile_origin_y, img)))
-        })
-        .collect();
-
-    for result in tile_results {
-        if let Some((tile_origin_x, tile_origin_y, raster)) = result? {
-            for (x, y, pixel) in raster.enumerate_pixels() {
-                let x = tile_origin_x + x as u32;
-                let y = tile_origin_y + y as u32;
-
-                // Ignore pixels which fall into the margins
-                if x >= margin_x && x < margin_x + img_w && y >= margin_y && y < margin_y + img_h {
-                    let (mx, my) = (x - margin_x, y - margin_y);
-                    mosaic[(my * img_w + mx) as usize] = pixel;
-                }
-            }
-        }
+        draw_tile(
+            &mut out_pixels,
+            &raster,
+            (out_width as i64, out_height as i64),
+            (margin_width, margin_height),
+            (offset_x, offset_y),
+        );
     }
 
-    Ok(encode_indexed_png(&mosaic, img_w, img_h, gradient))
+    Ok(encode_indexed_png(
+        &out_pixels,
+        out_width,
+        out_height,
+        gradient,
+    ))
+}
+
+fn rasterize_tiles(
+    tiles: &TileBounds,
+    tile_size: u32,
+    filter: &ActivityFilter,
+    db: &Database,
+    config: &Config,
+) -> Result<Vec<(Tile, TileRaster)>> {
+    let tiles: Vec<_> = (tiles.ymin..=tiles.ymax)
+        .flat_map(|y| (tiles.xmin..=tiles.xmax).map(move |x| Tile::new(x, y, tiles.z)))
+        .collect();
+
+    tiles
+        .par_iter()
+        .filter_map(
+            |&tile| match rasterize_tile(tile, tile_size, filter, db, config) {
+                Ok(Some(raster)) => Some(Ok((tile, raster))),
+                Ok(None) => None,
+                Err(err) => Some(Err(err)),
+            },
+        )
+        .collect()
+}
+
+/// Render `raster` into larger composite mosaic `dst_pixels`, scaling down the
+/// output where necessary.
+fn draw_tile(
+    dst_pixels: &mut [u8],
+    raster: &TileRaster,
+    (dst_w, dst_h): (i64, i64),
+    (src_w, src_h): (i64, i64),
+    (offset_x, offset_y): (i64, i64),
+) {
+    let size = raster.width as i64;
+
+    // Overlap of the tile with the source region, in source region pixels.
+    let min_x = offset_x.max(0);
+    let max_x = (offset_x + size).min(src_w);
+    let min_y = offset_y.max(0);
+    let max_y = (offset_y + size).min(src_h);
+
+    if min_x >= max_x {
+        return;
+    }
+
+    for y in min_y..max_y {
+        let dst_start = (y * dst_h / src_h * dst_w) as usize;
+        let src_start = ((y - offset_y) * size + (min_x - offset_x)) as usize;
+
+        let dst_row = &mut dst_pixels[dst_start..dst_start + dst_w as usize];
+        let src_row = &raster.pixels[src_start..src_start + (max_x - min_x) as usize];
+
+        for (src_x, &px) in (min_x..max_x).zip(src_row) {
+            let dst_x = (src_x * dst_w / src_w) as usize;
+            dst_row[dst_x] = dst_row[dst_x].max(px);
+        }
+    }
 }
 
 pub fn rasterize_tile(
@@ -578,6 +603,53 @@ mod tests {
                 palette_color(&gradient, i as u8)
             );
         }
+    }
+
+    fn raster_4x4() -> TileRaster {
+        let bounds = TileBounds {
+            z: 0,
+            xmin: 0,
+            ymin: 0,
+            xmax: 0,
+            ymax: 0,
+        };
+        let mut raster = TileRaster::new(Tile::new(0, 0, 0), bounds, 4, 4);
+        raster.pixels = (1..=16).collect();
+        raster
+    }
+
+    #[test]
+    fn test_draw_tile_full_resolution() {
+        let raster = raster_4x4();
+        let mut out = vec![0; 16];
+        draw_tile(&mut out, &raster, (4, 4), (4, 4), (0, 0));
+        // No dimension change => pixels copied directly
+        assert_eq!(out, raster.pixels);
+    }
+
+    #[test]
+    fn test_draw_tile_clips_to_region() {
+        // 1   2   3   4
+        // 5   6 [ 7   8 x ]
+        // 9  10 [ 11 12 x ]
+        // 13 14 [ 15 16 x ]
+        let raster = raster_4x4();
+        let mut out = vec![0; 9];
+        draw_tile(&mut out, &raster, (3, 3), (3, 3), (-2, -1));
+        #[rustfmt::skip]
+        assert_eq!(out, [
+            7, 8, 0,
+            11, 12, 0,
+            15, 16, 0,
+        ]);
+    }
+
+    #[test]
+    fn test_draw_tile_downsample_keeps_max() {
+        let raster = raster_4x4();
+        let mut out = vec![10, 0, 0, 20];
+        draw_tile(&mut out, &raster, (2, 2), (4, 4), (0, 0));
+        assert_eq!(out, [10, 8, 14, 20]);
     }
 
     #[test]
