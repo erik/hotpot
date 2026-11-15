@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use geo::HaversineDistance;
+use geo::{Distance, Haversine};
 use geo_types::Point;
 
 use crate::activity::MAX_POINT_DISTANCE;
@@ -14,7 +14,7 @@ pub struct TrackPoint {
 impl TrackPoint {
     /// Distance (meters) between this point and another
     fn distance(&self, other: &TrackPoint) -> f64 {
-        self.point.haversine_distance(&other.point)
+        Haversine.distance(self.point, other.point)
     }
 }
 

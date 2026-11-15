@@ -272,13 +272,14 @@ fn extract_activity_file(zip_bytes: &[u8]) -> Result<(String, Vec<u8>)> {
 
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
+        let name = entry.name()?.into_owned();
 
         // Check if this is a file we can parse, return the first one we can
-        if activity::get_file_type(entry.name()).is_some() {
+        if activity::get_file_type(&name).is_some() {
             let mut buf = vec![];
             entry.read_to_end(&mut buf)?;
 
-            return Ok((entry.name().to_string(), buf));
+            return Ok((name, buf));
         }
     }
 

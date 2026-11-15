@@ -6,14 +6,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
+use axum::Router;
 use axum::body::{Body, HttpBody};
+use axum::extract::Request;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
-use axum::headers::authorization::Bearer;
-use axum::http::{HeaderMap, Method, Request, StatusCode, Uri, header};
+use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::{Router, Server, TypedHeader};
+use axum_extra::TypedHeader;
+use axum_extra::headers::Authorization;
+use axum_extra::headers::authorization::Bearer;
 use rust_embed::Embed;
 use serde::{Deserialize, Deserializer};
 use time::Date;
@@ -76,28 +79,33 @@ impl Config {
         let mut router = Router::new();
         if self.routes.tiles {
             tracing::info!("/ (web ui)");
-            tracing::info!("/tile/:z/:x/:y (tile rendering)");
+            tracing::info!("/tile/{{z}}/{{x}}/{{y}} (tile rendering)");
 
             router = router
                 .route("/", get(index))
-                .route("/static/*path", get(static_file))
-                .route("/tile/:z/:x/:y", get(render_tile))
+                .route("/static/{*path}", get(static_file))
+                .route("/tile/{z}/{x}/{y}", get(render_tile))
                 .route("/api/activity-count", get(get_activity_count));
         }
 
+        let mut strava_routes = Router::new();
         let mut use_strava_auth = false;
         if self.routes.strava_webhook {
             tracing::info!("/strava/webhook (strava activity upload webhook)");
 
-            router = router.nest("/strava", strava::webhook_routes());
+            strava_routes = strava_routes.merge(strava::webhook_routes());
             use_strava_auth = true;
         }
 
         if self.routes.strava_auth {
             tracing::info!("/strava/auth (strava api oauth)");
 
-            router = router.nest("/strava", strava::auth_routes());
+            strava_routes = strava_routes.merge(strava::auth_routes());
             use_strava_auth = true;
+        }
+
+        if use_strava_auth {
+            router = router.nest("/strava", strava_routes);
         }
 
         if self.routes.upload {
@@ -127,9 +135,9 @@ impl Config {
         }
 
         if self.routes.fetch {
-            tracing::info!("/fetch/:source");
+            tracing::info!("/fetch/{{source}}");
 
-            router = router.route("/fetch/:source", post(fetch_source));
+            router = router.route("/fetch/{source}", post(fetch_source));
         }
 
         if self.cors {
@@ -175,9 +183,8 @@ impl Config {
 async fn run_async(addr: SocketAddr, db: Database, config: Config) -> Result<()> {
     tracing::info!("starting server on http://{}", addr);
     let router = config.build_router(db)?;
-    Server::bind(&addr)
-        .serve(router.into_make_service())
-        .await?;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, router).await?;
 
     Ok(())
 }
@@ -533,7 +540,7 @@ fn check_etag(db: &Database, headers: &HeaderMap) -> Result<String, StatusCode> 
 
 fn is_authenticated(
     config: &Config,
-    auth_header: Option<TypedHeader<axum::headers::Authorization<Bearer>>>,
+    auth_header: Option<TypedHeader<Authorization<Bearer>>>,
 ) -> bool {
     match (&config.upload_token, auth_header) {
         (Some(expected), Some(actual)) => actual.0.token() == expected.as_str(),
@@ -549,7 +556,7 @@ async fn upload_activity(
         config,
         ..
     }): State<AppState>,
-    auth_header: Option<TypedHeader<axum::headers::Authorization<Bearer>>>,
+    auth_header: Option<TypedHeader<Authorization<Bearer>>>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
     if !is_authenticated(&config, auth_header) {
@@ -627,7 +634,7 @@ async fn fetch_source(
     State(state): State<AppState>,
     Path(source): Path<String>,
     Query(params): Query<FetchQueryParams>,
-    auth_header: Option<TypedHeader<axum::headers::Authorization<Bearer>>>,
+    auth_header: Option<TypedHeader<Authorization<Bearer>>>,
 ) -> impl IntoResponse {
     if !is_authenticated(&state.config, auth_header) {
         return (StatusCode::UNAUTHORIZED, "bad token".to_string());
@@ -651,12 +658,13 @@ async fn fetch_source(
     }
 }
 
+#[derive(Clone)]
 struct RequestData {
     method: Method,
     uri: Uri,
 }
 
-async fn store_request_data<B>(req: Request<B>, next: Next<B>) -> Response {
+async fn store_request_data(req: Request, next: Next) -> Response {
     let data = RequestData {
         method: req.method().clone(),
         uri: req.uri().clone(),
@@ -707,7 +715,7 @@ mod tests {
         .build_router(db)
         .unwrap();
 
-        let request = Request::builder()
+        let request = axum::http::Request::builder()
             .uri("/tile/0/0/0")
             .body(Body::empty())
             .expect("tile request");
@@ -717,7 +725,7 @@ mod tests {
 
         let etag = response.headers().get(header::ETAG).expect("to see etag");
 
-        let request = Request::builder()
+        let request = axum::http::Request::builder()
             .uri("/tile/0/0/0")
             .header(header::IF_NONE_MATCH, etag.clone())
             .body(Body::empty())
@@ -730,7 +738,7 @@ mod tests {
         conn.execute("INSERT INTO activities (file) VALUES (?)", ["foo"])
             .expect("to insert dummy activity");
 
-        let request = Request::builder()
+        let request = axum::http::Request::builder()
             .uri("/tile/0/0/0")
             .header(header::IF_NONE_MATCH, etag.clone())
             .body(Body::empty())

@@ -11,11 +11,11 @@ use csv::StringRecord;
 use fitparser::de::{DecodeOption, FitObject, FitStreamProcessor};
 use fitparser::profile::MesgNum;
 use flate2::read::GzDecoder;
-use geo::{EuclideanDistance, MapCoords, Simplify};
+use geo::{Distance, Euclidean, MapCoords, Simplify};
 use geo_types::{LineString, MultiLineString, Point};
 use rayon::iter::{ParallelBridge, ParallelIterator};
 use rusqlite::params;
-use time::OffsetDateTime;
+use time::{OffsetDateTime, UtcOffset};
 use walkdir::WalkDir;
 
 use crate::db;
@@ -154,14 +154,14 @@ impl RawActivity {
             let start_idx = points
                 .iter()
                 .enumerate()
-                .find(|(_, pt)| pt.0.euclidean_distance(first) >= trim_dist)
+                .find(|(_, pt)| Euclidean.distance(pt.0, *first) >= trim_dist)
                 .map(|(i, _)| i);
 
             let end_idx = points
                 .iter()
                 .rev()
                 .enumerate()
-                .find(|(_, pt)| pt.0.euclidean_distance(last) >= trim_dist)
+                .find(|(_, pt)| Euclidean.distance(pt.0, *last) >= trim_dist)
                 .map(|(i, _)| points.len() - 1 - i);
 
             if let Some((i, j)) = start_idx.zip(end_idx) {
@@ -172,7 +172,7 @@ impl RawActivity {
                 let mut pairs = points[i..=j].windows(2);
                 while let Some(&[p0, p1]) = pairs.next() {
                     // Skip over large jumps
-                    let len = p0.0.euclidean_distance(&p1.0);
+                    let len = Euclidean.distance(p0.0, p1.0);
                     if len > max_point_distance {
                         // End lines here so they don't bridge the gap
                         for clip in clippers.iter_mut() {
@@ -547,7 +547,8 @@ pub fn upsert(
         params![
             name,
             activity.title,
-            activity.start_time,
+            // Stored as TEXT and filtered lexically, so offsets must be uniform.
+            activity.start_time.map(|t| t.to_offset(UtcOffset::UTC)),
             serde_json::to_string(&activity.properties)?,
             OffsetDateTime::now_utc(),
         ],
@@ -576,7 +577,7 @@ pub fn upsert(
                 let flip_y = tile_size - c.y;
                 (c.x, flip_y).into()
             })
-            .simplify(&4.0);
+            .simplify(4.0);
 
         let coords = encode_line(&simplified_line)?;
         insert_tile.insert(params![activity_id, tile.z, tile.x, tile.y, coords])?;

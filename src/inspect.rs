@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use anyhow::{Result, anyhow};
-use geo::EuclideanDistance;
+use geo::{Distance, Euclidean};
 use geo_types::{Line, Point};
 use rusqlite::{Connection, params};
 use serde::Serialize;
@@ -154,7 +154,7 @@ fn find_nearby_activities(
         let mut prev = None;
         for pt in masked_coords(tile, encoded_coords, config) {
             if let (Some(a), Some(b)) = (prev, pt)
-                && center_px.euclidean_distance(&Line::new(a, b)) <= radius_px
+                && Euclidean.distance(&center_px, &Line::new(a, b)) <= radius_px
             {
                 nearby_activities.insert(activity_id);
                 break;
